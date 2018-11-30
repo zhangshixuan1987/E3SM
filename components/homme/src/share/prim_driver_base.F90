@@ -212,7 +212,7 @@ contains
     ! --------------------------------
     use mass_matrix_mod, only : mass_matrix
     ! --------------------------------
-    use cube_mod,  only : cubeedgecount , cubeelemcount, cubetopology, cube_init_atomic, &
+    use cube_mod,  only : cubeedgecount , cubeelemcount, cubetopology,cube_init_atomic, &
                           set_corner_coordinates, &
                           set_area_correction_map0, set_area_correction_map2
     ! --------------------------------
@@ -985,6 +985,9 @@ contains
 #endif
     use prim_advance_mod,   only: applycamforcing_ps
 
+    use edge_mod, only           : initedgesbuffer, edge_g, edgevpack_nlyr, edgevunpack_nlyr
+    use bndry_mod, only : bndry_exchangev
+
     implicit none
 
     type (element_t) ,    intent(inout) :: elem(:)
@@ -1002,6 +1005,9 @@ contains
     integer :: ie,i,j,k,n,q,t,scm_dum
     integer :: n0_qdp,np1_qdp,r,nstep_end,nets_in,nete_in
     logical :: compute_diagnostics
+
+    integer :: kptr, timelev
+    real(kind=real_kind) :: wei(np,np)
 
     ! compute timesteps for tracer transport and vertical remap
 
@@ -1183,8 +1189,118 @@ contains
     if (compute_diagnostics) then
        call prim_printstate(elem, tl, hybrid,hvcoord,nets,nete)
     end if
+
+!----------------------------------- pg4s option
+    timelev = tl%n0 !i think
+
+    do ie=nets,nete
+!copy all state blindly
+      elem(ie)%state%Sv = elem(ie)%state%v
+      elem(ie)%state%ST = elem(ie)%state%T
+      elem(ie)%state%Sps_v = elem(ie)%state%ps_v
+      elem(ie)%state%SQ = elem(ie)%state%Q
+
+      wei = elem(ie)%spheremp(:,:)
+
+      !now that they are saved, they can be overwritten
+      do k=1,nlev
+        call wsum(elem(ie)%state%v(:,:,1,k,timelev),wei)
+        call wsum(elem(ie)%state%v(:,:,2,k,timelev),wei)
+        call wsum(elem(ie)%state%T(:,:,  k,timelev),wei)
+        do q=1,qsize
+          call wsum(elem(ie)%state%Q(:,:,k,q), wei)
+        enddo
+      enddo
+      call wsum(elem(ie)%state%ps_v(:,:,timelev),wei)
+    enddo
+    !now we need to dss this all
+
+!dss dynamics
+    do ie=nets,nete
+      do k=1,nlev
+        elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
+        elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev) 
+        elem(ie)%state%T(:,:,  k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev) 
+        elem(ie)%state%ps_v(:,:, timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%ps_v(:,:, timelev)
+      enddo!k
+      kptr=0
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,  kptr,3*nlev+1)
+      kptr=kptr+nlev
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev,kptr,3*nlev+1)
+      kptr=kptr+2*nlev
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,     kptr,3*nlev+1)
+    end do!ie
+    call bndry_exchangeV(hybrid,edge_g)
+    do ie=nets,nete
+      kptr=0
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,   kptr,3*nlev+1)
+      kptr=kptr+nlev
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev, kptr,3*nlev+1)
+      kptr=kptr+2*nlev
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,      kptr,3*nlev+1)
+      do k=1,nlev
+        elem(ie)%state%T(:,:,k,timelev)   = elem(ie)%rspheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev)
+        elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
+        elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev)
+     enddo!k
+     elem(ie)%state%ps_v(:,:,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%ps_v(:,:,timelev)
+   enddo!ie
+
+!dss tracers 
+    do ie=nets,nete
+      do q=1,qsize
+        do k=1,nlev
+          elem(ie)%state%Q(:,:,k,q) = elem(ie)%spheremp(:,:)*elem(ie)%state%Q(:,:,k,q)
+        enddo!k
+        call edgeVpack_nlyr(edge_g, elem(ie)%desc, elem(ie)%state%Q(:,:,:,q), nlev , nlev*(q-1) , nlev*(qsize+1) )
+      enddo!q
+    enddo!ie
+
+    call bndry_exchangeV( hybrid , edge_g )
+
+    do ie=nets,nete
+      do q = 1,qsize
+        call edgeVunpack_nlyr(edge_g, elem(ie)%desc,elem(ie)%state%Q(:,:,:,q), nlev, nlev*(q-1), (qsize+1)*nlev)
+        do k = 1,nlev    
+          elem(ie)%state%Q(:,:,k,q) = elem(ie)%rspheremp(:,:)*elem(ie)%state%Q(:,:,k,q)
+        enddo!k
+      enddo!q
+    enddo!ie
+
+
   end subroutine prim_run_subcycle
 
+
+  subroutine wsum(field,w)
+  implicit none
+  real(kind=real_kind), intent(inout)    :: field(np,np)
+  real(kind=real_kind), intent(in)    :: w(np,np)
+  real(kind=real_kind)                :: sumfield(4), sumw(4), a
+
+    call sumcorners(w,sumw)
+    field = field*w
+    call sumcorners(field,sumfield)
+    sumfield = sumfield/sumw
+
+    a = sumfield(1)
+    field(1,1) = a; field(1,2) = a; field(2,1) = a; field(2,2) = a;
+    a = sumfield(2)
+    field(1,3) = a; field(1,4) = a; field(2,3) = a; field(2,4) = a;
+    a = sumfield(3)
+    field(3,1) = a; field(3,2) = a; field(4,1) = a; field(4,2) = a;
+    a = sumfield(4)
+    field(3,3) = a; field(3,4) = a; field(4,3) = a; field(4,4) = a;
+  end subroutine wsum
+
+  subroutine sumcorners(field,res)
+  implicit none
+  real(kind=real_kind), intent(in)    :: field(np,np)
+  real(kind=real_kind), intent(out)   :: res(4)
+    res(1) = field(1,1)+field(1,2)+field(2,1)+field(2,2)
+    res(2) = field(1,3)+field(1,4)+field(2,3)+field(2,4)
+    res(3) = field(3,1)+field(3,2)+field(4,1)+field(4,2)
+    res(4) = field(3,3)+field(3,4)+field(4,3)+field(4,4)
+  end subroutine sumcorners
 
 
   subroutine prim_step(elem, hybrid,nets,nete, dt, tl, hvcoord, compute_diagnostics)

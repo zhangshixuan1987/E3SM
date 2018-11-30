@@ -289,6 +289,17 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 
       dyn_ps0=ps0
 
+
+
+!copy all state blindly back
+      dyn_in%elem(ie)%state%v = dyn_in%elem(ie)%state%Sv
+      dyn_in%elem(ie)%state%T = dyn_in%elem(ie)%state%ST
+      dyn_in%elem(ie)%state%ps_v = dyn_in%elem(ie)%state%Sps_v
+      dyn_in%elem(ie)%state%Q = dyn_in%elem(ie)%state%SQ
+
+
+
+
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       ! ftype=2,3,4:  apply forcing to Q,ps.  Return dynamics tendencies
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

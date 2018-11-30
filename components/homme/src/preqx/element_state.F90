@@ -29,6 +29,11 @@ module element_state
     real (kind=real_kind) :: Q   (np,np,nlev,qsize_d)                 ! Tracer concentration               6
     real (kind=real_kind) :: Qdp (np,np,nlev,qsize_d,2)               ! Tracer mass                        7
 
+    real (kind=real_kind) :: Sv   (np,np,2,nlev,timelevels)            ! velocity
+    real (kind=real_kind) :: ST   (np,np,nlev,timelevels)              !temperature                        2
+    real (kind=real_kind) :: Sps_v(np,np,timelevels)                   ! surfacepressure                   4
+    real (kind=real_kind) :: SQ   (np,np,nlev,qsize_d)                 ! Tracer
+
   end type elem_state_t
 
   !___________________________________________________________________
