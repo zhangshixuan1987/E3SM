@@ -1252,7 +1252,7 @@ contains
         do k=1,nlev
           elem(ie)%state%Q(:,:,k,q) = elem(ie)%spheremp(:,:)*elem(ie)%state%Q(:,:,k,q)
         enddo!k
-        call edgeVpack_nlyr(edge_g, elem(ie)%desc, elem(ie)%state%Q(:,:,:,q), nlev , nlev*(q-1) , nlev*(qsize+1) )
+        call edgeVpack_nlyr(edge_g, elem(ie)%desc, elem(ie)%state%Q(:,:,:,q), nlev , nlev*(q-1) , nlev*qsize )
       enddo!q
     enddo!ie
 
@@ -1260,7 +1260,7 @@ contains
 
     do ie=nets,nete
       do q = 1,qsize
-        call edgeVunpack_nlyr(edge_g, elem(ie)%desc,elem(ie)%state%Q(:,:,:,q), nlev, nlev*(q-1), (qsize+1)*nlev)
+        call edgeVunpack_nlyr(edge_g, elem(ie)%desc,elem(ie)%state%Q(:,:,:,q), nlev, nlev*(q-1), nlev*qsize)
         do k = 1,nlev    
           elem(ie)%state%Q(:,:,k,q) = elem(ie)%rspheremp(:,:)*elem(ie)%state%Q(:,:,k,q)
         enddo!k
