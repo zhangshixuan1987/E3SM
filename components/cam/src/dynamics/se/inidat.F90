@@ -487,6 +487,15 @@ contains
        end do
     end do
 
+!init S state
+print *, 'OG init S state in inidat'
+    do ie=1,nelemd
+      elem(ie)%state%Sv = dyn_in%elem(ie)%state%v
+      elem(ie)%state%ST = dyn_in%elem(ie)%state%T
+      elem(ie)%state%Sps_v = dyn_in%elem(ie)%state%ps_v
+      elem(ie)%state%SQ = dyn_in%elem(ie)%state%Q
+    enddo
+
     if (.not. single_column) then
       if(par%dynproc) then
         call FreeEdgeBuffer(edge)

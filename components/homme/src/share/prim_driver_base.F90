@@ -1191,6 +1191,9 @@ contains
     end if
 
 !----------------------------------- pg4s option
+#if 1
+print *,'OG nsubstep', nsubstep
+    if (nsubstep>1) then
     timelev = tl%n0 !i think
 
     do ie=nets,nete
@@ -1266,7 +1269,8 @@ contains
         enddo!k
       enddo!q
     enddo!ie
-
+    endif !nsubstep
+#endif
 
   end subroutine prim_run_subcycle
 

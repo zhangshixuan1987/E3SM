@@ -290,13 +290,24 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
       dyn_ps0=ps0
 
 
+!output 1st elem as an example
+#if 0
+if(dyn_in%elem(ie)%globalid == 1) then
+print *, 'OG here is output'
+print *,'FT', dyn_in%elem(ie)%derived%FT(:,:,72)
+print *,'FM', dyn_in%elem(ie)%derived%FM(:,:,1,72)
+print *,'FM', dyn_in%elem(ie)%derived%FM(:,:,2,72)
+print *,'FQ', dyn_in%elem(ie)%derived%FQ(:,:,72,1)
+endif
+#endif
 
+#if 1
 !copy all state blindly back
       dyn_in%elem(ie)%state%v = dyn_in%elem(ie)%state%Sv
       dyn_in%elem(ie)%state%T = dyn_in%elem(ie)%state%ST
       dyn_in%elem(ie)%state%ps_v = dyn_in%elem(ie)%state%Sps_v
       dyn_in%elem(ie)%state%Q = dyn_in%elem(ie)%state%SQ
-
+#endif
 
 
 
