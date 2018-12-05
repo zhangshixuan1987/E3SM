@@ -1191,10 +1191,7 @@ contains
     end if
 
 !----------------------------------- pg4s option
-#if 1
-print *,'OG nsubstep', nsubstep
-    if (nsubstep>1) then
-    timelev = tl%n0 !i think
+
 
     do ie=nets,nete
 !copy all state blindly
@@ -1202,6 +1199,21 @@ print *,'OG nsubstep', nsubstep
       elem(ie)%state%ST = elem(ie)%state%T
       elem(ie)%state%Sps_v = elem(ie)%state%ps_v
       elem(ie)%state%SQ = elem(ie)%state%Q
+    enddo
+
+#if 1
+!print *,'OG nsubstep', nsubstep
+    if (nsubstep>1) then
+    timelev = tl%n0 !i think
+
+
+#if 1
+    do ie=nets,nete
+!copy all state blindly
+!      elem(ie)%state%Sv = elem(ie)%state%v
+!      elem(ie)%state%ST = elem(ie)%state%T
+!      elem(ie)%state%Sps_v = elem(ie)%state%ps_v
+!      elem(ie)%state%SQ = elem(ie)%state%Q
 
       wei = elem(ie)%spheremp(:,:)
 
@@ -1217,15 +1229,18 @@ print *,'OG nsubstep', nsubstep
       call wsum(elem(ie)%state%ps_v(:,:,timelev),wei)
     enddo
     !now we need to dss this all
+#endif
+
 
 !dss dynamics
+#if 1
     do ie=nets,nete
       do k=1,nlev
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
         elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev) 
         elem(ie)%state%T(:,:,  k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev) 
-        elem(ie)%state%ps_v(:,:, timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%ps_v(:,:, timelev)
       enddo!k
+      elem(ie)%state%ps_v(:,:, timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%ps_v(:,:, timelev)
       kptr=0
       call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,  kptr,3*nlev+1)
       kptr=kptr+nlev
@@ -1245,9 +1260,10 @@ print *,'OG nsubstep', nsubstep
         elem(ie)%state%T(:,:,k,timelev)   = elem(ie)%rspheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev)
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
         elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev)
-     enddo!k
-     elem(ie)%state%ps_v(:,:,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%ps_v(:,:,timelev)
+      enddo!k
+      elem(ie)%state%ps_v(:,:,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%ps_v(:,:,timelev)
    enddo!ie
+#endif
 
 !dss tracers 
     do ie=nets,nete
