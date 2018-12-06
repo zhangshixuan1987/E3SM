@@ -224,8 +224,6 @@ subroutine cam_run1(cam_in, cam_out)
 #endif
 !-----------------------------------------------------------------------
 
-print *, 'OG camrun1 start'
-
 #if ( defined SPMD )
    if (stepon_time_beg == -1.0_r8) stepon_time_beg = mpi_wtime()
    if (nstep_beg == -1) nstep_beg = get_nstep()
@@ -251,8 +249,6 @@ print *, 'OG camrun1 start'
 
    call phys_run1(phys_state, dtime, phys_tend, pbuf2d,  cam_in, cam_out)
    call t_stopf  ('phys_run1')
-
-print *, 'OG camrun1 stop'
 
 end subroutine cam_run1
 
@@ -281,8 +277,6 @@ subroutine cam_run2( cam_out, cam_in )
    type(cam_out_t), intent(inout) :: cam_out(begchunk:endchunk)
    type(cam_in_t),  intent(inout) :: cam_in(begchunk:endchunk)
 
-print *, 'OG camrun2 start'
-
    !
    ! Second phase of physics (after surface model update)
    !
@@ -304,8 +298,6 @@ print *, 'OG camrun2 start'
       call t_startf ('cam_run2_memusage')
       call t_stopf  ('cam_run2_memusage')
    end if
-
-print *, 'OG camrun2 stop'
 
 end subroutine cam_run2
 
@@ -334,9 +326,6 @@ subroutine cam_run3( cam_out )
    ! Third phase of dynamics
    !
 
-
-print *, 'OG camrun3 start'
-
    call t_barrierf ('sync_stepon_run3', mpicom)
    call t_startf ('stepon_run3')
    call stepon_run3( dtime, cam_out, phys_state, dyn_in, dyn_out )
@@ -347,8 +336,6 @@ print *, 'OG camrun3 start'
       call t_startf ('cam_run3_memusage')
       call t_stopf  ('cam_run3_memusage')
    end if
-
-print *, 'OG camrun3 stop'
 
 end subroutine cam_run3
 

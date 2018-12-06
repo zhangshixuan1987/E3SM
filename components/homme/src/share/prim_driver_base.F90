@@ -1192,7 +1192,7 @@ contains
 
 !----------------------------------- pg4s option
 
-
+!defused loop for debugging
     do ie=nets,nete
 !copy all state blindly
       elem(ie)%state%Sv = elem(ie)%state%v
@@ -1201,13 +1201,10 @@ contains
       elem(ie)%state%SQ = elem(ie)%state%Q
     enddo
 
-#if 1
 !print *,'OG nsubstep', nsubstep
     if (nsubstep>1) then
     timelev = tl%n0 !i think
 
-
-#if 1
     do ie=nets,nete
 !copy all state blindly
 !      elem(ie)%state%Sv = elem(ie)%state%v
@@ -1229,11 +1226,9 @@ contains
       call wsum(elem(ie)%state%ps_v(:,:,timelev),wei)
     enddo
     !now we need to dss this all
-#endif
 
 
 !dss dynamics
-#if 1
     do ie=nets,nete
       do k=1,nlev
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
@@ -1263,7 +1258,6 @@ contains
       enddo!k
       elem(ie)%state%ps_v(:,:,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%ps_v(:,:,timelev)
    enddo!ie
-#endif
 
 !dss tracers 
     do ie=nets,nete
@@ -1286,7 +1280,6 @@ contains
       enddo!q
     enddo!ie
     endif !nsubstep
-#endif
 
   end subroutine prim_run_subcycle
 
