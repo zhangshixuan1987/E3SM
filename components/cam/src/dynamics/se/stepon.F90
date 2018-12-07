@@ -299,20 +299,20 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 
        call copyquad(dyn_in%elem(ie)%derived%FM(:,:,1,k))      
        dyn_in%elem(ie)%derived%FM(:,:,1,k) = &
-       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * elem(ie)%spheremp(:,:)
+       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * dyn_in%elem(ie)%spheremp(:,:)
 
        call copyquad(dyn_in%elem(ie)%derived%FM(:,:,2,k))      
        dyn_in%elem(ie)%derived%FM(:,:,2,k) = &
-       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * elem(ie)%spheremp(:,:)
+       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * dyn_in%elem(ie)%spheremp(:,:)
 
        call copyquad(dyn_in%elem(ie)%derived%FT(:,:,k))      
        dyn_in%elem(ie)%derived%FT(:,:,k) = &
-       dyn_in%elem(ie)%derived%FT(:,:,k)         * elem(ie)%spheremp(:,:)
+       dyn_in%elem(ie)%derived%FT(:,:,k)         * dyn_in%elem(ie)%spheremp(:,:)
 
        do ic=1,pcnst
          call copyquad(dyn_in%elem(ie)%derived%FQ(:,:,k,ic)) 
          dyn_in%elem(ie)%derived%FQ(:,:,k,ic) = &
-         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * elem(ie)%spheremp(:,:)
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * dyn_in%elem(ie)%spheremp(:,:)
        enddo !q     
      enddo ! k
      kptr=0
@@ -332,17 +332,17 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
      call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
      do k=1,nlev
        dyn_in%elem(ie)%derived%FM(:,:,1,k) = &
-       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * elem(ie)%rspheremp(:,:)
+       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * dyn_in%elem(ie)%rspheremp(:,:)
 
        dyn_in%elem(ie)%derived%FM(:,:,2,k) = &
-       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * elem(ie)%rspheremp(:,:)
+       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * dyn_in%elem(ie)%rspheremp(:,:)
 
        dyn_in%elem(ie)%derived%FT(:,:,k) = &
-       dyn_in%elem(ie)%derived%FT(:,:,k)         * elem(ie)%rspheremp(:,:)
+       dyn_in%elem(ie)%derived%FT(:,:,k)         * dyn_in%elem(ie)%rspheremp(:,:)
 
        do ic=1,pcnst
          dyn_in%elem(ie)%derived%FQ(:,:,k,ic) = &
-         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * elem(ie)%rspheremp(:,:)
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * dyn_in%elem(ie)%rspheremp(:,:)
        enddo !q     
      enddo ! k
    enddo! ie
