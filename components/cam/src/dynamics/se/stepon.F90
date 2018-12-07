@@ -248,6 +248,8 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 
    call t_startf('stepon_bndry_exch')
    ! do boundary exchange
+!we will use only 4 interior points and will do dss with weights
+#if 0
    if (.not. single_column) then 
      do ie=1,nelemd
        kptr=0
@@ -259,9 +261,8 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
        call edgeVpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
      end do
    endif
-
    call bndry_exchangeV(par, edgebuf)
-
+#endif
    ! NOTE: rec2dt MUST be 1/dtime_out as computed above
 
    rec2dt = 1._r8/dtime
@@ -269,7 +270,7 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
       rec2dt = 1._r8/phys_tscale
    endif
 
-
+#if 0
    do ie=1,nelemd
      if (.not. single_column) then
        kptr=0
@@ -282,14 +283,72 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 
        call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
      endif
+   enddo
+#endif
 
+
+!why were these in the ie loop?
       tl_f = TimeLevel%n0   ! timelevel which was adjusted by physics
-
       call TimeLevel_Qdp(TimeLevel, qsplit, tl_fQdp)
-
       dyn_ps0=ps0
 
+!code that uses only 4 interior points, dss with weights after
+   do ie=1,nelemd
+!blindly copy interior points to corresp quadrants
+     do k=1,nlev
 
+       call copyquad(dyn_in%elem(ie)%derived%FM(:,:,1,k))      
+       dyn_in%elem(ie)%derived%FM(:,:,1,k) = &
+       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * elem(ie)%spheremp(:,:)
+
+       call copyquad(dyn_in%elem(ie)%derived%FM(:,:,2,k))      
+       dyn_in%elem(ie)%derived%FM(:,:,2,k) = &
+       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * elem(ie)%spheremp(:,:)
+
+       call copyquad(dyn_in%elem(ie)%derived%FT(:,:,k))      
+       dyn_in%elem(ie)%derived%FT(:,:,k) = &
+       dyn_in%elem(ie)%derived%FT(:,:,k)         * elem(ie)%spheremp(:,:)
+
+       do ic=1,pcnst
+         call copyquad(dyn_in%elem(ie)%derived%FQ(:,:,k,ic)) 
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic) = &
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * elem(ie)%spheremp(:,:)
+       enddo !q     
+     enddo ! k
+     kptr=0
+     call edgeVpack(edgebuf,dyn_in%elem(ie)%derived%FM(:,:,:,:),2*nlev,kptr,ie)
+     kptr=kptr+2*nlev
+     call edgeVpack(edgebuf,dyn_in%elem(ie)%derived%FT(:,:,:),nlev,kptr,ie)
+     kptr=kptr+nlev
+     call edgeVpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
+   enddo!ie
+   call bndry_exchangeV(par, edgebuf)
+   do ie=1,nelemd
+     kptr=0
+     call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FM(:,:,:,:),2*nlev,kptr,ie)
+     kptr=kptr+2*nlev
+     call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FT(:,:,:),nlev,kptr,ie)
+     kptr=kptr+nlev
+     call edgeVunpack(edgebuf,dyn_in%elem(ie)%derived%FQ(:,:,:,:),nlev*pcnst,kptr,ie)
+     do k=1,nlev
+       dyn_in%elem(ie)%derived%FM(:,:,1,k) = &
+       dyn_in%elem(ie)%derived%FM(:,:,1,k)       * elem(ie)%rspheremp(:,:)
+
+       dyn_in%elem(ie)%derived%FM(:,:,2,k) = &
+       dyn_in%elem(ie)%derived%FM(:,:,2,k)       * elem(ie)%rspheremp(:,:)
+
+       dyn_in%elem(ie)%derived%FT(:,:,k) = &
+       dyn_in%elem(ie)%derived%FT(:,:,k)         * elem(ie)%rspheremp(:,:)
+
+       do ic=1,pcnst
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic) = &
+         dyn_in%elem(ie)%derived%FQ(:,:,k,ic)    * elem(ie)%rspheremp(:,:)
+       enddo !q     
+     enddo ! k
+   enddo! ie
+
+
+   do ie=1,nelemd
 !copy all state blindly back
       dyn_in%elem(ie)%state%v = dyn_in%elem(ie)%state%Sv
       dyn_in%elem(ie)%state%T = dyn_in%elem(ie)%state%ST
@@ -531,12 +590,33 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
          call outfld('FV',ftmp(:,:,2),npsq,ie)
       end do
    endif
+ 
    
-   
-   
-   
-   end subroutine stepon_run2
-   
+end subroutine stepon_run2
+ 
+subroutine copyquad(field)
+   implicit none
+   real(r8), intent(inout) :: field(np,np)
+   real(r8)                :: a
+
+   !1st quadrant
+   a=field(2,2)
+   field(1,1) = 2; field(1,2) = a; field(2,1) = a;
+
+   !2st quadrant
+   a=field(2,3)
+   field(1,3) = 2; field(1,4) = a; field(2,4) = a;
+
+   !3st quadrant
+   a=field(3,2)
+   field(3,1) = 2; field(4,1) = a; field(4,2) = a;
+
+   !4st quadrant
+   a=field(3,3)
+   field(3,4) = 2; field(4,3) = a; field(4,4) = a;
+
+end subroutine copyquad
+  
 
 subroutine stepon_run3(dtime, cam_out, phys_state, dyn_in, dyn_out)
    use camsrfexch,  only: cam_out_t     
