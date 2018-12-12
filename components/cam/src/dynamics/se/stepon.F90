@@ -595,25 +595,26 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 end subroutine stepon_run2
  
 subroutine copyquad(field)
+   use dimensions_mod, only: np
    implicit none
    real(r8), intent(inout) :: field(np,np)
    real(r8)                :: a
 
    !1st quadrant
    a=field(2,2)
-   field(1,1) = 2; field(1,2) = a; field(2,1) = a;
+   field(1,1) = a; field(1,2) = a; field(2,1) = a;
 
    !2st quadrant
    a=field(2,3)
-   field(1,3) = 2; field(1,4) = a; field(2,4) = a;
+   field(1,3) = a; field(1,4) = a; field(2,4) = a;
 
    !3st quadrant
    a=field(3,2)
-   field(3,1) = 2; field(4,1) = a; field(4,2) = a;
+   field(3,1) = a; field(4,1) = a; field(4,2) = a;
 
    !4st quadrant
    a=field(3,3)
-   field(3,4) = 2; field(4,3) = a; field(4,4) = a;
+   field(3,4) = a; field(4,3) = a; field(4,4) = a;
 
 end subroutine copyquad
   
