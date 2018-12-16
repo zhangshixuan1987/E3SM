@@ -1264,7 +1264,7 @@ contains
       kptr=kptr+1
       call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%phis(:,:),         1,      kptr,4*nlev+2)
       kptr=kptr+1
-      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%derived%omega_p(:,:),    nlev,   kptr,4*nlev+2)
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%derived%omega_p(:,:,:),  nlev,   kptr,4*nlev+2)
       do k=1,nlev
         elem(ie)%state%T(:,:,k,timelev)   = elem(ie)%rspheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev)
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
