@@ -492,6 +492,7 @@ contains
       elem(ie)%state%Sv = dyn_in%elem(ie)%state%v
       elem(ie)%state%ST = dyn_in%elem(ie)%state%T
       elem(ie)%state%Sps_v = dyn_in%elem(ie)%state%ps_v
+      elem(ie)%state%Sphis = dyn_in%elem(ie)%state%phis
       elem(ie)%state%SQ = dyn_in%elem(ie)%state%Q
     enddo
 
