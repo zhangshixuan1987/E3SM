@@ -1198,6 +1198,7 @@ contains
       elem(ie)%state%Sv = elem(ie)%state%v
       elem(ie)%state%ST = elem(ie)%state%T
       elem(ie)%state%Sps_v = elem(ie)%state%ps_v
+      elem(ie)%state%Sphis = elem(ie)%state%phis
       elem(ie)%state%SQ = elem(ie)%state%Q
     enddo
 
@@ -1216,14 +1217,16 @@ contains
 
       !now that they are saved, they can be overwritten
       do k=1,nlev
-        call wsum(elem(ie)%state%v(:,:,1,k,timelev),wei)
-        call wsum(elem(ie)%state%v(:,:,2,k,timelev),wei)
-        call wsum(elem(ie)%state%T(:,:,  k,timelev),wei)
+        call wsum(elem(ie)%state%v        (:,:,1,k,timelev),wei)
+        call wsum(elem(ie)%state%v        (:,:,2,k,timelev),wei)
+        call wsum(elem(ie)%state%T        (:,:,  k,timelev),wei)
+        call wsum(elem(ie)%derived%omega_p(:,:,  k),        wei)
         do q=1,qsize
           call wsum(elem(ie)%state%Q(:,:,k,q), wei)
         enddo
       enddo
       call wsum(elem(ie)%state%ps_v(:,:,timelev),wei)
+      call wsum(elem(ie)%state%phis(:,:),        wei)
     enddo
     !now we need to dss this all
 
@@ -1234,29 +1237,42 @@ contains
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
         elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev) 
         elem(ie)%state%T(:,:,  k,timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev) 
+        elem(ie)%derived%omega_p(:,:,k)   = elem(ie)%spheremp(:,:)*elem(ie)%derived%omega_p(:,:,k) 
       enddo!k
       elem(ie)%state%ps_v(:,:, timelev) = elem(ie)%spheremp(:,:)*elem(ie)%state%ps_v(:,:, timelev)
+      elem(ie)%state%phis(:,:)          = elem(ie)%spheremp(:,:)*elem(ie)%state%phis(:,:)
+
       kptr=0
-      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,  kptr,3*nlev+1)
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,  kptr,4*nlev+2)
       kptr=kptr+nlev
-      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev,kptr,3*nlev+1)
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev,kptr,4*nlev+2)
       kptr=kptr+2*nlev
-      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,     kptr,3*nlev+1)
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,     kptr,4*nlev+2)
+      kptr=kptr+1
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%phis(:,:),         1,     kptr,4*nlev+2)
+      kptr=kptr+1
+      call edgeVpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%derived%omega_p(:,:,:),  nlev,  kptr,4*nlev+2)
     end do!ie
     call bndry_exchangeV(hybrid,edge_g)
     do ie=nets,nete
       kptr=0
-      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,   kptr,3*nlev+1)
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%T(:,:,:,  timelev),nlev,   kptr,4*nlev+2)
       kptr=kptr+nlev
-      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev, kptr,3*nlev+1)
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%v(:,:,:,:,timelev),2*nlev, kptr,4*nlev+2)
       kptr=kptr+2*nlev
-      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,      kptr,3*nlev+1)
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%ps_v(:,:, timelev),1,      kptr,4*nlev+2)
+      kptr=kptr+1
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%state%phis(:,:),         1,      kptr,4*nlev+2)
+      kptr=kptr+1
+      call edgeVunpack_nlyr(edge_g,elem(ie)%desc,elem(ie)%derived%omega_p(:,:,:),  nlev,   kptr,4*nlev+2)
       do k=1,nlev
         elem(ie)%state%T(:,:,k,timelev)   = elem(ie)%rspheremp(:,:)*elem(ie)%state%T(:,:,  k,timelev)
         elem(ie)%state%v(:,:,1,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,1,k,timelev)
         elem(ie)%state%v(:,:,2,k,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%v(:,:,2,k,timelev)
+        elem(ie)%derived%omega_p(:,:,k)   = elem(ie)%rspheremp(:,:)*elem(ie)%derived%omega_p(:,:,k)
       enddo!k
       elem(ie)%state%ps_v(:,:,timelev) = elem(ie)%rspheremp(:,:)*elem(ie)%state%ps_v(:,:,timelev)
+      elem(ie)%state%phis(:,:)         = elem(ie)%rspheremp(:,:)*elem(ie)%state%phis(:,:)
    enddo!ie
 
 !dss tracers 
