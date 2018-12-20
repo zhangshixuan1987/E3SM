@@ -301,8 +301,8 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
        do j=2,3
          do i=2,3
            !ignore dt factor
-           dyn_in%elem(ie)%derived%FQ(:,:,:,ic) = &
-           dyn_in%elem(ie)%derived%FQ(:,:,:,ic) - dyn_in%elem(ie)%state%Q(:,:,:,ic)
+           dyn_in%elem(ie)%derived%FQ(i,j,:,ic) = &
+           dyn_in%elem(ie)%derived%FQ(i,j,:,ic) - dyn_in%elem(ie)%state%Q(i,j,:,ic)
          enddo
        enddo
      enddo !q     
