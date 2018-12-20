@@ -292,6 +292,23 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
       call TimeLevel_Qdp(TimeLevel, qsplit, tl_fQdp)
       dyn_ps0=ps0
 
+!make FQ a tendency, for ftype=2,3 only
+!only matters for interior points.
+!next interior pts of FQ as a tendency will be propagated to edges,
+!then FQ will be restored as Q to not to change more code around ps_v and Qdp
+   do ie=1,nelemd
+     do ic=1,pcnst
+       do j=2,3
+         do i=2,3
+           !ignore dt factor
+           dyn_in%elem(ie)%derived%FQ(:,:,:,ic) = &
+           dyn_in%elem(ie)%derived%FQ(:,:,:,ic) - dyn_in%elem(ie)%state%Q(:,:,:,ic)
+         enddo
+       enddo
+     enddo !q     
+   enddo ! ie
+
+
 !code that uses only 4 interior points, dss with weights after
    do ie=1,nelemd
 !blindly copy interior points to corresp quadrants
@@ -359,7 +376,7 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
 !to not to disturb the code below much, overwrite FQ with new tracers here.
 !then presumably all code below is valid.
       do ic=1,pcnst
-        dyn_in%elem(ie)%derived%FQ(:,:,:,ic) = dyn_in%elem(ie)%derived%FQ(:,:,k,ic) + &
+        dyn_in%elem(ie)%derived%FQ(:,:,:,ic) = dyn_in%elem(ie)%derived%FQ(:,:,:,ic) + &
                                                dyn_in%elem(ie)%state%Q(   :,:,:,ic)
       enddo !q   
 
