@@ -363,7 +363,8 @@ CONTAINS
                 uv_tmp(ioff,2,ilyr,ie)   = phys_tend(lchnk)%dvdt(icol,ilyr)
 
                 do m=1,pcnst
-                   q_tmp(ioff,ilyr,m,ie) = phys_state(lchnk)%q(icol,ilyr,m)
+!                   q_tmp(ioff,ilyr,m,ie) = phys_state(lchnk)%q(icol,ilyr,m)
+                   q_tmp(ioff,ilyr,m,ie) = phys_tend(lchnk)%q(icol,ilyr,m)
                 end do
              end do
 

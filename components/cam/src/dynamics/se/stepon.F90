@@ -356,6 +356,12 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
       dyn_in%elem(ie)%state%phis = dyn_in%elem(ie)%state%Sphis
       dyn_in%elem(ie)%state%Q = dyn_in%elem(ie)%state%SQ
 
+!to not to disturb the code below much, overwrite FQ with new tracers here.
+!then presumably all code below is valid.
+      do ic=1,pcnst
+        dyn_in%elem(ie)%derived%FQ(:,:,:,ic) = dyn_in%elem(ie)%derived%FQ(:,:,k,ic) + &
+                                               dyn_in%elem(ie)%state%Q(   :,:,:,ic)
+      enddo !q   
 
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       ! ftype=2,3,4:  apply forcing to Q,ps.  Return dynamics tendencies
