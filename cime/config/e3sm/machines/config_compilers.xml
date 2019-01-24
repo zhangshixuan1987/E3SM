@@ -918,48 +918,44 @@ for mct, etc.
 </compiler>
 
 <compiler MACH="cades" COMPILER="gnu">
-  <CPPDEFS>
-    <append> -DFORTRANUNDERSCORE -DNO_R16</append>
-  </CPPDEFS>
-  <CXX_LINKER>FORTRAN</CXX_LINKER>
-  <FC_AUTO_R8>
-    <base> -fdefault-real-8 </base>
-  </FC_AUTO_R8>
-  <FFLAGS>
-    <!-- -ffree-line-length-none and -ffixed-line-length-none need to be in FFLAGS rather than in FIXEDFLAGS/FREEFLAGS
-                                 so that these are passed to cmake builds (cmake builds don't use FIXEDFLAGS and FREEFLAGS). -->
-    <base> -O -fconvert=big-endian -ffree-line-length-none -ffixed-line-length-none -fno-range-check</base>
-    <append> -I$(NETCDF_PATH)/include -I$(HDF5_PATH)/include </append>
-    <append MODEL="clm"> -I$(PETSC_PATH)/include </append>
-    <append MODEL="clm"> -I$(CLM_PFLOTRAN_SOURCE_DIR) </append>
-  </FFLAGS>
-  <FFLAGS_NOOPT>
-    <base> -O0 </base>
-  </FFLAGS_NOOPT>
-  <FIXEDFLAGS>
-    <base>  -ffixed-form </base>
-  </FIXEDFLAGS>
-  <FREEFLAGS>
-    <base> -ffree-form </base>
-  </FREEFLAGS>
-  <HDF5_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/hdf5-parallel/1.8.17/centos7.2_gnu5.3.0</HDF5_PATH>
-  <NETCDF_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/netcdf-hdf5parallel/4.3.3.1/centos7.2_gnu5.3.0</NETCDF_PATH>
-  <PNETCDF_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/pnetcdf/1.9.0/centos7.2_gnu5.3.0</PNETCDF_PATH>
-  <LAPACK_LIBDIR>/software/tools/compilers/intel_2017/mkl/lib/intel64</LAPACK_LIBDIR>
-  <LDFLAGS>
-    <append MODEL="driver"> -L$NETCDF_PATH/lib -Wl,-rpath=$NETCDF_PATH/lib -lnetcdff -lnetcdf </append>
-    <append MODEL="driver"> -L$HDF5_PATH/lib -Wl,-rpath=$HDF5_PATH/lib -lhdf5_hl -lhdf5 -lhdf5hl_fortran -lhdf5_fortran </append>
-    <append MODEL="driver"> -L$(CLM_PFLOTRAN_SOURCE_DIR) -Wl,-rpath=$(CLM_PFLOTRAN_SOURCE_DIR) -lpflotran </append>
-    <!-- A NOTE here: it's strange that PETSC library must be placed after PFLOTRAN libray on CADES, otherwise libpetsc.a cound not be linked-->
-    <append MODEL="driver"> -L$(PETSC_PATH)/lib -Wl,-rpath=$(PETSC_PATH)/lib -lpetsc -lmetis -lparmetis </append>
-  </LDFLAGS>
-  <MPICC>mpicc</MPICC>
-  <MPICXX>mpic++</MPICXX>
-  <MPIFC>mpif90</MPIFC>
-  <SCC>gcc</SCC>
-  <SCXX>gcpp</SCXX>
-  <SFC>gfortran</SFC>
-  <SUPPORTS_CXX>TRUE</SUPPORTS_CXX>
+    <CXX_LINKER>FORTRAN</CXX_LINKER>
+    <FC_AUTO_R8>
+        <base> -fdefault-real-8 </base>
+    </FC_AUTO_R8>
+    <FFLAGS>
+        <!-- -ffree-line-length-none and -ffixed-line-length-none need to be in FFLAGS rather than in FIXEDFLAGS/FREEFLAGS
+         so that these are passed to cmake builds (cmake builds don't use FIXEDFLAGS and FREEFLAGS). -->
+        <base> -O -fconvert=big-endian -ffree-line-length-none -ffixed-line-length-none -fno-range-check</base>
+        <append> -I$(NETCDF_PATH)/include -I$(HDF5_PATH)/include </append>
+        <!-- A NOTE here: $(PFLOTRAN_INC) may contain both PETSC and actual PFLOTRAN include dir, or only PETSC include dir -->
+        <append MODEL="clm"> $(PFLOTRAN_INC) </append>
+    </FFLAGS>
+    <FFLAGS_NOOPT>
+        <base> -O0 </base>
+    </FFLAGS_NOOPT>
+    <FIXEDFLAGS>
+        <base>  -ffixed-form </base>
+    </FIXEDFLAGS>
+    <FREEFLAGS>
+        <base> -ffree-form </base>
+    </FREEFLAGS>
+    <HDF5_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/hdf5-parallel/1.8.17/centos7.2_gnu5.3.0</HDF5_PATH>
+    <NETCDF_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/netcdf-hdf5parallel/4.3.3.1/centos7.2_gnu5.3.0</NETCDF_PATH>
+    <PNETCDF_PATH>/software/dev_tools/swtree/cs400_centos7.2_pe2016-08/pnetcdf/1.9.0/centos7.2_gnu5.3.0</PNETCDF_PATH>
+    <LAPACK_LIBDIR>/software/tools/compilers/intel_2017/mkl/lib/intel64</LAPACK_LIBDIR>
+    <LDFLAGS>
+        <append MODEL="driver"> -L$NETCDF_PATH/lib -Wl,-rpath=$NETCDF_PATH/lib -lnetcdff -lnetcdf </append>
+        <append MODEL="driver"> -L$HDF5_PATH/lib -Wl,-rpath=$HDF5_PATH/lib -lhdf5_hl -lhdf5 -lhdf5hl_fortran -lhdf5_fortran </append>
+        <!-- A NOTE here: $(PFLOTRAN_LIB) may contain both PETSC libraries and actual PFLOTRAN libray, or only PETSC libraries -->
+        <append MODEL="driver"> $(PFLOTRAN_LIB) </append>
+    </LDFLAGS>
+    <MPICC>mpicc</MPICC>
+    <MPICXX>mpic++</MPICXX>
+    <MPIFC>mpif90</MPIFC>
+    <SCC>gcc</SCC>
+    <SCXX>gcpp</SCXX>
+    <SFC>gfortran</SFC>
+    <SUPPORTS_CXX>TRUE</SUPPORTS_CXX>
 </compiler>
 
 <compiler MACH="cascade" COMPILER="intel">
