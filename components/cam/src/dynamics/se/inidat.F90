@@ -537,11 +537,11 @@ contains
 !$omp parallel do private(ie, t, m_cnst)
     do ie=1,nelemd
 #ifdef MODEL_THETA_L
-       elem(ie)%state%w_i = 0.0
+       elem(ie)%state%w_i = 0.0_r8
        !sets Theta and phi, not w
        call set_thermostate(elem(ie),elem(ie)%derived%FT,hvcoord)
        !reset FT?
-       elem(ie)%derived%FT = 0.0
+       elem(ie)%derived%FT = 0.0_r8
 #else
        call set_thermostate(elem(ie),elem(ie)%state%T(:,:,:,tl),hvcoord)
 #endif
