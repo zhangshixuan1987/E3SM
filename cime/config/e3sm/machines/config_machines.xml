@@ -1994,37 +1994,6 @@
   </machine>
 
 
-  <machine MACH="oic5">
-    <DESC>ORNL XK6, os is Linux, 32 pes/node, batch system is PBS</DESC>
-    <NODENAME_REGEX>oic5</NODENAME_REGEX>
-    <OS>LINUX</OS>
-    <COMPILERS>gnu</COMPILERS>
-    <MPILIBS>mpich,openmpi</MPILIBS>
-    <CIME_OUTPUT_ROOT>/home/$USER/models/ACME</CIME_OUTPUT_ROOT>
-    <DIN_LOC_ROOT>/home/zdr/models/ccsm_inputdata</DIN_LOC_ROOT>
-    <DIN_LOC_ROOT_CLMFORC>/home/zdr/models/ccsm_inputdata/atm/datm7</DIN_LOC_ROOT_CLMFORC>
-    <DOUT_S_ROOT>/home/$USER/models/ACME/run/archive/$CASE</DOUT_S_ROOT>
-    <GMAKE_J>32</GMAKE_J>
-    <TESTS>e3sm_developer</TESTS>
-    <BATCH_SYSTEM>pbs</BATCH_SYSTEM>
-    <SUPPORTED_BY>dmricciuto</SUPPORTED_BY>
-    <MAX_TASKS_PER_NODE>32</MAX_TASKS_PER_NODE>
-    <MAX_MPITASKS_PER_NODE>32</MAX_MPITASKS_PER_NODE>
-    <mpirun mpilib="mpich">
-      <executable>/projects/cesm/devtools/mpich-3.0.4-gcc4.8.1/bin/mpirun</executable>
-      <arguments>
-        <arg name="num_tasks"> -np {{ total_tasks }}</arg>
-        <arg name="machine_file">--hostfile $ENV{PBS_NODEFILE}</arg>
-      </arguments>
-    </mpirun>
-    <mpirun mpilib="mpi-serial">
-      <executable> </executable>
-    </mpirun>
-    <module_system type="none" />
-    <RUNDIR>/home/$USER/models/ACME/run/$CASE/run</RUNDIR>
-    <EXEROOT>/home/$USER/models/ACME/run/$CASE/bld</EXEROOT>
-  </machine>
-
   <machine MACH="cades">
     <DESC>OR-CONDO, CADES-CCSI, os is Linux, 16 pes/nodes, batch system is PBS</DESC>
     <NODENAME_REGEX>or-condo</NODENAME_REGEX>
@@ -2045,62 +2014,62 @@
     <MAX_MPITASKS_PER_NODE>16</MAX_MPITASKS_PER_NODE>
     <PROJECT_REQUIRED>FALSE</PROJECT_REQUIRED>
     <mpirun mpilib="openmpi" compiler="gnu">
-        <executable>mpirun</executable>
-        <arguments>
-            <arg name="num_tasks"> -np {{ total_tasks }}</arg>
-            <arg name="machine_file">--hostfile $ENV{PBS_NODEFILE}</arg>
-        </arguments>
+      <executable>mpirun</executable>
+      <arguments>
+        <arg name="num_tasks"> -np {{ total_tasks }}</arg>
+        <arg name="machine_file">--hostfile $ENV{PBS_NODEFILE}</arg>
+      </arguments>
     </mpirun>
     <mpirun mpilib="mpi-serial">
-        <executable> </executable>
+      <executable> </executable>
     </mpirun>
     <module_system type="module">
-        <init_path lang="sh">/usr/share/Modules/init/sh</init_path>
-        <init_path lang="csh">/usr/share/Modules/init/csh</init_path>
-        <init_path lang="perl">/usr/share/Modules/init/perl.pm</init_path>
-        <init_path lang="python">/usr/share/Modules/init/python.py</init_path>
-        <cmd_path lang="sh">module</cmd_path>
-        <cmd_path lang="csh">module</cmd_path>
-        <cmd_path lang="perl">/usr/bin/modulecmd perl</cmd_path>
-        <cmd_path lang="python">/usr/bin/modulecmd python</cmd_path>
-        <modules>
-            <command name="purge"/>
-        </modules>
-        <modules compiler="gnu">
-            <command name="load">PE-gnu</command>
-        </modules>
-        <modules>
-            <command name="load">mkl/2017</command>
-            <command name="load">cmake/3.6.1</command>
-            <command name="load">python/2.7.12</command>
-            <command name="load">nco/4.6.4</command>
-            <command name="load">hdf5-parallel/1.8.17</command>
-            <command name="load">netcdf-hdf5parallel/4.3.3.1</command>
-            <command name="load">pnetcdf/1.9.0</command>
-        </modules>
-     </module_system>
-    
-     <!-- customize these fields as appropriate for your system (max tasks) and
-     desired layout (change '${group}/${USER}' to your
-     prefered location). -->
-     <RUNDIR>$CIME_OUTPUT_ROOT/$CASE/run</RUNDIR>
-     <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
-     
-     <!-- for CLM-PFLOTRAN coupling, the PETSC_PATH must be defined specifically upon machines -->
-     <!-- the following is PETSc v.3.8.x or above -->
-     <environment_variables compiler="gnu" mpilib="openmpi">
-         <!-- env name="PETSC_PATH">/software/user_tools/current/cades-ccsi/petsc4pf/openmpi-1.10-gcc-5.3</env> --> <!-- PETSc v3.7.x -->
-         <env name="PETSC_PATH">/software/user_tools/current/cades-ccsi/petsc-x/openmpi-1.10-gcc-5.3</env> <!-- PETSc v3.8.x or above -->
-     </environment_variables>
-    
-     <!-- hack for PFLOTRAN coupling to build ELM model.
-          this is a temporary solution, and user must manually edit the following
-          in 'env_mach_specific.xml' after case.setup,
-          Otherwise, model will build/run as non-PFLOTRAN coupled.
-          IF building with PFLOTRAN codes, in addition to the following options,
-          you must modify 'CLM_USE_PETSC' in 'env_build.xml' to be 'TRUE'.
-     -->
-     <environment_variables>
+      <init_path lang="sh">/usr/share/Modules/init/sh</init_path>
+      <init_path lang="csh">/usr/share/Modules/init/csh</init_path>
+      <init_path lang="perl">/usr/share/Modules/init/perl.pm</init_path>
+      <init_path lang="python">/usr/share/Modules/init/python.py</init_path>
+      <cmd_path lang="sh">module</cmd_path>
+      <cmd_path lang="csh">module</cmd_path>
+      <cmd_path lang="perl">/usr/bin/modulecmd perl</cmd_path>
+      <cmd_path lang="python">/usr/bin/modulecmd python</cmd_path>
+      <modules>
+        <command name="purge"/>
+      </modules>
+      <modules compiler="gnu">
+        <command name="load">PE-gnu</command>
+      </modules>
+      <modules>
+        <command name="load">mkl/2017</command>
+        <command name="load">cmake/3.11.0</command>
+        <command name="load">python/2.7.13</command>
+        <command name="load">nco/4.6.9</command>
+        <command name="load">hdf5-parallel/1.8.17</command>
+        <command name="load">netcdf-hdf5parallel/4.3.3.1</command>
+        <command name="load">pnetcdf/1.9.0</command>
+      </modules>
+    </module_system>
+
+    <!-- customize these fields as appropriate for your system (max tasks) and
+                            desired layout (change '${group}/${USER}' to your
+      prefered location). -->
+    <RUNDIR>$CIME_OUTPUT_ROOT/$CASE/run</RUNDIR>
+    <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
+      <!-- for CLM-PFLOTRAN coupling, the PETSC_PATH must be defined specifically upon machines -->
+      <environment_variables compiler="gnu" mpilib="openmpi">
+        <!-- the following is for pflotran with PETSc v.3.7.x -->
+        <!-- env name="PETSC_PATH">/software/user_tools/current/cades-ccsi/petsc4pf/openmpi-1.10-gcc-5.3</env> --> <!-- PETSc v3.7.x -->
+        <!-- the following is for pflotran with PETSc v.3.8.x or above -->
+        <env name="PETSC_PATH">/software/user_tools/current/cades-ccsi/petsc-x/openmpi-1.10-gcc-5.3</env> <!-- PETSc v3.8.x or above -->
+      </environment_variables>
+      
+      <!-- hack for PFLOTRAN coupling to build ELM model.
+       this is a temporary solution, and user must manually edit the following
+       in 'env_mach_specific.xml' after case.setup,
+       Otherwise, model will build/run as non-PFLOTRAN coupled.
+       IF building with PFLOTRAN codes, in addition to the following options,
+       you must modify 'CLM_USE_PETSC' in 'env_build.xml' to be 'TRUE'.
+       -->
+      <environment_variables>
         <env name="CLM_PFLOTRAN_COUPLED">FALSE</env>
         <env name="CLM_PFLOTRAN_COLMODE">FALSE</env>
         <!-- The following pflotran is with PETSc-v3.7.x on CADES-->
@@ -2110,7 +2079,7 @@
         
         <!-- by blanking the following 2 names, PETSC libs can be excluded in e3sm.exe when NOT coupling with PFLOTRAN -->
         <env name="PFLOTRAN_INC"> -I$ENV{CLM_PFLOTRAN_SOURCE_DIR} -I$ENV{PETSC_PATH}/include</env>
-        <env name="PFLOTRAN_LIB"> -L$ENV{CLM_PFLOTRAN_SOURCE_DIR} -lpflotran -L$ENV{PETSC_PATH}/lib -Wl,-rpath=$ENV{PETSC_PATH}/lib -lpetsc -lmetis -lparmetis</env>
+        <env name="PFLOTRAN_LIB"> -L$ENV{CLM_PFLOTRAN_SOURCE_DIR} -lpflotran -L$ENV{PETSC_PATH}/lib -Wl,-rpath=$ENV{PETSC_PATH}/lib -lpetsc -lparmetis -lmetis</env>
      </environment_variables>
     
   </machine>
