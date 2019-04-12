@@ -680,6 +680,8 @@
     <values>
       <value cime_model='e3sm'>.false.</value>
       <value cime_model='cesm'>.true.</value>
+      <value cime_model='cesm' atm_grid="T62">.false.</value>
+      <value cime_model='cesm' atm_grid="TL319">.false.</value>
     </values>
   </entry>
 
@@ -723,18 +725,6 @@
     <values>
       <value cime_model='cesm'>5</value>
       <value cime_model='e3sm'>2</value>
-    </values>
-  </entry>
-
-  <entry id="gust_fac">
-    <type>real</type>
-    <category>control</category>
-    <group>seq_infodata_inparm</group>
-    <desc>
-      wind gustiness factor
-    </desc>
-    <values>
-      <value>0.0D0</value>
     </values>
   </entry>
 
