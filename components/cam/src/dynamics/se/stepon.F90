@@ -372,7 +372,11 @@ subroutine stepon_run2(phys_state, phys_tend, dyn_in, dyn_out )
    do ie=1,nelemd
 !copy all state blindly back
       dyn_in%elem(ie)%state%v = dyn_in%elem(ie)%state%Sv
+#ifdef MODEL_THETA_L
+      dyn_in%elem(ie)%state%vtheta_dp = dyn_in%elem(ie)%state%ST
+#else
       dyn_in%elem(ie)%state%T = dyn_in%elem(ie)%state%ST
+#endif
       dyn_in%elem(ie)%state%ps_v = dyn_in%elem(ie)%state%Sps_v
       dyn_in%elem(ie)%state%phis = dyn_in%elem(ie)%state%Sphis
       dyn_in%elem(ie)%state%Q = dyn_in%elem(ie)%state%SQ
