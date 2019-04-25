@@ -239,7 +239,6 @@ subroutine cam_run1(cam_in, cam_out)
    call t_startf ('stepon_run1')
    call stepon_run1( dtime, phys_state, phys_tend, pbuf2d, dyn_in, dyn_out )
    call t_stopf  ('stepon_run1')
-
    !
    !----------------------------------------------------------
    ! PHYS_RUN Call the Physics package
@@ -247,6 +246,7 @@ subroutine cam_run1(cam_in, cam_out)
    !
    call t_barrierf ('sync_phys_run1', mpicom)
    call t_startf ('phys_run1')
+
    call phys_run1(phys_state, dtime, phys_tend, pbuf2d,  cam_in, cam_out)
    call t_stopf  ('phys_run1')
 
@@ -298,6 +298,7 @@ subroutine cam_run2( cam_out, cam_in )
       call t_startf ('cam_run2_memusage')
       call t_stopf  ('cam_run2_memusage')
    end if
+
 end subroutine cam_run2
 
 !
@@ -324,6 +325,7 @@ subroutine cam_run3( cam_out )
    !
    ! Third phase of dynamics
    !
+
    call t_barrierf ('sync_stepon_run3', mpicom)
    call t_startf ('stepon_run3')
    call stepon_run3( dtime, cam_out, phys_state, dyn_in, dyn_out )
@@ -334,6 +336,7 @@ subroutine cam_run3( cam_out )
       call t_startf ('cam_run3_memusage')
       call t_stopf  ('cam_run3_memusage')
    end if
+
 end subroutine cam_run3
 
 !
