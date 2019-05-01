@@ -984,8 +984,8 @@ contains
 ! compute reference states
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   do ie=nets,nete
-     ps_ref(:,:) = hvcoord%hyai(1)*hvcoord%ps0 + sum(elem(ie)%state%dp3d(:,:,:,nt),3)
-     !ps_ref(:,:) = hvcoord%ps0 - 11.3*elem(ie)%state%phis(:,:)/g
+     !ps_ref(:,:) = hvcoord%hyai(1)*hvcoord%ps0 + sum(elem(ie)%state%dp3d(:,:,:,nt),3)
+     ps_ref(:,:) = hvcoord%ps0 - 11.3*elem(ie)%state%phis(:,:)/g
      do k=1,nlev
         dp_ref(:,:,k,ie) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
              (hvcoord%hybi(k+1)-hvcoord%hybi(k))*ps_ref(:,:)
@@ -997,11 +997,11 @@ contains
      temp(:,:,:)=theta_ref(:,:,:,ie)*dp_ref(:,:,:,ie) 
      call get_phinh(hvcoord,elem(ie)%state%phis,&
           temp(:,:,:),dp_ref(:,:,:,ie),phi_ref(:,:,:,ie))
-#if 1
+#if 0
      ! no reference state, for testing
      theta_ref(:,:,:,ie)=0
-     !phi_ref(:,:,:,ie)=0
-     !dp_ref(:,:,:,ie)=0
+     phi_ref(:,:,:,ie)=0
+     dp_ref(:,:,:,ie)=0
 #endif
 
      ! convert vtheta_dp -> theta
