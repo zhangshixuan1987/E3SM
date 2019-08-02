@@ -2323,13 +2323,20 @@ contains
   do ie=nets,nete
     w_n0 = elem(ie)%state%w_i(:,:,:,np1)
 
-#define n0init
+#undef n0init
+#define shiftinit
 
 #ifdef n0init
     if(present(n0))then
        elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,n0)
     endif
 #endif
+
+#ifdef shiftinit
+!plus does not work, minus does not work
+    elem(ie)%state%phinh_i(:,:,1:nlev,np1) = elem(ie)%state%phinh_i(:,:,1:nlev,np1) - dt2*g*w_n0(:,:,1:nlev)
+#endif
+
 
     phi_n0 = elem(ie)%state%phinh_i(:,:,:,np1)
     itercount=0
