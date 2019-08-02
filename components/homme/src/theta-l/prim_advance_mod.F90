@@ -257,6 +257,9 @@ contains
       avg_itercnt = ((nstep)*avg_itercnt + max_itercnt_perstep)/(nstep+1)
 
 !==============================================================================================
+
+!!!!!!!! NOT ARKODE
+
     elseif (tstep_type == 7) then  ! imkg254, most robust of the methods
  
       max_itercnt_perstep = 0
@@ -288,7 +291,7 @@ contains
       maxiter=10
       itertol=1e-12
       call compute_stage_value_dirk(np1,qn0,dhat1*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
+        deriv,nets,nete,maxiter,itertol,n0)
       max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
       max_itererr_perstep = max(itertol,max_itererr_perstep)
 
@@ -297,7 +300,7 @@ contains
       maxiter=10
       itertol=1e-12
       call compute_stage_value_dirk(np1,qn0,dhat2*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
+        deriv,nets,nete,maxiter,itertol,n0)
       max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
       max_itererr_perstep = max(itertol,max_itererr_perstep)
 
@@ -306,7 +309,7 @@ contains
       maxiter=10
       itertol=1e-12
       call compute_stage_value_dirk(np1,qn0,dhat3*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
+        deriv,nets,nete,maxiter,itertol,n0)
       max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
       max_itererr_perstep = max(itertol,max_itererr_perstep)
 
@@ -315,7 +318,7 @@ contains
       maxiter=10
       itertol=1e-12
       call compute_stage_value_dirk(np1,qn0,dhat4*dt,elem,hvcoord,hybrid,&
-        deriv,nets,nete,maxiter,itertol)
+        deriv,nets,nete,maxiter,itertol,n0)
       max_itercnt_perstep        = max(maxiter,max_itercnt_perstep)
       max_itererr_perstep = max(itertol,max_itererr_perstep)
 
@@ -2261,7 +2264,7 @@ contains
 !===========================================================================================================
 !===========================================================================================================
   subroutine compute_stage_value_dirk(np1,qn0,dt2,elem,hvcoord,hybrid,&
-       deriv,nets,nete,maxiter,itertol)
+       deriv,nets,nete,maxiter,itertol,n0)
   !===================================================================================
   ! this subroutine solves a stage value equation for a DIRK method which takes the form
   !
@@ -2280,6 +2283,7 @@ contains
   type (element_t)     , intent(inout), target :: elem(:)
   type (derivative_t)  , intent(in) :: deriv
 
+  integer, intent(in), optional :: n0
 
   ! local
   real (kind=real_kind), pointer, dimension(:,:,:)   :: phi_np1
@@ -2318,6 +2322,15 @@ contains
   call t_startf('compute_stage_value_dirk')
   do ie=nets,nete
     w_n0 = elem(ie)%state%w_i(:,:,:,np1)
+
+#define n0init
+
+#ifdef n0init
+    if(present(n0))then
+       elem(ie)%state%phinh_i(:,:,:,np1) = elem(ie)%state%phinh_i(:,:,:,n0)
+    endif
+#endif
+
     phi_n0 = elem(ie)%state%phinh_i(:,:,:,np1)
     itercount=0
 
