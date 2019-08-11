@@ -151,7 +151,7 @@ contains
   real (kind=real_kind) :: vtheta_dp(np,np,nlev)
   real (kind=real_kind) :: dpnh_dp_i(np,np,nlevp)
   real (kind=real_kind) :: exner(np,np,nlev)
-  real (kind=real_kind) :: pnh(np,np,nlev),	pnh_i(np,np,nlevp)
+  real (kind=real_kind) :: pnh(np,np,nlev)
   real (kind=real_kind) :: norminfJ0(np,np)
   
   real (kind=real_kind) :: dt,epsie,jacerrorvec(6),minjacerr
@@ -168,12 +168,12 @@ contains
      phis(:,:)          = elem(ie)%state%phis(:,:)
      call TimeLevel_Qdp(tl, qsplit, qn0)
      call pnh_and_exner_from_eos(hvcoord,vtheta_dp,dp3d,phi_i,&
-             pnh,exner,dpnh_dp_i,pnh_i_out=pnh_i)
+             pnh,exner,dpnh_dp_i)
          
      dt=100.0
           
      call get_dirk_jacobian(JacL,JacD,JacU,dt,dp3d,phi_i,pnh,1)
-         
+  
     ! compute infinity norm of the initial Jacobian 
      norminfJ0=0.d0
      do i=1,np
@@ -182,7 +182,7 @@ contains
         if (k.eq.1) then
           norminfJ0(i,j) = max(norminfJ0(i,j),(abs(JacD(k,i,j))+abs(JacU(k,i,j))))
         elseif (k.eq.nlev) then
-          norminfJ0(i,j) = max(norminfJ0(i,j),(abs(JacL(k,i,j))+abs(JacD(k,i,j))))
+          norminfJ0(i,j) = max(norminfJ0(i,j),(abs(JacL(k-1,i,j))+abs(JacD(k,i,j))))
         else
           norminfJ0(i,j) = max(norminfJ0(i,j),(abs(JacL(k,i,j))+abs(JacD(k,i,j))+ &
             abs(JacU(k,i,j))))
