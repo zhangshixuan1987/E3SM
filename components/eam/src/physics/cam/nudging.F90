@@ -1633,6 +1633,7 @@ contains
    !----------------
    integer Year,Month,Day,Sec
    integer YMD1,YMD2,YMD
+   integer Year_SPEC
    logical Update_Model,Update_Nudge,Sync_Error
    logical After_Beg   ,Before_End
    integer lchnk,ncol,indw, k 
@@ -1735,14 +1736,22 @@ contains
      ! Update the Nudge arrays with analysis
      ! data at the NEXT time
      !-----------------------------------------------
+     if (Nudge_CLIM_TBC_On) then
+       !If turn on the mean bias tendency correction 
+       !assum the file always named and saved in year 0001
+       Year_SPEC = 1 
+     else      
+       Year_SPEC = Nudge_Next_Year 
+     end if 
+
      Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
-                                         yr_spec=Nudge_Next_Year , &
+                                         yr_spec=Year_SPEC       , &
                                         mon_spec=Nudge_Next_Month, &
                                         day_spec=Nudge_Next_Day  , &
                                         sec_spec=Nudge_Next_Sec    )
 
-     Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template ,  &
-                                            yr_spec=Nudge_Next_Year , &
+     Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template  , &
+                                            yr_spec=Year_SPEC        , &
                                             mon_spec=Nudge_Next_Month, &
                                             day_spec=Nudge_Next_Day  , &
                                             sec_spec=Nudge_Next_Sec    )  
@@ -1763,28 +1772,13 @@ contains
 
        if (Nudge_CLIM_TBC_On) then 
          !read bias tendency correction term (long-term mean) 
-         !when performing climatic tendency biase correction 
-         !assum the long-term mean nudging tendency file is 
-         !always named and saved in year 0001    
-         Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
-                                             yr_spec=1               , &
-                                            mon_spec=Nudge_Next_Month, &
-                                            day_spec=Nudge_Next_Day  , &
-                                            sec_spec=Nudge_Next_Sec    )
-
-         call nudging_update_bctend_se(trim(Nudge_Path)//trim(Nudge_File), Nudge_CLIM_TBC_On)
+         call nudging_update_bctend_se(trim(Nudge_Path)//trim(Nudge_File))
 
          !if (Nudge_Land) then
-         !  Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template ,  &
-         !                                         yr_spec=1            , &
-         !                                         mon_spec=Nudge_Next_Month, &
-         !                                         day_spec=Nudge_Next_Day  , &
-         !                                         sec_spec=Nudge_Next_Sec    )
-         !  call nudging_update_srf_bctend_se(trim(Nudge_Path)//trim(Nudge_SRF_File), Nudge_CLIM_TBC_On)
+         !  call nudging_update_srf_bctend_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
          !end if
 
        else 
-  
          ! read nudging data from reanalysis or user specified file 
          call nudging_update_analyses_se(trim(Nudge_Path)//trim(Nudge_File))
 
@@ -3534,7 +3528,7 @@ contains
    return
   end subroutine ! nudging_update_srf_analyses_se
 
-  subroutine nudging_update_bctend_se(anal_file, l_clim_bcm)
+  subroutine nudging_update_bctend_se(anal_file)
    !
    ! nudging_update_bctend_se: 
    !                 Open the given bias correction tendency data file, 
@@ -3550,7 +3544,6 @@ contains
    ! Arguments
    !-------------
    character(len=*),intent(in) :: anal_file
-   logical, intent(in) :: l_clim_bcm 
    ! Local values
    !-------------
    integer lev
@@ -3676,7 +3669,7 @@ contains
            if (mod(Sec,Nudge_Step) .ne. 0) return  ! ensure that intermittent simulations work for restart run
            if (masterproc) then
               call t_startf ('read_nudging_data')
-              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm )
+              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_tbc = .true.)
               call t_stopf ('read_nudging_data')
               n_cnt = Sec/Nudge_Step + 1
               if (n_cnt .gt. Nudge_File_Ntime) then       ! account for one time slice per file
@@ -3711,7 +3704,7 @@ contains
                   first_file = .false.
                   if (masterproc) then
                      call t_startf ('read_nudging_data')
-                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm)
+                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_tbc = .true.)
                      call t_stopf ('read_nudging_data')
                      strt3(1) = 1
                      strt3(2) = 1
@@ -3799,7 +3792,7 @@ contains
                   if (n_cnt .eq. Nudge_File_Ntime) then
                      if (masterproc) then
                         call t_startf ('read_nudging_data')
-                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm)
+                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_tbc = .true.)
                         call t_stopf ('read_nudging_data')
                         strt3(1) = 1
                         strt3(2) = 1
@@ -4883,7 +4876,7 @@ contains
   !-----------------------
   ! open a new netcdf file
   !-----------------------
-  subroutine open_netcdf (ncid, incre_step, Nudge_File_Template, l_clim_bcm)
+  subroutine open_netcdf (ncid, incre_step, Nudge_File_Template, l_clim_tbc)
   use cam_abortutils, only : endrun
   use perf_mod
   use netcdf
@@ -4891,7 +4884,7 @@ contains
 
   integer, intent(out)          :: ncid
   integer, intent(in)           :: incre_step
-  logical, intent(in), optional :: l_clim_bcm ! If should label with previous time-step
+  logical, intent(in), optional :: l_clim_tbc ! If should label with previous time-step
   character(len=cl), intent(in) :: Nudge_File_Template
 
   ! local variable  
@@ -4912,13 +4905,13 @@ contains
   Nudge_Next1_Month = YMD4/100
   Nudge_Next1_Day   = YMD4-(Nudge_Next1_Month*100)
 
-  if (.not. present(l_clim_bcm) ) then
+  if (.not. present(l_clim_tbc) ) then
     loop_year = .false.
   else
-    loop_year = l_clim_bcm 
+    loop_year = l_clim_tbc 
   end if
 
-  if (loop_year) then  
+  if ( loop_year ) then  
 
     nudge_file = interpret_filename_spec (  &
                       Nudge_File_Template,  &
