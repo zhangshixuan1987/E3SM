@@ -585,22 +585,6 @@ module nudging
   real(r8), allocatable, dimension(:,:,:) :: INTP_FSDSD ! (pcols,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:) :: INTP_FSDSUV! (pcols,begchunk:endchunk,:)
 
- !Parameters required to test some of nudging appications used in GFDL model and references 
- !Reference: https://github.com/NOAA-GFDL/GFDL_atmos_cubed_sphere/blob/main/tools/fv_clim_nudge.F90
-  real(r8) :: p_uv_relax = 30.E2_r8   ! from p_relax upwards, nudging is reduced linearly
-                                      ! proportional to pfull/P_relax
-  real(r8) :: p_T_relax  = 10.E2_r8   ! p_relax for temperature  
-  real(r8) :: p_q_relax  = 100.E2_r8  ! p_relax for humidity 
-  real(r8) :: p_norelax  = 1.0_r8     ! from p_norelax upwards, no nudging
-  real(r8) :: dtdz       = -6.5E-3_r8 ! Lapse rate for adjustment of PS
-  real(r8) :: z_min      = 150._r8   ! Lowest height level for adjustment of PS
-  real(r8) :: t_ref1     = 290.5_r8   ! reference temperature for adjustment of PS
-  real(r8) :: t_ref2     = 255.0_r8   ! reference temperature for adjustment of PS
-  real(r8) :: dz_thres   = 1.E-3_r8   ! threshold of topography difference for adjustment of PS 
-  real(r8) :: rh_min     = 1.E-3_r8   ! minimum relative humidity 
-  real(r8) :: q_min      = 1.E-8_r8   ! minimum humidity 
-  real(r8) :: rad_fac    = 1.0_r8     ! scale factor for radiative flux nudging 
-
   integer  :: Nudge_PS_OPT    ! option for the surface pressure nudging 
   integer  :: Nudge_UV_OPT    ! option for the zonal wind nudging 
   integer  :: Nudge_T_OPT     ! option for the temperature nudging 
@@ -1751,14 +1735,6 @@ contains
      ! Update the Nudge arrays with analysis
      ! data at the NEXT time
      !-----------------------------------------------
-     if (Nudge_CLIM_TBC_On) then
-       !when performing climatic tendency biase correction 
-       !assum the long-term mean nudging tendency file is 
-       !always named for year 0001   
-       Nudge_Curr_Year = 1 
-       Nudge_Next_Year = 1
-     end if 
-
      Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
                                          yr_spec=Nudge_Next_Year , &
                                         mon_spec=Nudge_Next_Month, &
@@ -1770,6 +1746,7 @@ contains
                                             mon_spec=Nudge_Next_Month, &
                                             day_spec=Nudge_Next_Day  , &
                                             sec_spec=Nudge_Next_Sec    )  
+
      if(masterproc) then
       write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
       if(Nudge_Land) then 
@@ -1783,17 +1760,40 @@ contains
      !  thru the gap.
      !------------------------------------------------------------------------
      if(dycore_is('UNSTRUCTURED')) then 
+
        if (Nudge_CLIM_TBC_On) then 
-         call nudging_update_bctend_se(trim(Nudge_Path)//trim(Nudge_File))
-        !if(Nudge_Land) then
-        !  call nudging_update_srf_bctend_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
-        !end if
-       else   
+         !read bias tendency correction term (long-term mean) 
+         !when performing climatic tendency biase correction 
+         !assum the long-term mean nudging tendency file is 
+         !always named and saved in year 0001    
+         Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
+                                             yr_spec=1               , &
+                                            mon_spec=Nudge_Next_Month, &
+                                            day_spec=Nudge_Next_Day  , &
+                                            sec_spec=Nudge_Next_Sec    )
+
+         call nudging_update_bctend_se(trim(Nudge_Path)//trim(Nudge_File), Nudge_CLIM_TBC_On)
+
+         !if (Nudge_Land) then
+         !  Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template ,  &
+         !                                         yr_spec=1            , &
+         !                                         mon_spec=Nudge_Next_Month, &
+         !                                         day_spec=Nudge_Next_Day  , &
+         !                                         sec_spec=Nudge_Next_Sec    )
+         !  call nudging_update_srf_bctend_se(trim(Nudge_Path)//trim(Nudge_SRF_File), Nudge_CLIM_TBC_On)
+         !end if
+
+       else 
+  
+         ! read nudging data from reanalysis or user specified file 
          call nudging_update_analyses_se(trim(Nudge_Path)//trim(Nudge_File))
+
          if(Nudge_Land) then 
            call nudging_update_srf_analyses_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
-         end if 
+         end if
+ 
        end if 
+
      elseif(dycore_is('EUL')) then
        call nudging_update_analyses_eul(trim(Nudge_Path)//trim(Nudge_File))
      else !if(dycore_is('LR')) then
@@ -2039,7 +2039,7 @@ contains
    ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
    call outfld('Nudge_V_vint',ftem2,pcols,lchnk)
 
-   if((Nudge_Tprof.eq.0._r8).and.(Nudge_Uprof.ne.0._r8)) then 
+   if((Nudge_Tprof.eq.0).and.(Nudge_Uprof.ne.0)) then 
      ftem(:ncol,:pver) = ( Target_T(:ncol,:pver,lchnk)  &
                            -Model_T(:ncol,:pver,lchnk)) &
                          *Nudge_Utau(:ncol,:pver,lchnk)
@@ -2051,7 +2051,7 @@ contains
    ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
    call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
 
-   if((Nudge_Qprof.eq.0._r8).and.(Nudge_Uprof.ne.0._r8)) then
+   if((Nudge_Qprof.eq.0).and.(Nudge_Uprof.ne.0)) then
      ftem(:ncol,:pver) = ( Target_Q(:ncol,:pver,lchnk)  &
                            -Model_Q(:ncol,:pver,lchnk)) &
                          *Nudge_Utau(:ncol,:pver,lchnk)
@@ -2072,7 +2072,6 @@ contains
   !================================================================
   subroutine nudging_update_land_surface(state, pbuf, cam_in, cam_out, dtime)
    use physics_types,  only: physics_state
-   use constituents ,  only: pcnst, cnst_name, cnst_get_ind
    use camsrfexch   ,  only: cam_out_t, cam_in_t
    use ppgrid       ,  only: pver,pcols,pverp
    use cam_history  ,  only: outfld
@@ -2101,6 +2100,8 @@ contains
    real(r8), pointer :: prec_pcw(:)    ! total precipitation   from Hack convection
    real(r8), pointer :: snow_pcw(:)    ! snow from Hack   convection
    real(r8), pointer :: vmag_gust(:)
+
+   real(r8) :: rad_fac    = 1.0_r8     ! scale factor for radiative flux nudging 
 
    !Local variables 
    integer  :: i, k, m, lchnk, ncol
@@ -2449,7 +2450,6 @@ contains
   !================================================================
   subroutine nudging_update_srf_flux(state, cam_in, cam_out, dtime)
    use physics_types,  only: physics_state
-   use constituents ,  only: pcnst, cnst_name, cnst_get_ind
    use camsrfexch   ,  only: cam_out_t, cam_in_t
    use ppgrid       ,  only: pver,pcols,pverp
    use cam_history  ,  only: outfld
@@ -3534,7 +3534,7 @@ contains
    return
   end subroutine ! nudging_update_srf_analyses_se
 
-  subroutine nudging_update_bctend_se(anal_file)
+  subroutine nudging_update_bctend_se(anal_file, l_clim_bcm)
    !
    ! nudging_update_bctend_se: 
    !                 Open the given bias correction tendency data file, 
@@ -3549,7 +3549,8 @@ contains
 
    ! Arguments
    !-------------
-   character(len=*),intent(in):: anal_file
+   character(len=*),intent(in) :: anal_file
+   logical, intent(in) :: l_clim_bcm 
    ! Local values
    !-------------
    integer lev
@@ -3675,7 +3676,7 @@ contains
            if (mod(Sec,Nudge_Step) .ne. 0) return  ! ensure that intermittent simulations work for restart run
            if (masterproc) then
               call t_startf ('read_nudging_data')
-              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
+              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm )
               call t_stopf ('read_nudging_data')
               n_cnt = Sec/Nudge_Step + 1
               if (n_cnt .gt. Nudge_File_Ntime) then       ! account for one time slice per file
@@ -3710,7 +3711,7 @@ contains
                   first_file = .false.
                   if (masterproc) then
                      call t_startf ('read_nudging_data')
-                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
+                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm)
                      call t_stopf ('read_nudging_data')
                      strt3(1) = 1
                      strt3(2) = 1
@@ -3798,7 +3799,7 @@ contains
                   if (n_cnt .eq. Nudge_File_Ntime) then
                      if (masterproc) then
                         call t_startf ('read_nudging_data')
-                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
+                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template, l_clim_bcm)
                         call t_stopf ('read_nudging_data')
                         strt3(1) = 1
                         strt3(2) = 1
@@ -4882,37 +4883,61 @@ contains
   !-----------------------
   ! open a new netcdf file
   !-----------------------
-  subroutine open_netcdf (ncid, incre_step, Nudge_File_Template)
+  subroutine open_netcdf (ncid, incre_step, Nudge_File_Template, l_clim_bcm)
   use cam_abortutils, only : endrun
   use perf_mod
   use netcdf
   use filenames ,only      : interpret_filename_spec
 
-  integer, intent(out)    :: ncid
-  integer, intent(in)     :: incre_step
-
+  integer, intent(out)          :: ncid
+  integer, intent(in)           :: incre_step
+  logical, intent(in), optional :: l_clim_bcm ! If should label with previous time-step
   character(len=cl), intent(in) :: Nudge_File_Template
 
   ! local variable  
+  logical :: loop_year
   integer :: YMD3, YMD4, Nudge_Next1_Sec, Nudge_Next1_Year, &
              Nudge_Next1_Month, Nudge_Next1_Day, istat
   character(len=cl)       :: nudge_file
 
   YMD3 = (Nudge_Next_Year*10000) + &
          (Nudge_NEXT_Month*100) + Nudge_Next_Day
+
   call timemgr_time_inc(YMD3,Nudge_Next_Sec,  &
                         YMD4,Nudge_Next1_Sec, &
                         incre_step,0,0)
+
   Nudge_Next1_Year = YMD4/10000
   YMD4 = YMD4-(Nudge_Next1_Year*10000)
   Nudge_Next1_Month = YMD4/100
   Nudge_Next1_Day   = YMD4-(Nudge_Next1_Month*100)
-  nudge_file = interpret_filename_spec (  &
-                    Nudge_File_Template,  &
-               yr_spec=Nudge_Next1_Year,  &
-              mon_spec=Nudge_Next1_Month, &
-              day_spec=Nudge_Next1_Day  , &
-              sec_spec=Nudge_Next1_Sec    )
+
+  if (.not. present(l_clim_bcm) ) then
+    loop_year = .false.
+  else
+    loop_year = l_clim_bcm 
+  end if
+
+  if (loop_year) then  
+
+    nudge_file = interpret_filename_spec (  &
+                      Nudge_File_Template,  &
+                 yr_spec=1               ,  &
+                mon_spec=Nudge_Next1_Month, &
+                day_spec=Nudge_Next1_Day  , &
+                sec_spec=Nudge_Next1_Sec    )
+
+  else 
+
+    nudge_file = interpret_filename_spec (  &
+                      Nudge_File_Template,  &
+                 yr_spec=Nudge_Next1_Year,  &
+                mon_spec=Nudge_Next1_Month, &
+                day_spec=Nudge_Next1_Day  , &
+                sec_spec=Nudge_Next1_Sec    )
+
+   end if 
+
   istat=nf90_open(trim(Nudge_Path)//trim(nudge_file),NF90_NOWRITE,ncid)
   if (istat .ne. NF90_NOERR) then
       write(iulog,*) 'NF90_OPEN: failed for file',trim(nudge_file)
@@ -5180,7 +5205,7 @@ contains
   use ppgrid,        only  : pver,pverp,pcols
   use shr_vmath_mod, only  : shr_vmath_log
   use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
-  use constituents,  only  : qmin, cnst_get_ind, pcnst
+  use constituents,  only  : cnst_get_ind, pcnst
   use cam_abortutils,only  : endrun
   use wv_saturation, only  : qsat, qsat_water, svp_ice
   use geopotential,  only  : geopotential_t
@@ -5254,7 +5279,6 @@ contains
   real(r8), intent(out)   :: zm_obs(pcols,pver)
 
   ! local variables 
-  real(r8) :: ndgq(pcols,pver,pcnst)
   real(r8) :: pint_obs(pcols,pverp)
   real(r8) :: pmid_obs(pcols,pver)
   real(r8) :: pdel_obs(pcols,pver)
@@ -5421,7 +5445,7 @@ contains
     ! limit humidity in the observational data 
     do k = 1, pver
       do i = 1, ncol
-        qref(i,k)  = max(q_min, qobs(i,k))
+        qref(i,k)  = max(1.E-8_r8, qobs(i,k))
         ! adjust supersaturation
         if(l_adj_super_saturation .and. (qobs(i,k) > qsobs(i,k))) then
            qref(i,k)  = qsobs(i,k)
@@ -5480,7 +5504,7 @@ contains
           do i = 1, ncol
             if ( (qmod(i,k) > 0._r8) .and. (dqsdT_mod(i,k) > 0._r8) ) then
               tdt(i,k) = tdt(i,k) - (rhobs(i,k)-rhmod(i,k))*qfac(i,k) &
-                                   *qsmod(i,k)*qsmod(i,k)/(max(qmod(i,k),q_min)*dqsdT_mod(i,k))
+                                   *qsmod(i,k)*qsmod(i,k)/(max(qmod(i,k),1.E-8_r8)*dqsdT_mod(i,k))
             else 
               tdt(i,k) = tdt(i,k) + (tvobs(i,k) - tvmod(i,k))*tfac(i,k) &
                                    /(1.0_r8 + zvir * qmod(i,k))
@@ -5549,7 +5573,6 @@ contains
 
   use ppgrid,        only  : pver,pverp,pcols
   use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
-  use constituents,  only  : qmin, cnst_get_ind, pcnst
   use cam_abortutils,only  : endrun
   use wv_saturation, only  : qsat, qsat_water, svp_ice
 
@@ -5623,7 +5646,7 @@ contains
   else
     !limit humidity in the observational data 
     do i = 1, ncol
-      qbref(i)  = max(q_min, qbobs(i))
+      qbref(i)  = max(1.E-8_r8, qbobs(i))
       ! adjust supersaturation
       call qsat(tbobs(i), pmid_obs(i,pver), esbobs(i), qsbobs(i))
       if(l_adj_super_saturation .and. (qbobs(i) > qsbobs(i))) then
@@ -5698,6 +5721,7 @@ contains
   real(r8), parameter :: p_T_relax  = 10.E2_r8  ! p_relax for temperature  
   real(r8), parameter :: p_q_relax  = 100.E2_r8 ! p_relax for humidity 
   real(r8), parameter :: p_norelax  = 1.0_r8    ! from p_norelax upwards, no nudging
+  real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
 
   integer  :: i, k, m
 
@@ -5707,9 +5731,15 @@ contains
   real(r8) :: wtprof(pcols,pver)
   real(r8) :: wqprof(pcols,pver)
  
-  ! initialize pbl index 
+  ! initialize kpbl and weigthing profiles 
   do i = 1, ncol
     kpblt(i) = pver
+    do k = 1,pver
+      wuprof(i,k) = 0.0_r8 
+      wvprof(i,k) = 0.0_r8
+      wtprof(i,k) = 0.0_r8
+      wqprof(i,k) = 0.0_r8
+    end do 
   end do
 
   !Apply scaling such that nudging strength falls off with pressure.
@@ -5822,14 +5852,11 @@ contains
                         uref, vref, tref, qref, tobs, psref, &
                         phis_obs, phis_mod, psobs, psmod, psfac, psdt )
 
-  use constituents,  only  : qmin, pcnst
   use physconst,     only  : rga, cpair, gravit, rair, zvir, cappa
   use shr_vmath_mod, only  : shr_vmath_log
   use hycoef,        only  : hycoef_init, hyam, hybm, hyai, hybi, ps0
   use ppgrid,        only  : pver,pverp,pcols
 
-  ! local variables 
-  
   logical,  intent(in) :: use_ps_adj
   integer,  intent(in) :: ncol
   real(r8), intent(in) :: dtime
@@ -5863,6 +5890,16 @@ contains
   real(r8), intent(inout) :: vref(pcols,pver)
   real(r8), intent(inout) :: tref(pcols,pver)
   real(r8), intent(inout) :: qref(pcols,pver)
+
+  !local variables 
+  !Parameters to adjust surface pressure 
+  !Reference: !https://github.com/NOAA-GFDL/GFDL_atmos_cubed_sphere/blob/main/tools/fv_clim_nudge.F90
+  real(r8) :: dtdz       = -6.5E-3_r8 ! Lapse rate for adjustment of PS
+  real(r8) :: t_ref1     = 290.5_r8   ! reference temperature for adjustment of PS
+  real(r8) :: t_ref2     = 255.0_r8   ! reference temperature for adjustment of PS
+  real(r8) :: dz_thres   = 1.E-3_r8   ! threshold of topography difference for adjustment of PS 
+
+  real(r8), parameter :: z_min      = 150._r8
 
   integer  :: i, k, m, kk
   real(r8) :: x
@@ -6000,7 +6037,6 @@ contains
   use ppgrid,        only  : pver,pverp,pcols
   use shr_vmath_mod, only  : shr_vmath_log
   use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
-  use constituents,  only  : qmin, cnst_get_ind, pcnst
   use cam_abortutils,only  : endrun
   use wv_saturation, only  : qsat, qsat_water, svp_ice
   use geopotential,  only  : geopotential_t
