@@ -377,7 +377,7 @@ module nudging
 !=====================================================================
   ! Useful modules
   !------------------
-  use shr_kind_mod,only:r8=>SHR_KIND_R8,cs=>SHR_KIND_CS,cl=>SHR_KIND_CL
+  use shr_kind_mod,only:r8=>SHR_KIND_R8,r4=>SHR_KIND_R4,cs=>SHR_KIND_CS,cl=>SHR_KIND_CL
   use time_manager,only:timemgr_time_ge,timemgr_time_inc,get_curr_date,dtime
   use phys_grid   ,only:scatter_field_to_chunk
   use cam_abortutils  ,only:endrun
@@ -394,7 +394,7 @@ module nudging
   !----------------------------------------------------------
   implicit none
   private
-
+  public:: DeepONet_Nudge
   public:: Nudge_Model,Nudge_ON
   public:: Nudge_Allow_Missing_File
   public:: Nudge_Pdep_Weight_On
@@ -432,6 +432,7 @@ module nudging
   private::open_netcdf
   ! Nudging Parameters
   !--------------------
+  logical::         DeepONet_Nudge    =.false.
   logical::         Nudge_Model       =.false.
   logical::         Nudge_ON          =.false.
   logical::         Nudge_File_Present=.false.
@@ -453,6 +454,8 @@ module nudging
   logical::         Nudge_SRF_Q_On       = .false.
   logical::         Nudge_Hwin_Invert    = .false.
   logical::         Nudge_Vwin_Invert    = .false.
+  character(len=cl) DeepONet_Path 
+  character(len=cl) DeepONet_File 
   character(len=cl) Nudge_Path
   character(len=cl) Nudge_File,Nudge_File_Template
   character(len=cl) Nudge_SRF_File,Nudge_SRF_File_Template
@@ -660,8 +663,9 @@ contains
                          Nudge_Land, Nudge_SRF_Flux_On,                & 
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
-                         Nudge_SRF_Q_On, Nudge_SRF_Tau                 
-
+                         Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
+                         DeepONet_Nudge, DeepONet_Path, DeepONet_File 
+  
    ! Nudging is NOT initialized yet, For now
    ! Nudging will always begin/end at midnight.
    !--------------------------------------------
@@ -678,6 +682,8 @@ contains
 
    ! Set Default Namelist values
    !-----------------------------
+   DeepONet_Nudge     =.false.
+   DeepONet_Path      = './DeepONet_PT_File/'
    Nudge_Model        =.false.
    Nudge_Allow_Missing_File = .false.
    Nudge_Pdep_Weight_On = .false.
@@ -843,6 +849,9 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_Path              ,len(Nudge_Path)         ,mpichar,0,mpicom)
    call mpibcast(Nudge_File_Template     ,len(Nudge_File_Template),mpichar,0,mpicom)
+   call mpibcast(DeepONet_Path           ,len(DeepONet_Path)      ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_File           ,len(DeepONet_File)      ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_Nudge          , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Model             , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Initialized       , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_ON                , 1, mpilog, 0, mpicom)
@@ -1245,6 +1254,7 @@ contains
      elseif(.not.Before_End) then
        ! Nudging will never occur, so switch it off
        !--------------------------------------------
+       DeepONet_Nudge=.false.
        Nudge_Model =.false.
        Nudge_ON    =.false.
        Nudge_Land  =.false.
@@ -1306,6 +1316,9 @@ contains
      write(iulog,*) '---------------------------------------------------------'
      write(iulog,*) '  MODEL NUDGING INITIALIZED WITH THE FOLLOWING SETTINGS: '
      write(iulog,*) '---------------------------------------------------------'
+     write(iulog,*) 'DeepONet_Nudge=',DeepONet_Nudge
+     write(iulog,*) 'DeepONet_Path=', DeepONet_Path
+     write(iulog,*) 'DeepONet_File=', DeepONet_File 
      write(iulog,*) 'NUDGING: Nudge_Model=',Nudge_Model
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
@@ -1397,6 +1410,7 @@ contains
    call mpibcast(Nudge_Next_Month    , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Next_Day      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Next_Sec      , 1, mpiint, 0, mpicom)
+   call mpibcast(DeepONet_Nudge      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Model         , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
@@ -1621,6 +1635,9 @@ contains
               call alloc_err(istat,'nudging_init','INTP_FSDSUV',2*pcols*((endchunk-begchunk)+1))
             end if
 
+      case ('DeepONet')
+           ! use Xanal directly, no interpolation is needed
+           !-----------------------------------------------
       case default
            call endrun('nudging_init error: nudge method should &
                        &be either Step, Linear or IMT...')
@@ -1832,7 +1849,7 @@ contains
                  end if ! Nudge_Land
                  call t_stopf ('nudging_interp')
             case default
-                 ! No interpolation is needed for Step or IMT
+                 ! No interpolation is needed for Step or IMT or DeepONet ML 
          end select
       end if
    end if
@@ -1842,41 +1859,153 @@ contains
    ! beginning and ending times, and the analyses file exists.
    !-------------------------------------------------------
    if((After_Beg).and.(Before_End)) then
-     if(Nudge_File_Present) then
-       Nudge_ON=.true.
+     if (DeepONet_Nudge) then
+         Nudge_ON=.true.
      else
-       Nudge_ON=.false.
-       if(Nudge_Allow_Missing_File) then
-         if(masterproc) then
-           write(iulog,*) 'NUDGING: WARNING - Nudging data file NOT FOUND. Switching '
-           write(iulog,*) 'NUDGING:           nudging OFF to coast thru the gap. '
-         endif   
+       if(Nudge_File_Present) then
+         Nudge_ON=.true.
        else
-         write(err_str,*) 'NUDGING: Nudging data file (',trim(adjustl(Nudge_File)),') NOT FOUND; ', errmsg(__FILE__, __LINE__)
-         call endrun(err_str)
-       endif 
-     endif
-     if(Nudge_Land) then
-       !For land surfac nudging file 
-       if(Nudge_SRF_File_Present) then
-         Nudge_SRF_On=.true.
-       else
-         Nudge_SRF_On=.false.
+         Nudge_ON=.false.
          if(Nudge_Allow_Missing_File) then
            if(masterproc) then
              write(iulog,*) 'NUDGING: WARNING - Nudging data file NOT FOUND. Switching '
              write(iulog,*) 'NUDGING:           nudging OFF to coast thru the gap. '
-           endif
+           endif   
          else
-           write(err_str,*) 'NUDGING: Nudging data file (',trim(adjustl(Nudge_SRF_File)),') NOT FOUND; ', errmsg(__FILE__, __LINE__)
-           call endrun(err_str)
-         endif
+           write(err_str,*) 'NUDGING: Nudging data file (',trim(adjustl(Nudge_File)),') NOT FOUND; ', errmsg(__FILE__, __LINE__)
+            call endrun(err_str)
+         endif 
        endif
+       if(Nudge_Land) then
+         !For land surfac nudging file 
+         if(Nudge_SRF_File_Present) then
+           Nudge_SRF_On=.true.
+         else
+           Nudge_SRF_On=.false.
+           if(Nudge_Allow_Missing_File) then
+             if(masterproc) then
+               write(iulog,*) 'NUDGING: WARNING - Nudging data file NOT FOUND. Switching '
+               write(iulog,*) 'NUDGING:           nudging OFF to coast thru the gap. '
+             endif
+           else
+             write(err_str,*) 'NUDGING: Nudging data file (',trim(adjustl(Nudge_SRF_File)),') NOT FOUND; ', errmsg(__FILE__, __LINE__)
+             call endrun(err_str)
+           endif
+         endif
+       end if 
      end if 
    else
      Nudge_ON=.false.
      Nudge_SRF_On=.false.
    endif
+
+   !---------------------------------------------------
+   ! If Data arrays have changed update stepping arrays
+   !---------------------------------------------------
+   if ( .not. Nudge_Loc_PhysOut ) then
+      if ((Before_End).and.((Update_Nudge).or.(Update_Model))) then
+         do lchnk=begchunk,endchunk
+            ncol=phys_state(lchnk)%ncol
+            if (Nudge_Uprof .ne. 0) then
+              if (DeepONet_Nudge) then
+                Nudge_Ustep(:ncol,:pver,lchnk)=0._r8
+                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                      ncol,pver, "U", &
+                                      Model_U(:ncol,:pver,lchnk), &
+                                      Nudge_Ustep(:ncol,:pver,lchnk))
+              else
+                Nudge_Ustep(:ncol,:pver,lchnk)=(  Target_U(:ncol,:pver,lchnk)  &
+                                                  -Model_U(:ncol,:pver,lchnk)) &
+                                               *Nudge_Utau(:ncol,:pver,lchnk)
+              end if
+            end if
+            if (Nudge_Vprof .ne. 0) then
+              if (DeepONet_Nudge) then
+                Nudge_Vstep(:ncol,:pver,lchnk)=0._r8
+                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                      ncol,pver, "V", &
+                                      Model_V(:ncol,:pver,lchnk), &
+                                      Nudge_Vstep(:ncol,:pver,lchnk))
+              else
+                Nudge_Vstep(:ncol,:pver,lchnk)=(  Target_V(:ncol,:pver,lchnk)  &
+                                                  -Model_V(:ncol,:pver,lchnk)) &
+                                               *Nudge_Vtau(:ncol,:pver,lchnk)
+              end if
+            end if
+            if (Nudge_Tprof .ne. 0) then
+              if (DeepONet_Nudge) then
+                Nudge_Tstep(:ncol,:pver,lchnk)=0._r8
+                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                      ncol,pver, "T", &
+                                      Model_T(:ncol,:pver,lchnk), &
+                                      Nudge_Tstep(:ncol,:pver,lchnk))
+              else
+                Nudge_Tstep(:ncol,:pver,lchnk)=(  Target_T(:ncol,:pver,lchnk)  &
+                                                  -Model_T(:ncol,:pver,lchnk)) &
+                                               *Nudge_Ttau(:ncol,:pver,lchnk)
+              end if
+            end if
+            if (Nudge_Qprof .ne. 0) then
+              if (DeepONet_Nudge) then
+                Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
+                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                      ncol,pver, "Q", &
+                                      Model_Q(:ncol,:pver,lchnk), &
+                                      Nudge_Qstep(:ncol,:pver,lchnk))
+              else
+                Nudge_Qstep(:ncol,:pver,lchnk)=(  Target_Q(:ncol,:pver,lchnk)  &
+                                                  -Model_Q(:ncol,:pver,lchnk)) &
+                                               *Nudge_Qtau(:ncol,:pver,lchnk)
+              end if
+            end if
+            if (Nudge_PSprof .ne. 0) then
+              if (DeepONet_Nudge) then
+                Nudge_PSstep(:ncol,lchnk)=0._r8
+                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                      ncol,1, "PS", &
+                                      Model_PS(:ncol,lchnk), &
+                                      Nudge_PSstep(:ncol,lchnk))
+              else
+                Nudge_PSstep(:ncol,lchnk)=(  Target_PS(:ncol,lchnk)  &
+                                                  -Model_PS(:ncol,lchnk)) &
+                                               *Nudge_PStau(:ncol,lchnk)
+              end if
+            end if
+         end do
+
+         !******************
+         ! DIAG
+         !******************
+!        if(masterproc) then
+!         write(iulog,*) 'PFC: Target_T(1,:pver,begchunk)=',Target_T(1,:pver,begchunk)  
+!         write(iulog,*) 'PFC:  Model_T(1,:pver,begchunk)=',Model_T(1,:pver,begchunk)
+!         write(iulog,*) 'PFC: Nudge_Tstep(1,:pver,begchunk)=',Nudge_Tstep(1,:pver,begchunk)
+!         write(iulog,*) 'PFC: Nudge_Xstep arrays updated:'
+!        endif
+
+      else
+         do lchnk=begchunk,endchunk
+            ncol=phys_state(lchnk)%ncol
+            ! The following lines are used to reset the nudging tendency
+            ! to zero in order to perform an intermittent simulation
+            if (Nudge_Uprof .ne. 0) then
+                Nudge_Ustep(:ncol,:pver,lchnk) = 0._r8
+            end if
+            if (Nudge_Vprof .ne. 0) then
+                Nudge_Vstep(:ncol,:pver,lchnk) = 0._r8
+            end if
+            if (Nudge_Tprof .ne. 0) then
+                Nudge_Tstep(:ncol,:pver,lchnk) = 0._r8
+            end if
+            if (Nudge_Qprof .ne. 0) then
+                Nudge_Qstep(:ncol,:pver,lchnk) = 0._r8
+            end if
+            if (Nudge_PSprof .ne. 0) then
+                Nudge_PSstep(:ncol,lchnk)      = 0._r8
+            end if
+         end do
+      end if
+   end if   ! if for Nudge_Loc_PhysOut
 
    ! End Routine
    !------------
@@ -1941,33 +2070,69 @@ contains
    Model_PHIS(:ncol,lchnk)=state%phis(:ncol)
 
    if ((l_Before_End).and.((l_Update_Nudge).or.(l_Update_Model))) then
-      ps_tend(:ncol)             = 0._r8
-      u_tend(:ncol,:pver)        = 0._r8
-      v_tend(:ncol,:pver)        = 0._r8
-      t_tend(:ncol,:pver)        = 0._r8
-      q_tend(:ncol,:pver)        = 0._r8 
-     
-      ! Update the nudging tendency
-      call update_nudging_tend (ncol, dtime, Model_PS(:,lchnk), Target_PS(:,lchnk), Nudge_PStau(:,lchnk),   & !In 
-                                Model_U(:,:,lchnk), Target_U(:,:,lchnk), Nudge_Utau(:,:,lchnk),             & !In 
-                                Model_V(:,:,lchnk), Target_V(:,:,lchnk), Nudge_Vtau(:,:,lchnk),             & !In 
-                                Model_T(:,:,lchnk), Target_T(:,:,lchnk), Nudge_Ttau(:,:,lchnk),             & !In  
-                                Model_Q(:,:,lchnk), Target_Q(:,:,lchnk), Nudge_Qtau(:,:,lchnk),             & !In 
-                                Target_U10(:,lchnk),Target_V10(:,lchnk), Target_T2(:,lchnk),                & !In 
-                                Target_TD2(:,lchnk),Target_Q2(:,lchnk), Nudge_SRFtau(:,lchnk),              & !In  
-                                Nudge_SRF_On, Nudge_SRF_State_On, Nudge_SRF_Q_On,                           & !In
-                                Model_PHIS(:,lchnk), Target_PHIS(:,lchnk), PBLH,                            & !In
-                                Nudge_PS_Adjust_On, Nudge_Q_Adjust_On, Nudge_Pdep_Weight_On,                & !In
-                                Nudge_Lin_Relax_On, Nudge_NO_PBL_UV, Nudge_NO_PBL_T, Nudge_NO_PBL_Q,        & !In 
-                                Nudge_PSprof, Nudge_PS_OPT, Nudge_Uprof, Nudge_Vprof, Nudge_UV_OPT,         & !In 
-                                Nudge_Tprof,  Nudge_T_OPT, Nudge_Qprof, Nudge_Q_OPT,                        & !In 
-                                zm_obs, zm_mod, ps_tend, u_tend, v_tend, t_tend, q_tend )                     !Out
+     if ( .not. DeepONet_Nudge ) then
+       ps_tend(:ncol)             = 0._r8
+       u_tend(:ncol,:pver)        = 0._r8
+       v_tend(:ncol,:pver)        = 0._r8
+       t_tend(:ncol,:pver)        = 0._r8
+       q_tend(:ncol,:pver)        = 0._r8 
+       ! Update the nudging tendency
+       call update_nudging_tend (ncol, dtime, Model_PS(:,lchnk), Target_PS(:,lchnk), Nudge_PStau(:,lchnk),   & !In 
+                                 Model_U(:,:,lchnk), Target_U(:,:,lchnk), Nudge_Utau(:,:,lchnk),             & !In 
+                                 Model_V(:,:,lchnk), Target_V(:,:,lchnk), Nudge_Vtau(:,:,lchnk),             & !In 
+                                 Model_T(:,:,lchnk), Target_T(:,:,lchnk), Nudge_Ttau(:,:,lchnk),             & !In  
+                                 Model_Q(:,:,lchnk), Target_Q(:,:,lchnk), Nudge_Qtau(:,:,lchnk),             & !In 
+                                 Target_U10(:,lchnk),Target_V10(:,lchnk), Target_T2(:,lchnk),                & !In 
+                                 Target_TD2(:,lchnk),Target_Q2(:,lchnk), Nudge_SRFtau(:,lchnk),              & !In  
+                                 Nudge_SRF_On, Nudge_SRF_State_On, Nudge_SRF_Q_On,                           & !In
+                                 Model_PHIS(:,lchnk), Target_PHIS(:,lchnk), PBLH,                            & !In
+                                 Nudge_PS_Adjust_On, Nudge_Q_Adjust_On, Nudge_Pdep_Weight_On,                & !In
+                                 Nudge_Lin_Relax_On, Nudge_NO_PBL_UV, Nudge_NO_PBL_T, Nudge_NO_PBL_Q,        & !In 
+                                 Nudge_PSprof, Nudge_PS_OPT, Nudge_Uprof, Nudge_Vprof, Nudge_UV_OPT,         & !In 
+                                 Nudge_Tprof,  Nudge_T_OPT, Nudge_Qprof, Nudge_Q_OPT,                        & !In 
+                                 zm_obs, zm_mod, ps_tend, u_tend, v_tend, t_tend, q_tend )                     !Out
 
-      Nudge_PSstep(:ncol,lchnk)      = ps_tend(:ncol)
-      Nudge_Ustep(:ncol,:pver,lchnk) = u_tend(:ncol,:pver)
-      Nudge_Vstep(:ncol,:pver,lchnk) = v_tend(:ncol,:pver)
-      Nudge_Tstep(:ncol,:pver,lchnk) = t_tend(:ncol,:pver)
-      Nudge_Qstep(:ncol,:pver,lchnk) = q_tend(:ncol,:pver)
+       Nudge_PSstep(:ncol,lchnk)      = ps_tend(:ncol)
+       Nudge_Ustep(:ncol,:pver,lchnk) = u_tend(:ncol,:pver)
+       Nudge_Vstep(:ncol,:pver,lchnk) = v_tend(:ncol,:pver)
+       Nudge_Tstep(:ncol,:pver,lchnk) = t_tend(:ncol,:pver)
+       Nudge_Qstep(:ncol,:pver,lchnk) = q_tend(:ncol,:pver)
+    else 
+       Nudge_Ustep(:ncol,:pver,lchnk)=0._r8
+       Nudge_Vstep(:ncol,:pver,lchnk)=0._r8
+       Nudge_Tstep(:ncol,:pver,lchnk)=0._r8
+       Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
+       if (Nudge_Uprof .ne. 0) then
+           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                 ncol,pver, "U", &
+                                 Model_U(:ncol,:pver,lchnk), &
+                                 Nudge_Ustep(:ncol,:pver,lchnk))
+       end if 
+       if (Nudge_Vprof .ne. 0) then
+           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                 ncol,pver, "V", &
+                                 Model_V(:ncol,:pver,lchnk), &
+                                 Nudge_Vstep(:ncol,:pver,lchnk))
+       end if
+       if (Nudge_Tprof .ne. 0) then
+           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                 ncol,pver, "T", &
+                                 Model_T(:ncol,:pver,lchnk), &
+                                 Nudge_Tstep(:ncol,:pver,lchnk))
+       end if
+       if (Nudge_Qprof .ne. 0) then
+           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                 ncol,pver, "Q", &
+                                 Model_Q(:ncol,:pver,lchnk), &
+                                 Nudge_Qstep(:ncol,:pver,lchnk))
+       end if
+       if (Nudge_PSprof .ne. 0) then
+           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
+                                 ncol,1, "PS", &
+                                 Model_PS(:ncol,lchnk), &
+                                 Nudge_PSstep(:ncol,lchnk))
+       end if
+    end if 
    else
       ! The following lines are used to reset the nudging tendency
       ! to zero in order to perform an intermittent simulation
@@ -2684,7 +2849,15 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
 #endif
-   if(.not.Nudge_File_Present) return
+   if (trim(Nudge_Method).eq. "DeepONet") then
+     if(masterproc) then
+        write(iulog,*) 'Warning: using DeepONet Machine Learning model to predict nudging tendency'
+        write(iulog,*) 'Warning: No need to read reference data, return'
+     end if
+     return
+   else
+     if(.not.Nudge_File_Present) return
+   end if
 
    ! masterporc does all of the work here
    !-----------------------------------------
@@ -3028,6 +3201,9 @@ contains
 
            end if     ! single vs. multiple time slices per file
 
+      case ('DeepONet')
+          write(iulog,*) 'ERROR: when DeepONet method is called, code should not attempt to read reference data'
+          call endrun('nudging_update_analyses_se: error in DeepONet nudging')
       case default
           write(iulog,*) 'ERROR: Unknown Input Nudge Method'
           call endrun('nudging_update_analyses_se: bad input nudge method')
@@ -3816,7 +3992,15 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
 #endif
-   if(.not.Nudge_File_Present) return
+   if (trim(Nudge_Method).eq. "DeepONet") then
+     if(masterproc) then 
+        write(iulog,*) 'Warning: using DeepONet Machine Learning model to predict nudging tendency'  
+        write(iulog,*) 'Warning: No need to read reference data, return'
+     end if 
+     return       
+   else
+     if(.not.Nudge_File_Present) return
+   end if
 
    ! masterporc does all of the work here
    !-----------------------------------------
@@ -5135,6 +5319,48 @@ contains
 
   return
   end subroutine !update_nudging_tend
+
+  !===========================================================================
+  ! SZ - 06/05/2023: This subroutine attempt to read and calculate the nudging
+  !                  tendency using the trained DeepONet Machine Learning (ML)
+  !                  method, the subroutine works on a chunk and a specific
+  !                  model state variables
+  !===========================================================================
+  subroutine deeponet_nudging(filename,ncol,pver,var, model_state, nugding_tend)
+   use torch_ftn
+   use iso_c_binding
+   use iso_fortran_env
+
+   ! Arguments
+   !-----------
+   type(torch_module) :: torch_mod
+   type(torch_tensor_wrap) :: input_tensors
+   type(torch_tensor) :: out_tensor
+
+   integer, intent(in) :: ncol, pver
+   character(len=*), intent(in) :: filename        ! DeepONet ML PT files 
+   character(len=*), intent(in) :: var             ! nudge method 
+   real(r8),intent(in) ::model_state(ncol,pver)    !(ncols,pver)
+   real(r8),intent(inout)::nugding_tend(ncol,pver) !(pcols,begchunk:endchunk)
+
+   ! Local values
+   !----------------
+   integer :: i,j,k,l
+   real(r4) :: input(224, 224, 3, 10)
+   real(r4), pointer :: output(:, :)
+   integer :: arglen, stat
+
+   input(:,:,:,:) = 1.0
+   call input_tensors%create
+   call input_tensors%add_array(input)
+   call torch_mod%load(trim(filename))
+   call torch_mod%forward(input_tensors, out_tensor)
+   call out_tensor%to_array(output)
+   !print *, output(1:5, 1)
+   if (masterproc) write(iulog,*) 'TEST FOR Pytorch: ', output(1:5, 1)
+
+   return
+  end subroutine  ! deeponet_nudging 
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   !!Following subroutine is used to apply nudging at the surface layer only  

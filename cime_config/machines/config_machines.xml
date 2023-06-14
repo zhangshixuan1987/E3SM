@@ -249,6 +249,13 @@
     <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
     <TEST_TPUT_TOLERANCE>0.1</TEST_TPUT_TOLERANCE>
 
+    <environment_variables compiler="gnu">
+      <env name="TORCH_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch_lib/lib/python3.8/site-packages</env>
+      <env name="PYTHONPATH">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch_lib/lib/python3.8/site-packages</env>
+      <env name="LD_LIBRARY_PATH">$ENV{LD_LIBRARY_PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch_lib/lib/python3.8/site-packages/torch/lib</env>
+      <env name="PATH">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch_lib/lib/python3.8/site-packages:$ENV{PATH}</env>
+    </environment_variables>
+
     <environment_variables>
       <env name="MPICH_ENV_DISPLAY">1</env>
       <env name="MPICH_VERSION_DISPLAY">1</env>
