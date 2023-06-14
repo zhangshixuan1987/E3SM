@@ -217,8 +217,11 @@ subroutine diag_init()
    call addfld ('Z300',horiz_only,    'A','m','Geopotential Z at 300 mbar pressure surface')
    call addfld ('Z200',horiz_only,    'A','m','Geopotential Z at 200 mbar pressure surface')
    call addfld ('Z100',horiz_only,    'A','m','Geopotential Z at 100 mbar pressure surface')
-   call addfld ('Z050',horiz_only,    'A','m','Geopotential Z at 50 mbar pressure surface')
-   call addfld ('Z010',horiz_only,    'A','m','Geopotential Z at 10 mbar pressure surface')
+   call addfld ('Z070',horiz_only,    'A','m','Geopotential Z at  70 mbar pressure surface')
+   call addfld ('Z050',horiz_only,    'A','m','Geopotential Z at  50 mbar pressure surface')
+   call addfld ('Z030',horiz_only,    'A','m','Geopotential Z at  30 mbar pressure surface')
+   call addfld ('Z020',horiz_only,    'A','m','Geopotential Z at  20 mbar pressure surface')
+   call addfld ('Z010',horiz_only,    'A','m','Geopotential Z at  10 mbar pressure surface')
 
    call addfld ('ZZ',(/ 'lev' /), 'A','m2','Eddy height variance' )
    call addfld ('VZ',(/ 'lev' /), 'A','m2/s','Meridional transport of geopotential energy')
@@ -440,7 +443,6 @@ subroutine diag_init()
    call addfld ('T001',horiz_only,   'A', 'K',   'Temperature at 1 mbar pressure surface')
    call addfld ('TTOP',horiz_only,   'A', 'K',   'Highest model level temperature')
    call addfld ('U150',horiz_only,   'A', 'm/s', 'Zonal wind at 150 mbar pressure surface')
-   call addfld ('U050',horiz_only,   'A', 'm/s', 'Zonal wind at 50 mbar pressure surface')
    call addfld ('U025',horiz_only,   'A', 'm/s', 'Zonal wind at 25 mbar pressure surface')
    call addfld ('U005',horiz_only,   'A', 'm/s', 'Zonal wind at 5 mbar pressure surface')
    call addfld ('U002',horiz_only,   'A', 'm/s', 'Zonal wind at 2 mbar pressure surface')
@@ -1136,9 +1138,21 @@ end subroutine diag_conv_tend_ini
        call vertinterp(ncol, pcols, pver, state%pmid, 10000._r8, z3, p_surf)
        call outfld('Z100    ', p_surf, pcols, lchnk)
     end if
+    if (hist_fld_active('Z070')) then
+       call vertinterp(ncol, pcols, pver, state%pmid,  7000._r8, z3, p_surf)
+       call outfld('Z070    ', p_surf, pcols, lchnk)
+    end if
     if (hist_fld_active('Z050')) then
        call vertinterp(ncol, pcols, pver, state%pmid,  5000._r8, z3, p_surf)
        call outfld('Z050    ', p_surf, pcols, lchnk)
+    end if
+    if (hist_fld_active('Z030')) then
+       call vertinterp(ncol, pcols, pver, state%pmid,  3000._r8, z3, p_surf)
+       call outfld('Z030    ', p_surf, pcols, lchnk)
+    end if
+    if (hist_fld_active('Z020')) then
+       call vertinterp(ncol, pcols, pver, state%pmid,  2000._r8, z3, p_surf)
+       call outfld('Z020    ', p_surf, pcols, lchnk)
     end if
     if (hist_fld_active('Z010')) then
        call vertinterp(ncol, pcols, pver, state%pmid,  1000._r8, z3, p_surf)
@@ -2019,10 +2033,6 @@ end subroutine diag_conv_tend_ini
     if (hist_fld_active('U150')) then
        call vertinterp(ncol, pcols, pver, state%pmid,  15000._r8, state%u, p_surf)
        call outfld('U150    ', p_surf, pcols, lchnk )
-    end if
-    if (hist_fld_active('U050')) then
-       call vertinterp(ncol, pcols, pver, state%pmid,  5000._r8, state%u, p_surf)
-       call outfld('U050    ', p_surf, pcols, lchnk )
     end if
     if (hist_fld_active('U025')) then
        call vertinterp(ncol, pcols, pver, state%pmid,  2500._r8, state%u, p_surf)
