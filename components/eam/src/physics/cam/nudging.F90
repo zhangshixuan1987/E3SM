@@ -115,6 +115,8 @@ module nudging
 !        Nudge_Hwin_latDelta: Controls the sharpness of the window transition with a 
 !        Nudge_Hwin_lonDelta: length in degrees. Small non-zero values yeild a step 
 !                             function while a large value leads to a smoother transition.
+!        Nudge_Hwin_Invert  : A logical flag used to invert the horizontal window function 
+!                             to get its compliment.(e.g. to nudge outside a given window).
 !
 !        Nudge_Vwin_Lindex:   In the vertical, the window is specified in terms of model 
 !        Nudge_Vwin_Ldelta:   level indcies. The High and Low transition levels should 
@@ -123,6 +125,8 @@ module nudging
 !                             constant in the vertical, the Low index should be set to 0,
 !                             the High index should be set to (NCOL+1), and the transition 
 !                             lengths should be set to 0.1
+!        Nudge_Vwin_Invert  : A logical flag used to invert the vertical window function 
+!                             to get its compliment.
 !
 !        Nudge_Hwin_lo:       For a given set of spatial parameters, the raw window 
 !        Nudge_Hwin_hi:       function may not span the range [0,1], so those values are 
@@ -393,19 +397,37 @@ module nudging
 
   public:: Nudge_Model,Nudge_ON
   public:: Nudge_Allow_Missing_File
+  public:: Nudge_Pdep_Weight_On
+  public:: Nudge_Lin_Relax_On
+  public:: Nudge_PS_Adjust_On
+  public:: Nudge_PS_On
+  public:: Nudge_Q_Adjust_On
+  public:: Nudge_Land,Nudge_SRF_On
+  public:: Nudge_SRF_Flux_On
+  public:: Nudge_SRF_Q_On
+  public:: Nudge_SRF_PSWgt_On
+  public:: Nudge_SRF_Prec_On
+  public:: Nudge_SRF_RadFlux_On
+  public:: Nudge_SRF_State_On
   public:: nudging_readnl
   public:: nudging_init
   public:: nudging_timestep_init
   public:: nudging_timestep_tend
   public:: nudging_calc_tend
+  public:: nudging_update_land_surface
+  public:: nudging_update_srf_flux
   public:: Nudge_Loc_PhysOut
   private::nudging_update_analyses_se
+  private::nudging_update_srf_analyses_se
   private::nudging_update_analyses_eul
   private::nudging_update_analyses_fv
   private::nudging_set_PSprofile
+  private::nudging_set_SRFprofile
   private::nudging_set_profile
   private::linear_interpolation
+  private::linear_interpolation_2d
   private::read_and_scatter_se
+  private::read_and_scatter_se_2d
   private::read_and_scatter_fv
   private::open_netcdf
   ! Nudging Parameters
@@ -414,9 +436,26 @@ module nudging
   logical::         Nudge_ON          =.false.
   logical::         Nudge_File_Present=.false.
   logical::         Nudge_Initialized =.false.
-  logical::         Nudge_Allow_Missing_File = .false.  
+  logical::         Nudge_Allow_Missing_File = .false. 
+  logical::         Nudge_Pdep_Weight_On = .false.
+  logical::         Nudge_SRF_File_Present=.false.
+  logical::         Nudge_SRF_PSWgt_On   = .false.
+  logical::         Nudge_SRF_Prec_On    = .false.
+  logical::         Nudge_SRF_RadFlux_On = .false.
+  logical::         Nudge_SRF_State_On   = .false. 
+  logical::         Nudge_Lin_Relax_On   = .false.
+  logical::         Nudge_PS_Adjust_On   = .false.
+  logical::         Nudge_PS_On          = .false.
+  logical::         Nudge_Q_Adjust_On    = .false.
+  logical::         Nudge_Land           = .false.
+  logical::         Nudge_SRF_On         = .false.
+  logical::         Nudge_SRF_Flux_On    = .false. 
+  logical::         Nudge_SRF_Q_On       = .false.
+  logical::         Nudge_Hwin_Invert    = .false.
+  logical::         Nudge_Vwin_Invert    = .false.
   character(len=cl) Nudge_Path
   character(len=cl) Nudge_File,Nudge_File_Template
+  character(len=cl) Nudge_SRF_File,Nudge_SRF_File_Template
   integer           Nudge_Times_Per_Day
   integer           Model_Times_Per_Day
   real(r8)          Nudge_Ucoef,Nudge_Vcoef
@@ -425,6 +464,8 @@ module nudging
   integer           Nudge_Qprof,Nudge_Tprof
   real(r8)          Nudge_PScoef
   integer           Nudge_PSprof
+  real(r8)          Nudge_SRFcoef
+  integer           Nudge_SRFprof
   integer           Nudge_Beg_Year ,Nudge_Beg_Month
   integer           Nudge_Beg_Day  ,Nudge_Beg_Sec
   integer           Nudge_End_Year ,Nudge_End_Month
@@ -469,16 +510,19 @@ module nudging
   real(r8),allocatable::Target_T(:,:,:)     !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Target_Q(:,:,:)     !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Target_PS(:,:)      !(pcols,begchunk:endchunk)
+  real(r8),allocatable::Target_PHIS(:,:)    !(pcols,begchunk:endchunk)
   real(r8),allocatable::Model_U(:,:,:)      !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Model_V(:,:,:)      !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Model_T(:,:,:)      !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Model_Q(:,:,:)      !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Model_PS(:,:)       !(pcols,begchunk:endchunk)
+  real(r8),allocatable::Model_PHIS(:,:)     !(pcols,begchunk:endchunk)
   real(r8),allocatable::Nudge_Utau(:,:,:)   !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_Vtau(:,:,:)   !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_Ttau(:,:,:)   !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_Qtau(:,:,:)   !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_PStau(:,:)    !(pcols,begchunk:endchunk)
+  real(r8),allocatable::Nudge_SRFtau(:,:)   !(pcols,begchunk:endchunk)
   real(r8),allocatable::Nudge_Ustep(:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_Vstep(:,:,:)  !(pcols,pver,begchunk:endchunk)
   real(r8),allocatable::Nudge_Tstep(:,:,:)  !(pcols,pver,begchunk:endchunk)
@@ -493,14 +537,77 @@ module nudging
   logical            :: Nudge_Loc_PhysOut                   ! whether nudging tendency is calculated at the same 
                                                             ! location where the model state variables are written out
   real(r8)           :: Nudge_Tau                           ! nudge relaxation timescale
+  real(r8)           :: Nudge_SRF_Tau                       ! nudge relaxation timescale for land surface 
   logical            :: Nudge_CurrentStep                   ! .true. if linearly interpolated to current model time step
   integer            :: Nudge_File_Ntime                    ! number of time slices per nudging data file 
+  integer            :: Nudge_SRF_File_Ntime                ! number of time slices per nudging data file for surface 
   logical :: first_file                                     ! the flag for first nudge data
+  logical :: first_srf_file                                 ! the flag for first surface nudge data 
   real(r8), allocatable, dimension(:,:,:,:) :: INTP_U       ! (pcols,pver,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:,:) :: INTP_V       ! (pcols,pver,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:,:) :: INTP_T       ! (pcols,pver,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:,:) :: INTP_Q       ! (pcols,pver,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:)   :: INTP_PS      ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:)   :: INTP_PHIS    ! (pcols,begchunk:endchunk,:)
+
+
+!Variables for surface nudging 
+  real(r8), allocatable :: Target_U10(:,:)     !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_V10(:,:)     !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_T2(:,:)      !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_TD2(:,:)     !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_TS(:,:)      !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_Q2(:,:)      !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_PRECC(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_PRECL(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_PRECSC(:,:)  !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_PRECSL(:,:)  !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_EVAP(:,:)    !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_SHFLX(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_LHFLX(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_NETSW(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_FLWDS(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_FSDS(:,:)    !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_FSDSD(:,:)   !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Target_FSDSUV(:,:)  !(pcols,begchunk:endchunk)
+
+  real(r8), allocatable, dimension(:,:,:) :: INTP_U10   ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_V10   ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_T2    ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_TD2   ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_TS    ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_PRECC ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_PRECL ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_PRECSC! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_PRECSL! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_EVAP  ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_LHFLX ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_SHFLX ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_FSNS  ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_FLDS  ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_FSDS  ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_FSDSD ! (pcols,begchunk:endchunk,:)
+  real(r8), allocatable, dimension(:,:,:) :: INTP_FSDSUV! (pcols,begchunk:endchunk,:)
+
+  integer  :: Nudge_PS_OPT    ! option for the surface pressure nudging 
+  integer  :: Nudge_UV_OPT    ! option for the zonal wind nudging 
+  integer  :: Nudge_T_OPT     ! option for the temperature nudging 
+  integer  :: Nudge_Q_OPT     ! option for the humidity nudging 
+
+  integer  :: Nudge_NO_PBL_UV ! option for excluding UV nudging within PBL 
+  integer  :: Nudge_NO_PBL_T  ! option for excluding T nudging within PBL 
+  integer  :: Nudge_NO_PBL_Q  ! option for excluding Q nudging within PBL 
+
+  !For surface flux nudging 
+  integer  :: prec_dp_idx  = 0
+  integer  :: snow_dp_idx  = 0
+  integer  :: prec_sh_idx  = 0
+  integer  :: snow_sh_idx  = 0
+  integer  :: prec_sed_idx = 0
+  integer  :: snow_sed_idx = 0
+  integer  :: prec_pcw_idx = 0
+  integer  :: snow_pcw_idx = 0
+  integer  :: vmag_gust_idx= 0
 
 contains
   !================================================================
@@ -523,7 +630,7 @@ contains
    integer ierr,unitn
 
    namelist /nudging_nl/ Nudge_Model,Nudge_Path,                       &
-                         Nudge_Allow_Missing_File,                     &
+                         Nudge_Allow_Missing_File,                     & 
                          Nudge_File_Template,Nudge_Times_Per_Day,      &
                          Model_Times_Per_Day,                          &
                          Nudge_Ucoef ,Nudge_Uprof,                     &
@@ -531,6 +638,7 @@ contains
                          Nudge_Qcoef ,Nudge_Qprof,                     &
                          Nudge_Tcoef ,Nudge_Tprof,                     &
                          Nudge_PScoef,Nudge_PSprof,                    &
+                         Nudge_SRFcoef,Nudge_SRFprof,                  &
                          Nudge_Beg_Year,Nudge_Beg_Month,Nudge_Beg_Day, &
                          Nudge_End_Year,Nudge_End_Month,Nudge_End_Day, &
                          Nudge_Hwin_lo,Nudge_Hwin_hi,                  &
@@ -540,15 +648,31 @@ contains
                          Nudge_Hwin_latDelta,Nudge_Hwin_lonDelta,      &
                          Nudge_Vwin_Lindex,Nudge_Vwin_Hindex,          &
                          Nudge_Vwin_Ldelta,Nudge_Vwin_Hdelta,          &
+                         Nudge_Hwin_Invert,Nudge_Vwin_Invert,          &
                          Nudge_Method, Nudge_Tau, Nudge_Loc_PhysOut,   &
-                         Nudge_CurrentStep, Nudge_File_Ntime
+                         Nudge_CurrentStep, Nudge_File_Ntime,          & 
+                         Nudge_NO_PBL_UV, Nudge_NO_PBL_T,              &
+                         Nudge_NO_PBL_Q, Nudge_Pdep_Weight_On,         &
+                         Nudge_Lin_Relax_On, Nudge_PS_OPT,             & 
+                         Nudge_UV_OPT, Nudge_T_OPT, Nudge_Q_OPT,       &
+                         Nudge_PS_Adjust_On, Nudge_Q_Adjust_On,        & 
+                         Nudge_SRF_File_Template,Nudge_SRF_File_Ntime, &
+                         Nudge_Land, Nudge_SRF_Flux_On,                & 
+                         Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
+                         Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
+                         Nudge_SRF_Q_On, Nudge_SRF_Tau                 
 
    ! Nudging is NOT initialized yet, For now
    ! Nudging will always begin/end at midnight.
    !--------------------------------------------
    Nudge_Initialized =.false.
    Nudge_ON          =.false.
+   Nudge_PS_On       =.false.
+   Nudge_SRF_On      =.false.
+   Nudge_SRF_Flux_On =.false.
+   Nudge_SRF_Q_On    =.false. 
    Nudge_File_Present=.false.
+   Nudge_SRF_File_Present=.false.
    Nudge_Beg_Sec=0
    Nudge_End_Sec=0
 
@@ -556,27 +680,38 @@ contains
    !-----------------------------
    Nudge_Model        =.false.
    Nudge_Allow_Missing_File = .false.
+   Nudge_Pdep_Weight_On = .false.
+   Nudge_Lin_Relax_On   = .false.
+   Nudge_PS_Adjust_On   = .false.
+   Nudge_Q_Adjust_On    = .false.
+   Nudge_Land           = .false.
+   Nudge_SRF_PSWgt_On   = .false. 
+   Nudge_SRF_Prec_On    = .false.
+   Nudge_SRF_RadFlux_On = .false.
+   Nudge_SRF_State_On   = .false.
    Nudge_Path         ='./Data/YOTC_ne30np4_001/'
    Nudge_File_Template='YOTC_ne30np4_L30.cam2.i.%y-%m-%d-%s.nc'
    Nudge_Times_Per_Day=4
    Model_Times_Per_Day=4
-   Nudge_Ucoef  =0._r8
-   Nudge_Vcoef  =0._r8
-   Nudge_Qcoef  =0._r8
-   Nudge_Tcoef  =0._r8
-   Nudge_PScoef =0._r8
-   Nudge_Uprof  =0
-   Nudge_Vprof  =0
-   Nudge_Qprof  =0
-   Nudge_Tprof  =0
-   Nudge_PSprof =0
+   Nudge_Ucoef   =0._r8
+   Nudge_Vcoef   =0._r8
+   Nudge_Qcoef   =0._r8
+   Nudge_Tcoef   =0._r8
+   Nudge_PScoef  =0._r8
+   Nudge_SRFcoef =0._r8
+   Nudge_Uprof   =0
+   Nudge_Vprof   =0
+   Nudge_Qprof   =0
+   Nudge_Tprof   =0
+   Nudge_PSprof  =0
+   Nudge_SRFprof =0
    Nudge_Beg_Year =2008
    Nudge_Beg_Month=5
    Nudge_Beg_Day  =1
    Nudge_End_Year =2008
    Nudge_End_Month=9
    Nudge_End_Day  =1
-   Nudge_Hwin_lo      =0.0_r8
+   Nudge_Hwin_lo      =0._r8
    Nudge_Hwin_hi      =1.0_r8
    Nudge_Hwin_lat0    =0._r8
    Nudge_Hwin_latWidth=9999._r8
@@ -584,17 +719,32 @@ contains
    Nudge_Hwin_lon0    =180._r8
    Nudge_Hwin_lonWidth=9999._r8
    Nudge_Hwin_lonDelta=1.0_r8
-   Nudge_Vwin_lo      =0.0_r8
+   Nudge_Hwin_Invert  = .false.
+   Nudge_Vwin_lo      =0._r8
    Nudge_Vwin_hi      =1.0_r8
    Nudge_Vwin_Hindex  =float(pver+1)
    Nudge_Vwin_Hdelta  =0.1_r8
-   Nudge_Vwin_Lindex  =0.0_r8
+   Nudge_Vwin_Lindex  =0._r8
    Nudge_Vwin_Ldelta  =0.1_r8
+   Nudge_Vwin_Invert  = .false.
    Nudge_Method       = 'Linear'
    Nudge_Loc_PhysOut  = .true.
    Nudge_Tau          = -999._r8
    Nudge_CurrentStep  = .false.
    Nudge_File_Ntime   = 0
+
+   Nudge_SRF_File_Template = 'YOTC_sfc_ne30np4_L30.cam2.i.%y-%m-%d-%s.nc'
+   Nudge_SRF_File_Ntime    = 0 
+   Nudge_SRF_Tau           = -999._r8 
+
+   Nudge_UV_OPT       = 0 
+   Nudge_T_OPT        = 0
+   Nudge_Q_OPT        = 0
+
+   Nudge_NO_PBL_UV    = 0 
+   Nudge_NO_PBL_T     = 0 
+   Nudge_NO_PBL_Q     = 0
+   
    ! Read in namelist values
    !------------------------
    if(masterproc) then
@@ -609,6 +759,24 @@ contains
      endif
      close(unitn)
      call freeunit(unitn)
+   endif
+
+   ! Set hi/lo values according to the given '_Invert' parameters
+   !--------------------------------------------------------------
+   if(Nudge_Hwin_Invert) then
+     Nudge_Hwin_lo = 1.0_r8
+     Nudge_Hwin_hi = 0.0_r8
+   else
+     Nudge_Hwin_lo = 0.0_r8
+     Nudge_Hwin_hi = 1.0_r8
+   endif
+
+   if(Nudge_Vwin_Invert) then
+     Nudge_Vwin_lo = 1.0_r8
+     Nudge_Vwin_hi = 0.0_r8
+   else
+     Nudge_Vwin_lo = 0.0_r8
+     Nudge_Vwin_hi = 1.0_r8
    endif
 
    ! Check for valid namelist values
@@ -664,24 +832,29 @@ contains
      call endrun('nudging_readnl:: ERROR in namelist')
    endif
 
-   if ( Nudge_PSprof .ne. 0 ) then
-     write(iulog,*) 'NUDGING: PS nudging scheme is not implemented yet'
-     write(iulog,*) 'NUDGING: Nudge_PSprof must be set to zero at this moment'
-     call endrun('nudging_readnl:: ERROR in namelist')
-   end if
+   !if ( Nudge_PSprof .ne. 0 ) then
+   !  write(iulog,*) 'NUDGING: PS nudging scheme is not implemented yet'
+   !  write(iulog,*) 'NUDGING: Nudge_PSprof must be set to zero at this moment'
+   !  call endrun('nudging_readnl:: ERROR in namelist')
+   !end if
 
    ! Broadcast namelist variables
    !------------------------------
 #ifdef SPMD
-   call mpibcast(Nudge_Path         ,len(Nudge_Path)         ,mpichar,0,mpicom)
-   call mpibcast(Nudge_File_Template,len(Nudge_File_Template),mpichar,0,mpicom)
-   call mpibcast(Nudge_Model        , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Initialized  , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_ON           , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_File_Present , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Allow_Missing_File,1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Times_Per_Day, 1, mpiint, 0, mpicom)
-   call mpibcast(Model_Times_Per_Day, 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_Path              ,len(Nudge_Path)         ,mpichar,0,mpicom)
+   call mpibcast(Nudge_File_Template     ,len(Nudge_File_Template),mpichar,0,mpicom)
+   call mpibcast(Nudge_Model             , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Initialized       , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_ON                , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_File_Present      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Pdep_Weight_On    , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Lin_Relax_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_PS_Adjust_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_PS_On             , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Q_Adjust_On       , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Times_Per_Day     , 1, mpiint, 0, mpicom)
+   call mpibcast(Model_Times_Per_Day     , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Ucoef    , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vcoef    , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Tcoef    , 1, mpir8 , 0, mpicom)
@@ -708,22 +881,53 @@ contains
    call mpibcast(Nudge_Hwin_lon0    , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Hwin_lonWidth, 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Hwin_lonDelta, 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_Hwin_Invert,   1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Vwin_lo      , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vwin_hi      , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vwin_Hindex  , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vwin_Hdelta  , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vwin_Lindex  , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Vwin_Ldelta  , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_Vwin_Invert,   1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Method,len(Nudge_Method),mpichar,0,mpicom)
    call mpibcast(Nudge_Loc_PhysOut,1,mpilog,0,mpicom)
    call mpibcast(Nudge_Tau,1,mpir8,0,mpicom)
    call mpibcast(Nudge_CurrentStep,1,mpilog,0,mpicom)
    call mpibcast(Nudge_File_Ntime,1,mpiint,0,mpicom)
+
+   call mpibcast(Nudge_SRF_File_Template ,len(Nudge_SRF_File_Template),mpichar,0,mpicom)
+   call mpibcast(Nudge_SRF_File_Ntime    , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_SRFcoef           , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_SRFprof           , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_SRF_Tau           , 1, mpir8,  0, mpicom)
+   call mpibcast(Nudge_Land              , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_On            , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Flux_On       , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Q_On          , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_PSWgt_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Prec_On       , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_RadFlux_On    , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_State_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_File_Present  , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_PS_OPT            , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_UV_OPT            , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_T_OPT             , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_Q_OPT             , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_UV         , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_T          , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_Q          , 1, mpiint, 0, mpicom)
+
 #endif
 
    if ( Nudge_ON .and. (Nudge_File_Ntime .ne. Nudge_Times_Per_Day) .and. (Nudge_File_Ntime .ne. 1) ) then
      write(iulog,*) 'NUDGING: Nudge_File_Ntime=',Nudge_File_Ntime
      write(iulog,*) 'NUDGING: Nudge_File_Ntime must equal to Nudge_Times_Per_Day or 1'
+     call endrun('nudging_readnl:: ERROR in namelist')
+   end if
+
+   if ( Nudge_SRF_On .and. (Nudge_SRF_File_Ntime .ne. Nudge_Times_Per_Day) .and. (Nudge_SRF_File_Ntime .ne. 1) ) then
+     write(iulog,*) 'NUDGING: Nudge_SRF_File_Ntime=',Nudge_SRF_File_Ntime
+     write(iulog,*) 'NUDGING: Nudge_SRF_File_Ntime must equal to Nudge_Times_Per_Day or 1'
      call endrun('nudging_readnl:: ERROR in namelist')
    end if
 
@@ -735,7 +939,7 @@ contains
 
 
   !================================================================
-  subroutine nudging_init
+  subroutine nudging_init()
    !
    ! NUDGING_INIT: Allocate space and initialize Nudging values
    !===============================================================
@@ -744,8 +948,9 @@ contains
    use dycore        ,only: dycore_is
    use dyn_grid      ,only: get_horiz_grid_dim_d
    use phys_grid     ,only: get_rlat_p,get_rlon_p,get_ncols_p
-   use cam_history   ,only: addfld
+   use cam_history   ,only: addfld, horiz_only
    use shr_const_mod ,only: SHR_CONST_PI
+   use constituents  ,only: pcnst
 
    ! Local values
    !----------------
@@ -763,77 +968,201 @@ contains
 
    ! Allocate Space for Nudging data arrays
    !-----------------------------------------
-   if ( Nudge_Uprof .ne. 0 ) then
-      allocate(Target_U(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Target_U',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Model_U(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Model_U',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Vprof .ne. 0 ) then
-      allocate(Target_V(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Target_V',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Model_V(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Model_V',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Tprof .ne. 0 ) then
-      allocate(Target_T(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Target_T',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Model_T(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Model_T',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Qprof .ne. 0 ) then
-      allocate(Target_Q(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Target_Q',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Model_Q(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Model_Q',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_PSprof .ne. 0 ) then
-      allocate(Target_PS(pcols,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Target_PS',pcols*((endchunk-begchunk)+1))
-      allocate(Model_PS(pcols,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Model_PS',pcols*((endchunk-begchunk)+1))
-   end if
+   allocate(Target_U(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_U',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Model_U(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_U',pcols*pver*((endchunk-begchunk)+1))
 
+   allocate(Target_V(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_V',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Model_V(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_V',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Target_T(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_T',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Model_T(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_T',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Target_Q(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_Q',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Model_Q(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_Q',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Target_PS(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_PS',pcols*((endchunk-begchunk)+1))
+   allocate(Model_PS(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_PS',pcols*((endchunk-begchunk)+1))
+
+   allocate(Target_PHIS(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Target_PHIS',pcols*((endchunk-begchunk)+1))
+   allocate(Model_PHIS(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Model_PHIS',pcols*((endchunk-begchunk)+1))
+
+   !-------------------------------------------
    ! Allocate Space for spatial dependence of
    ! Nudging Coefs and Nudging Forcing.
    !-------------------------------------------
-   if ( Nudge_Uprof .ne. 0 ) then
-      allocate(Nudge_Utau(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Utau',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Nudge_Ustep(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Ustep',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Vprof .ne. 0 ) then
-      allocate(Nudge_Vtau(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Vtau',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Nudge_Vstep(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Vstep',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Tprof .ne. 0 ) then
-      allocate(Nudge_Ttau(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Ttau',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Nudge_Tstep(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Tstep',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_Qprof .ne. 0 ) then
-      allocate(Nudge_Qtau(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Qtau',pcols*pver*((endchunk-begchunk)+1))
-      allocate(Nudge_Qstep(pcols,pver,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_Qstep',pcols*pver*((endchunk-begchunk)+1))
-   end if
-   if ( Nudge_PSprof .ne. 0 ) then
-      allocate(Nudge_PStau(pcols,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_PStau',pcols*((endchunk-begchunk)+1))
-      allocate(Nudge_PSstep(pcols,begchunk:endchunk),stat=istat)
-      call alloc_err(istat,'nudging_init','Nudge_PSstep',pcols*((endchunk-begchunk)+1))
-   end if
+   allocate(Nudge_Utau(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Utau',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Nudge_Ustep(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Ustep',pcols*pver*((endchunk-begchunk)+1))
 
+   allocate(Nudge_Vtau(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Vtau',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Nudge_Vstep(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Vstep',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Nudge_Ttau(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Ttau',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Nudge_Tstep(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Tstep',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Nudge_Qtau(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Qtau',pcols*pver*((endchunk-begchunk)+1))
+   allocate(Nudge_Qstep(pcols,pver,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_Qstep',pcols*pver*((endchunk-begchunk)+1))
+
+   allocate(Nudge_PStau(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_PStau',pcols*((endchunk-begchunk)+1))
+   allocate(Nudge_PSstep(pcols,begchunk:endchunk),stat=istat)
+   call alloc_err(istat,'nudging_init','Nudge_PSstep',pcols*((endchunk-begchunk)+1))
+
+   !-------------------------------------------
+   ! Allocate Space for surface nudging 
+   !-------------------------------------------
+   if (Nudge_Land) then 
+     allocate(Target_U10(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_U10',pcols*((endchunk-begchunk)+1))
+     allocate(Target_V10(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_V10',pcols*((endchunk-begchunk)+1))
+     allocate(Target_T2(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_T2',pcols*((endchunk-begchunk)+1))
+     allocate(Target_TD2(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_TD2',pcols*((endchunk-begchunk)+1))
+     allocate(Target_TS(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_TS',pcols*((endchunk-begchunk)+1))
+     allocate(Target_Q2(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_Q2',pcols*((endchunk-begchunk)+1))
+     allocate(Target_PRECC(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_PRECC',pcols*((endchunk-begchunk)+1))
+     allocate(Target_PRECL(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_PRECL',pcols*((endchunk-begchunk)+1))
+     allocate(Target_PRECSC(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_PRECSC',pcols*((endchunk-begchunk)+1))
+     allocate(Target_PRECSL(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_PRECSL',pcols*((endchunk-begchunk)+1))
+     allocate(Target_EVAP(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_EVAP',pcols*((endchunk-begchunk)+1))
+     allocate(Target_SHFLX(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_SHFLX',pcols*((endchunk-begchunk)+1))
+     allocate(Target_LHFLX(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_LHFLX',pcols*((endchunk-begchunk)+1))
+     allocate(Target_NETSW(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_NETSW',pcols*((endchunk-begchunk)+1))
+     allocate(Target_FLWDS(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_FLWDS',pcols*((endchunk-begchunk)+1))
+     allocate(Target_FSDS(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_FSDS',pcols*((endchunk-begchunk)+1))
+     allocate(Target_FSDSD(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_FSDSD',pcols*((endchunk-begchunk)+1))
+     allocate(Target_FSDSUV(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Target_FSDSUV',pcols*((endchunk-begchunk)+1))
+     allocate(Nudge_SRFtau(pcols,begchunk:endchunk),stat=istat)
+     call alloc_err(istat,'nudging_init','Nudge_SRFtau',pcols*((endchunk-begchunk)+1))
+   end if 
+
+   !-----------------------------------------------------
    ! Register output fields with the cam history module
    !-----------------------------------------------------
    call addfld('Nudge_U',(/ 'lev' /),'A','m/s/s'  ,'U Nudging Tendency')
    call addfld('Nudge_V',(/ 'lev' /),'A','m/s/s'  ,'V Nudging Tendency')
    call addfld('Nudge_T',(/ 'lev' /),'A','K/s'    ,'T Nudging Tendency')
    call addfld('Nudge_Q',(/ 'lev' /),'A','kg/kg/s','Q Nudging Tendency')
+   call addfld('Nudge_PS', horiz_only, 'A','Pa/s' ,'PS Nudging Tendency')
+
+   !-----------------------------------------------------
+   call addfld('Z3_bf_ndg',(/ 'lev' /), 'A','m'      ,'Geopotential Height Before Nudging')
+   call addfld('U_bf_ndg',(/ 'lev' /),  'A','m/s'    ,'Zonal Wind Before Nudging')
+   call addfld('V_bf_ndg',(/ 'lev' /),  'A','m/s'    ,'Meridional Wind Before Nudging')
+   call addfld('T_bf_ndg',(/ 'lev' /),  'A','K'      ,'Temperature Before Nudging')
+   call addfld('Q_bf_ndg',(/ 'lev' /),  'A','kg/kg'  ,'Specific Humidity Before Nudging')
+   call addfld('PS_bf_ndg', horiz_only, 'A','Pa'     ,'Surface Pressure Before Nudging')
+
+   call addfld('Z3_af_ndg',(/ 'lev' /), 'A','m'      ,'Geopotential Height After Nudging')
+   call addfld('U_af_ndg',(/ 'lev' /),  'A','m/s'    ,'Zonal Wind After Nudging')
+   call addfld('V_af_ndg',(/ 'lev' /),  'A','m/s'    ,'Meridional Wind After Nudging')
+   call addfld('T_af_ndg',(/ 'lev' /),  'A','K'      ,'Temperature After Nudging')
+   call addfld('Q_af_ndg',(/ 'lev' /),  'A','kg/kg'  ,'Specific Humidity After Nudging')
+   call addfld('PS_af_ndg', horiz_only, 'A','Pa'     ,'Surface Pressure After Nudging')
+
+   call addfld('Z3_ref',(/ 'lev' /), 'A','m'      ,'Reference for Geopotential Height')
+   call addfld('U_ref',(/ 'lev' /),  'A','m/s'    ,'Reference for Zonal Wind')
+   call addfld('V_ref',(/ 'lev' /),  'A','m/s'    ,'Reference for Meridional Wind')
+   call addfld('T_ref',(/ 'lev' /),  'A','K/s'    ,'Reference for Temperature')
+   call addfld('Q_ref',(/ 'lev' /),  'A','kg/kg'  ,'Reference for Specific Humidity')
+   call addfld('PS_ref', horiz_only, 'A','Pa'     ,'Reference for Surface pressure')
+   call addfld('PHIS_ref', horiz_only, 'A','m2/s2','Reference for Surface geopotential')
+
+   call addfld('Nudge_U_vint',horiz_only,'A','kg/m/s2','Vertical integral of U Nudging Tendency')
+   call addfld('Nudge_V_vint',horiz_only,'A','kg/m/s2','Vertical integral of V Nudging Tendency')
+   call addfld('Nudge_T_vint',horiz_only,'A','W/m2'   ,'Vertical integral of T Nudging Tendency')
+   call addfld('Nudge_Q_vint',horiz_only,'A','kg/m2/s','Vertical integral of Q Nudging Tendency')
+
+   call addfld('Nudge_PRECC', horiz_only, 'A','m/s/s'    ,'PRECC Nudging Tendency')
+   call addfld('Nudge_PRECL', horiz_only, 'A','m/s/s'    ,'PRECL Nudging Tendency')
+   call addfld('Nudge_PRECSC',horiz_only, 'A','m/s/s'    ,'PRECSC Nudging Tendency')
+   call addfld('Nudge_PRECSL',horiz_only, 'A','m/s/s'    ,'PRECSL Nudging Tendency')
+   call addfld('Nudge_LHFLX', horiz_only, 'A','W/m2/s'   ,'LHFLX Nudging Tendency')
+   call addfld('Nudge_SHFLX', horiz_only, 'A','W/m2/s'   ,'SHFLX Nudging Tendency')
+   call addfld('Nudge_QFLX',  horiz_only, 'A','kg/m2/s2' ,'QFLX Nudging Tendency')
+   call addfld('Nudge_SOLL',  horiz_only, 'A','W/m2/s'   ,'SOLL Nudging Tendency')
+   call addfld('Nudge_SOLS',  horiz_only, 'A','W/m2/s'   ,'SOLS Nudging Tendency')
+   call addfld('Nudge_SOLLD', horiz_only, 'A','W/m2/s'   ,'SOLLD Nudging Tendency')
+   call addfld('Nudge_SOLSD', horiz_only, 'A','W/m2/s'   ,'SOLSD Nudging Tendency')
+   call addfld('Nudge_NETSW', horiz_only, 'A','W/m2/s'   ,'NETSW Nudging Tendency')
+   call addfld('Nudge_FLWDS', horiz_only, 'A','W/m2/s'   ,'FLWDS Nudging Tendency')
+
+   call addfld('PRECC_bf_ndg',  horiz_only, 'A','m/s'     ,'Convective rain rate  Before Nudging')
+   call addfld('PRECL_bf_ndg',  horiz_only, 'A','m/s'     ,'Large-scale rain rate Before Nudging')
+   call addfld('PRECSC_bf_ndg', horiz_only, 'A','m/s'     ,'Convective snow rate  Before Nudging')
+   call addfld('PRECSL_bf_ndg', horiz_only, 'A','m/s'     ,'Large-scale snow rate Before Nudging')
+   call addfld('LHFLX_bf_ndg',  horiz_only, 'A','W/m2'    ,'Surface latent heat flux Before Nudging')
+   call addfld('SHFLX_bf_ndg',  horiz_only, 'A','W/m2'    ,'Surface sensible heat flux Before Nudging')
+   call addfld('QFLX_bf_ndg',   horiz_only, 'A','kg/m2/s' ,'Surface water flux Before Nudging')
+   call addfld('SOLL_bf_ndg',   horiz_only, 'A','W/m2'    ,'Near IR direct solar radiation Before Nudging')
+   call addfld('SOLS_bf_ndg',   horiz_only, 'A','W/m2'    ,'Visible direct solar radiation Before Nudging')
+   call addfld('SOLLD_bf_ndg',  horiz_only, 'A','W/m2'    ,'Near IR diffuse solar radiation Before Nudging')
+   call addfld('SOLSD_bf_ndg',  horiz_only, 'A','W/m2'    ,'Visible diffuse solar radiation Before Nudging')
+   call addfld('NETSW_bf_ndg',  horiz_only, 'A','W/m2'    ,'Net solar radiation Before Nudging')
+   call addfld('FLWDS_bf_ndg',  horiz_only, 'A','W/m2'    ,'Downward longwave radiation Before Nudging')
+
+   call addfld('PRECC_af_ndg',  horiz_only, 'A','m/s'     ,'Convective rain rate After Nudging')
+   call addfld('PRECL_af_ndg',  horiz_only, 'A','m/s'     ,'Large-scale rain rate After Nudging')
+   call addfld('PRECSC_af_ndg', horiz_only, 'A','m/s'     ,'Convective snow rate After Nudging')
+   call addfld('PRECSL_af_ndg', horiz_only, 'A','m/s'     ,'Large-scale snow rate After Nudging')
+   call addfld('LHFLX_af_ndg',  horiz_only, 'A','W/m2'    ,'Surface latent heat flux After Nudging')
+   call addfld('SHFLX_af_ndg',  horiz_only, 'A','W/m2'    ,'Surface sensible heat flux After Nudging')
+   call addfld('QFLX_af_ndg',   horiz_only, 'A','kg/m2/s' ,'Surface water flux After Nudging')
+   call addfld('SOLL_af_ndg',   horiz_only, 'A','W/m2'    ,'Near IR direct solar radiation After Nudging')
+   call addfld('SOLS_af_ndg',   horiz_only, 'A','W/m2'    ,'Visible direct solar radiation After Nudging')
+   call addfld('SOLLD_af_ndg',  horiz_only, 'A','W/m2'    ,'Near IR diffuse solar radiation After Nudging')
+   call addfld('SOLSD_af_ndg',  horiz_only, 'A','W/m2'    ,'Visible diffuse solar radiation After Nudging')
+   call addfld('NETSW_af_ndg',  horiz_only, 'A','W/m2'    ,'Net solar radiation After Nudging')
+   call addfld('FLWDS_af_ndg',  horiz_only, 'A','W/m2'    ,'Downward longwave radiation After Nudging')
+
+   call addfld('PRECC_ref',  horiz_only, 'A','m/s'     ,'Reference convective rain rate')
+   call addfld('PRECL_ref',  horiz_only, 'A','m/s'     ,'Reference large-scale rain rate')
+   call addfld('PRECSC_ref', horiz_only, 'A','m/s'     ,'Reference convective snow rate')
+   call addfld('PRECSL_ref', horiz_only, 'A','m/s'     ,'Reference large-scale snow rate')
+   call addfld('LHFLX_ref',  horiz_only, 'A','W/m2'    ,'Reference surface latent heat flux')
+   call addfld('SHFLX_ref',  horiz_only, 'A','W/m2'    ,'Reference surface sensible heat flux')
+   call addfld('QFLX_ref',   horiz_only, 'A','kg/m2/s' ,'Reference surface water flux')
+   call addfld('SOLL_ref',   horiz_only, 'A','W/m2'    ,'Reference near IR direct solar radiation')
+   call addfld('SOLS_ref',   horiz_only, 'A','W/m2'    ,'Reference visible direct solar radiation')
+   call addfld('SOLLD_ref',  horiz_only, 'A','W/m2'    ,'Reference near IR diffuse solar radiation')
+   call addfld('SOLSD_ref',  horiz_only, 'A','W/m2'    ,'Reference visible diffuse solar radiation')
+   call addfld('NETSW_ref',  horiz_only, 'A','W/m2'    ,'Reference net solar radiation')
+   call addfld('FLWDS_ref',  horiz_only, 'A','W/m2'    ,'Reference downward longwave radiation')
 
    !-----------------------------------------
    ! Values initialized only by masterproc
@@ -916,8 +1245,10 @@ contains
      elseif(.not.Before_End) then
        ! Nudging will never occur, so switch it off
        !--------------------------------------------
-       Nudge_Model=.false.
-       Nudge_ON   =.false.
+       Nudge_Model =.false.
+       Nudge_ON    =.false.
+       Nudge_Land  =.false.
+       Nudge_SRF_On=.false. 
        write(iulog,*) ' '
        write(iulog,*) 'NUDGING: WARNING - Nudging has been requested by it will'
        write(iulog,*) 'NUDGING:           never occur for the given time values'
@@ -977,8 +1308,21 @@ contains
      write(iulog,*) '---------------------------------------------------------'
      write(iulog,*) 'NUDGING: Nudge_Model=',Nudge_Model
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
+     write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
+     write(iulog,*) 'NUDGING: Nudge_Lin_Relax_On=', Nudge_Lin_Relax_On
+     write(iulog,*) 'NUDGING: Nudge_PS_On=',Nudge_PS_On
+     write(iulog,*) 'NUDGING: Nudge_Q_Adjust_On=',Nudge_Q_Adjust_On
+     write(iulog,*) 'NUDGING: Nudge_PS_Adjust_On=',Nudge_PS_Adjust_On
+     write(iulog,*) 'NUDGING: Nudge_Land=',Nudge_Land
+     write(iulog,*) 'NUDGING: Nudge_SRF_Flux_On=',Nudge_SRF_Flux_On
+     write(iulog,*) 'NUDGING: Nudge_SRF_Q_On=',Nudge_SRF_Q_On
+     write(iulog,*) 'NUDGING: Nudge_SRF_PSWgt_On=',Nudge_SRF_PSWgt_On
+     write(iulog,*) 'NUDGING: Nudge_SRF_Prec_On=',Nudge_SRF_Prec_On
+     write(iulog,*) 'NUDGING: Nudge_SRF_RadFlux_On=',Nudge_SRF_RadFlux_On
+     write(iulog,*) 'NUDGING: Nudge_SRF_State_On=',Nudge_SRF_State_On
      write(iulog,*) 'NUDGING: Nudge_Path=',Nudge_Path
      write(iulog,*) 'NUDGING: Nudge_File_Template=',Nudge_File_Template
+     write(iulog,*) 'NUDGING: Nudge_SRF_File_Template=',Nudge_SRF_File_Template
      write(iulog,*) 'NUDGING: Nudge_Times_Per_Day=',Nudge_Times_Per_Day
      write(iulog,*) 'NUDGING: Model_Times_Per_Day=',Model_Times_Per_Day
      write(iulog,*) 'NUDGING: Nudge_Step=',Nudge_Step
@@ -988,11 +1332,13 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Qcoef  =',Nudge_Qcoef
      write(iulog,*) 'NUDGING: Nudge_Tcoef  =',Nudge_Tcoef
      write(iulog,*) 'NUDGING: Nudge_PScoef =',Nudge_PScoef
+     write(iulog,*) 'NUDGING: Nudge_SRFcoef=',Nudge_SRFcoef
      write(iulog,*) 'NUDGING: Nudge_Uprof  =',Nudge_Uprof
      write(iulog,*) 'NUDGING: Nudge_Vprof  =',Nudge_Vprof
      write(iulog,*) 'NUDGING: Nudge_Qprof  =',Nudge_Qprof
      write(iulog,*) 'NUDGING: Nudge_Tprof  =',Nudge_Tprof
      write(iulog,*) 'NUDGING: Nudge_PSprof =',Nudge_PSprof
+     write(iulog,*) 'NUDGING: Nudge_SRFprof=',Nudge_SRFprof
      write(iulog,*) 'NUDGING: Nudge_Beg_Year =',Nudge_Beg_Year
      write(iulog,*) 'NUDGING: Nudge_Beg_Month=',Nudge_Beg_Month
      write(iulog,*) 'NUDGING: Nudge_Beg_Day  =',Nudge_Beg_Day
@@ -1007,12 +1353,14 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Hwin_lon0     =',Nudge_Hwin_lon0
      write(iulog,*) 'NUDGING: Nudge_Hwin_lonWidth =',Nudge_Hwin_lonWidth
      write(iulog,*) 'NUDGING: Nudge_Hwin_lonDelta =',Nudge_Hwin_lonDelta
+     write(iulog,*) 'NUDGING: Nudge_Hwin_Invert   =',Nudge_Hwin_Invert
      write(iulog,*) 'NUDGING: Nudge_Vwin_lo       =',Nudge_Vwin_lo
      write(iulog,*) 'NUDGING: Nudge_Vwin_hi       =',Nudge_Vwin_hi
      write(iulog,*) 'NUDGING: Nudge_Vwin_Hindex   =',Nudge_Vwin_Hindex
      write(iulog,*) 'NUDGING: Nudge_Vwin_Hdelta   =',Nudge_Vwin_Hdelta
      write(iulog,*) 'NUDGING: Nudge_Vwin_Lindex   =',Nudge_Vwin_Lindex
      write(iulog,*) 'NUDGING: Nudge_Vwin_Ldelta   =',Nudge_Vwin_Ldelta
+     write(iulog,*) 'NUDGING: Nudge_Vwin_Invert   =',Nudge_Vwin_Invert
      write(iulog,*) 'NUDGING: Nudge_Hwin_latWidthH=',Nudge_Hwin_latWidthH
      write(iulog,*) 'NUDGING: Nudge_Hwin_lonWidthH=',Nudge_Hwin_lonWidthH
      write(iulog,*) 'NUDGING: Nudge_Hwin_max      =',Nudge_Hwin_max
@@ -1021,8 +1369,16 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Method        =',Nudge_Method
      write(iulog,*) 'NUDGING: Nudge_Loc_PhysOut   =',Nudge_Loc_PhysOut
      write(iulog,*) 'NUDGING: Nudge_Tau           =',Nudge_Tau
+     write(iulog,*) 'NUDGING: Nudge_SRF_Tau       =',Nudge_SRF_Tau
      write(iulog,*) 'NUDGING: Nudge_CurrentStep   =',Nudge_CurrentStep
      write(iulog,*) 'NUDGING: Nudge_File_Ntime    =',Nudge_File_Ntime
+     write(iulog,*) 'NUDGING: Nudge_PS_OPT        =',Nudge_PS_OPT
+     write(iulog,*) 'NUDGING: Nudge_UV_OPT        =',Nudge_UV_OPT
+     write(iulog,*) 'NUDGING: Nudge_T_OPT         =',Nudge_T_OPT
+     write(iulog,*) 'NUDGING: Nudge_Q_OPT         =',Nudge_Q_OPT
+     write(iulog,*) 'NUDGING: Nudge_NO_PBL_UV     =',Nudge_NO_PBL_UV
+     write(iulog,*) 'NUDGING: Nudge_NO_PBL_T      =',Nudge_NO_PBL_T
+     write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
      write(iulog,*) ' '
      write(iulog,*) ' '
 
@@ -1043,6 +1399,19 @@ contains
    call mpibcast(Nudge_Next_Sec      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Model         , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
+   call mpibcast(Nudge_Lin_Relax_On  , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_PS_Adjust_On  , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_PS_On         , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Q_Adjust_On   , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Land          , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_On        , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Flux_On   , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Q_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_PSWgt_On  , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_Prec_On   , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_RadFlux_On, 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_SRF_State_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_ON            , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Initialized   , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_ncol          , 1, mpiint, 0, mpicom)
@@ -1053,6 +1422,13 @@ contains
    call mpibcast(Nudge_Hwin_min      , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Hwin_lonWidthH, 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Hwin_latWidthH, 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_PS_OPT        , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_UV_OPT        , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_T_OPT         , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_Q_OPT         , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_UV     , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_T      , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_NO_PBL_Q      , 1, mpiint, 0, mpicom)
 !DIAG
    call mpibcast(Nudge_slat       , 1, mpiint, 0, mpicom)
 !DIAG
@@ -1067,95 +1443,121 @@ contains
        rlat=get_rlat_p(lchnk,icol)*180._r8/SHR_CONST_PI
        rlon=get_rlon_p(lchnk,icol)*180._r8/SHR_CONST_PI
 
-       if ( Nudge_Uprof .ne. 0 ) then
-          call nudging_set_profile(rlat,rlon,Nudge_Uprof,Wprof,pver)
-          Nudge_Utau(icol,:,lchnk)=Wprof(:)
-       end if
-       if ( Nudge_Vprof .ne. 0 ) then
-          call nudging_set_profile(rlat,rlon,Nudge_Vprof,Wprof,pver)
-          Nudge_Vtau(icol,:,lchnk)=Wprof(:)
-       end if
-       if ( Nudge_Tprof .ne. 0 ) then
-          call nudging_set_profile(rlat,rlon,Nudge_Tprof,Wprof,pver)
-          Nudge_Ttau(icol,:,lchnk)=Wprof(:)
-       end if
-       if ( Nudge_Qprof .ne. 0 ) then
-          call nudging_set_profile(rlat,rlon,Nudge_Qprof,Wprof,pver)
-          Nudge_Qtau(icol,:,lchnk)=Wprof(:)
-       end if
-       if ( Nudge_PSprof .ne. 0 ) then
-          Nudge_PStau(icol,lchnk)=nudging_set_PSprofile(rlat,rlon,Nudge_PSprof)
-       end if
+       call nudging_set_profile(rlat,rlon,Nudge_Uprof, Wprof,pver)
+       Nudge_Utau(icol,:,lchnk)=Wprof(:)
+
+       call nudging_set_profile(rlat,rlon,Nudge_Vprof, Wprof,pver)
+       Nudge_Vtau(icol,:,lchnk)=Wprof(:)
+
+       call nudging_set_profile(rlat,rlon,Nudge_Tprof, Wprof,pver)
+       Nudge_Ttau(icol,:,lchnk)=Wprof(:)
+
+       call nudging_set_profile(rlat,rlon,Nudge_Qprof, Wprof,pver)
+       Nudge_Qtau(icol,:,lchnk)=Wprof(:)
+
+       Nudge_PStau(icol,lchnk)=nudging_set_PSprofile(rlat,rlon,Nudge_PSprof)
+
      end do
 
      if  (Nudge_Tau .le. 0._r8) then
-         if ( Nudge_Uprof .ne. 0 ) then
-            Nudge_Utau(:ncol,:pver,lchnk) =                             &
-            Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef/float(Nudge_Step)
-         end if
-         if ( Nudge_Vprof .ne. 0 ) then
-            Nudge_Vtau(:ncol,:pver,lchnk) =                             &
-            Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef/float(Nudge_Step)
-         end if
-         if ( Nudge_Tprof .ne. 0 ) then
-            Nudge_Ttau(:ncol,:pver,lchnk) =                             &
-            Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef/float(Nudge_Step)
-         end if
-         if ( Nudge_Qprof .ne. 0 ) then
-            Nudge_Qtau(:ncol,:pver,lchnk) =                             &
-            Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef/float(Nudge_Step)
-         end if
-         if ( Nudge_PSprof .ne. 0 ) then
-            Nudge_PStau(:ncol,lchnk)=                              &
-            Nudge_PStau(:ncol,lchnk)* Nudge_PScoef/float(Nudge_Step)
-         end if
+
+         Nudge_Utau(:ncol,:pver,lchnk) =                             &
+         Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef/float(Nudge_Step)
+
+         Nudge_Vtau(:ncol,:pver,lchnk) =                             &
+         Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef/float(Nudge_Step)
+
+         Nudge_Ttau(:ncol,:pver,lchnk) =                             &
+         Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef/float(Nudge_Step)
+
+         Nudge_Qtau(:ncol,:pver,lchnk) =                             &
+         Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef/float(Nudge_Step)
+
+         Nudge_PStau(:ncol,lchnk)=                              &
+         Nudge_PStau(:ncol,lchnk)* Nudge_PScoef/float(Nudge_Step)
+
      else          ! use Nudge_Tau directy as relaxation timescale
-         if ( Nudge_Uprof .ne. 0 ) then
-            Nudge_Utau(:ncol,:pver,lchnk) =                        &
-            Nudge_Utau(:ncol,:pver,lchnk) / Nudge_Tau / sec_per_hour
-         end if
-         if ( Nudge_Vprof .ne. 0 ) then
-            Nudge_Vtau(:ncol,:pver,lchnk) =                        &
-            Nudge_Vtau(:ncol,:pver,lchnk) / Nudge_Tau / sec_per_hour 
-         end if
-         if ( Nudge_Tprof .ne. 0 ) then
-            Nudge_Ttau(:ncol,:pver,lchnk) =                        &
-            Nudge_Ttau(:ncol,:pver,lchnk) / Nudge_Tau / sec_per_hour 
-         end if
-         if ( Nudge_Qprof .ne. 0 ) then
-            Nudge_Qtau(:ncol,:pver,lchnk) =                        &
-            Nudge_Qtau(:ncol,:pver,lchnk) / Nudge_Tau / sec_per_hour 
-         end if
-         if ( Nudge_PSprof .ne. 0 ) then
-            Nudge_PStau(:ncol,:pver) =                        &
-            Nudge_PStau(:ncol,:pver) / Nudge_Tau / sec_per_hour 
-         end if
+
+         Nudge_Utau(:ncol,:pver,lchnk) =                        &
+         Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef / Nudge_Tau / sec_per_hour
+
+         Nudge_Vtau(:ncol,:pver,lchnk) =                        &
+         Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef / Nudge_Tau / sec_per_hour 
+
+         Nudge_Ttau(:ncol,:pver,lchnk) =                        &
+         Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef / Nudge_Tau / sec_per_hour 
+
+         Nudge_Qtau(:ncol,:pver,lchnk) =                        &
+         Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef / Nudge_Tau / sec_per_hour 
+
+         Nudge_PStau(:ncol,lchnk) =                        &
+         Nudge_PStau(:ncol,lchnk) * Nudge_PScoef / Nudge_Tau / sec_per_hour 
+
      end if
 
-     if ( Nudge_Uprof .ne. 0 ) then
-        Nudge_Ustep(:pcols,:pver,lchnk)=0._r8
-        Target_U(:pcols,:pver,lchnk)=0._r8
+     if (Nudge_PSprof .ne. 0) then
+        Nudge_PS_On    = .true.
+     else
+        Nudge_PS_On    = .false.
      end if
-     if ( Nudge_Vprof .ne. 0 ) then
-        Nudge_Vstep(:pcols,:pver,lchnk)=0._r8
-        Target_V(:pcols,:pver,lchnk)=0._r8
-     end if
-     if ( Nudge_Tprof .ne. 0 ) then
-        Nudge_Tstep(:pcols,:pver,lchnk)=0._r8
-        Target_T(:pcols,:pver,lchnk)=0._r8
-     end if
-     if ( Nudge_Qprof .ne. 0 ) then
-        Nudge_Qstep(:pcols,:pver,lchnk)=0._r8
-        Target_Q(:pcols,:pver,lchnk)=0._r8
-     end if
-     if ( Nudge_PSprof .ne. 0 ) then
-        Nudge_PSstep(:pcols,lchnk)=0._r8
-        Target_PS(:pcols,lchnk)=0._r8
-     end if
+
+     Nudge_Ustep(:pcols,:pver,lchnk)=0._r8
+     Target_U(:pcols,:pver,lchnk)=0._r8
+
+     Nudge_Vstep(:pcols,:pver,lchnk)=0._r8
+     Target_V(:pcols,:pver,lchnk)=0._r8
+
+     Nudge_Tstep(:pcols,:pver,lchnk)=0._r8
+     Target_T(:pcols,:pver,lchnk)=0._r8
+
+     Nudge_Qstep(:pcols,:pver,lchnk)=0._r8
+     Target_Q(:pcols,:pver,lchnk)=0._r8
+
+     Nudge_PSstep(:pcols,lchnk)=0._r8
+     Target_PS(:pcols,lchnk)=0._r8
+     Target_PHIS(:pcols,lchnk)=0._r8
+
+     if (Nudge_Land) then
+
+       do icol=1,ncol
+         rlat=get_rlat_p(lchnk,icol)*180._r8/SHR_CONST_PI
+         rlon=get_rlon_p(lchnk,icol)*180._r8/SHR_CONST_PI
+         Nudge_SRFtau(icol,lchnk)=nudging_set_SRFprofile(rlat,rlon,Nudge_SRFprof)
+       end do
+
+       if (Nudge_SRF_Tau .le. 0._r8) then
+         Nudge_SRFtau(:ncol,lchnk) =  &
+         Nudge_SRFtau(:ncol,lchnk) * Nudge_SRFcoef /float(Nudge_Step)
+       else 
+         Nudge_SRFtau(:ncol,lchnk) =  &
+         Nudge_SRFtau(:ncol,lchnk) * Nudge_SRFcoef / Nudge_SRF_Tau / sec_per_hour
+       end if 
+
+       Target_U10(:pcols,lchnk)=0._r8
+       Target_V10(:pcols,lchnk)=0._r8
+       Target_T2(:pcols,lchnk)=0._r8
+       Target_TD2(:pcols,lchnk)=0._r8
+       Target_TS(:pcols,lchnk)=0._r8
+       Target_Q2(:pcols,lchnk)=0._r8
+       Target_EVAP(:pcols,lchnk)=0._r8
+       Target_LHFLX(:pcols,lchnk)=0._r8
+       Target_SHFLX(:pcols,lchnk)=0._r8
+       Target_PRECC(:pcols,lchnk)=0._r8
+       Target_PRECL(:pcols,lchnk)=0._r8
+       Target_PRECSC(:pcols,lchnk)=0._r8
+       Target_PRECSL(:pcols,lchnk)=0._r8
+       Target_NETSW(:pcols,lchnk)=0._r8
+       Target_FLWDS(:pcols,lchnk)=0._r8
+       Target_FSDS(:pcols,lchnk)=0._r8
+       Target_FSDSD(:pcols,lchnk)=0._r8
+       Target_FSDSUV(:pcols,lchnk)=0._r8
+
+     end if 
 
    end do  ! lchnk loop 
 
-   first_file = .true.
+   first_file     = .true.
+   first_srf_file = .true.
    select case (Nudge_Method)
       case ('Step')
            ! use Xanal directly, no interpolation is needed
@@ -1164,26 +1566,61 @@ contains
            ! use Xanal directly, no interpolation is needed
            !-----------------------------------------------
       case ('Linear')
-           if ( Nudge_Uprof .ne. 0 ) then
-              allocate(INTP_U(pcols,pver,begchunk:endchunk,2),stat=istat)
-              call alloc_err(istat,'nudging_init','INTP_U',2*pcols*pver*((endchunk-begchunk)+1))
-           end if
-           if ( Nudge_Vprof .ne. 0 ) then
-              allocate(INTP_V(pcols,pver,begchunk:endchunk,2),stat=istat)
-              call alloc_err(istat,'nudging_init','INTP_V',2*pcols*pver*((endchunk-begchunk)+1))
-           end if
-           if ( Nudge_Tprof .ne. 0 ) then
-              allocate(INTP_T(pcols,pver,begchunk:endchunk,2),stat=istat)
-              call alloc_err(istat,'nudging_init','INTP_T',2*pcols*pver*((endchunk-begchunk)+1))
-           end if
-           if ( Nudge_Qprof .ne. 0 ) then
-              allocate(INTP_Q(pcols,pver,begchunk:endchunk,2),stat=istat)
-              call alloc_err(istat,'nudging_init','INTP_Q',2*pcols*pver*((endchunk-begchunk)+1))
-           end if
-           if ( Nudge_PSprof .ne. 0 ) then
-              allocate(INTP_PS(pcols,begchunk:endchunk,2),stat=istat)
-              call alloc_err(istat,'nudging_init','INTP_PS',2*pcols*((endchunk-begchunk)+1))
-           end if
+           allocate(INTP_U(pcols,pver,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_U',2*pcols*pver*((endchunk-begchunk)+1))
+
+           allocate(INTP_V(pcols,pver,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_V',2*pcols*pver*((endchunk-begchunk)+1))
+
+           allocate(INTP_T(pcols,pver,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_T',2*pcols*pver*((endchunk-begchunk)+1))
+
+           allocate(INTP_Q(pcols,pver,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_Q',2*pcols*pver*((endchunk-begchunk)+1))
+
+           allocate(INTP_PS(pcols,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_PS',2*pcols*((endchunk-begchunk)+1))
+
+           allocate(INTP_PHIS(pcols,begchunk:endchunk,2),stat=istat)
+           call alloc_err(istat,'nudging_init','INTP_PHIS',2*pcols*((endchunk-begchunk)+1))
+
+           if (Nudge_Land) then
+              allocate(INTP_U10(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_U10',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_V10(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_V10',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_T2(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_T2',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_TD2(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_TD2',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_TS(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_TS',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_PRECC(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_PRECC',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_PRECL(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_PRECL',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_PRECSC(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_PRECSC',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_PRECSL(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_PRECSL',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_EVAP(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_EVAP',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_SHFLX(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_SHFLX',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_LHFLX(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_LHFLX',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_FSNS(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_FSNS',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_FLDS(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_FLDS',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_FSDS(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_FSDS',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_FSDSD(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_FSDSD',2*pcols*((endchunk-begchunk)+1))
+              allocate(INTP_FSDSUV(pcols,begchunk:endchunk,2),stat=istat)
+              call alloc_err(istat,'nudging_init','INTP_FSDSUV',2*pcols*((endchunk-begchunk)+1))
+            end if
+
       case default
            call endrun('nudging_init error: nudge method should &
                        &be either Step, Linear or IMT...')
@@ -1209,6 +1646,8 @@ contains
    use dycore       ,only: dycore_is
    use ppgrid       ,only: pver,pcols,begchunk,endchunk
    use filenames    ,only: interpret_filename_spec
+   use cam_history  ,only: outfld
+   use physconst    ,only: cpair, gravit, rga
 
    ! Arguments
    !-----------
@@ -1220,8 +1659,9 @@ contains
    integer YMD1,YMD2,YMD
    logical Update_Model,Update_Nudge,Sync_Error
    logical After_Beg   ,Before_End
-   integer lchnk,ncol,indw
+   integer lchnk,ncol,indw, k 
    character(len=2000) err_str
+   real(r8) ftem(pcols,pver), ftem2(pcols) ! temporary workspace
 
    ! Check if Nudging is initialized
    !---------------------------------
@@ -1283,30 +1723,6 @@ contains
      YMD2            = YMD2-(Model_Next_Year*10000)
      Model_Next_Month=(YMD2/100)
      Model_Next_Day  = YMD2-(Model_Next_Month*100)
-
-     if ( .not. Nudge_Loc_PhysOut ) then
-        ! Load values at Current into the Model arrays
-        !-----------------------------------------------
-        call cnst_get_ind('Q',indw)
-        do lchnk=begchunk,endchunk
-          ncol=phys_state(lchnk)%ncol
-          if ( Nudge_Uprof .ne. 0 ) then
-             Model_U(:ncol,:pver,lchnk)=phys_state(lchnk)%u(:ncol,:pver)
-          end if
-          if ( Nudge_Vprof .ne. 0 ) then
-             Model_V(:ncol,:pver,lchnk)=phys_state(lchnk)%v(:ncol,:pver)
-          end if
-          if ( Nudge_Tprof .ne. 0 ) then
-             Model_T(:ncol,:pver,lchnk)=phys_state(lchnk)%t(:ncol,:pver)
-          end if
-          if ( Nudge_Qprof .ne. 0 ) then
-             Model_Q(:ncol,:pver,lchnk)=phys_state(lchnk)%q(:ncol,:pver,indw)
-          end if
-          if ( Nudge_PSprof .ne. 0 ) then
-             Model_PS(:ncol,lchnk)=phys_state(lchnk)%ps(:ncol)
-          end if
-        end do
-     end if
    end if
 
    !----------------------------------------------------------------
@@ -1348,8 +1764,18 @@ contains
                                         mon_spec=Nudge_Next_Month, &
                                         day_spec=Nudge_Next_Day  , &
                                         sec_spec=Nudge_Next_Sec    )
+
+     Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template  , &
+                                            yr_spec=Nudge_Next_Year  , &
+                                            mon_spec=Nudge_Next_Month, &
+                                            day_spec=Nudge_Next_Day  , &
+                                            sec_spec=Nudge_Next_Sec    )  
+
      if(masterproc) then
       write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
+      if(Nudge_Land) then 
+        write(iulog,*) 'NUDGING: Reading surface analyses:',trim(Nudge_Path)//trim(Nudge_SRF_File)
+      end if 
      endif
 
      ! How to manage MISSING values when there are 'Gaps' in the analyses data?
@@ -1358,7 +1784,14 @@ contains
      !  thru the gap.
      !------------------------------------------------------------------------
      if(dycore_is('UNSTRUCTURED')) then 
+
+       ! read nudging data from reanalysis or user specified file 
        call nudging_update_analyses_se(trim(Nudge_Path)//trim(Nudge_File))
+
+       if(Nudge_Land) then 
+         call nudging_update_srf_analyses_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
+       end if
+ 
      elseif(dycore_is('EUL')) then
        call nudging_update_analyses_eul(trim(Nudge_Path)//trim(Nudge_File))
      else !if(dycore_is('LR')) then
@@ -1372,18 +1805,31 @@ contains
          select case (Nudge_Method)
             case ('Linear')
                  call t_startf ('nudging_interp')
-                 if (Nudge_Uprof .ne. 0) then 
-                    call linear_interpolation (INTP_U, Target_U)
-                 end if
-                 if (Nudge_Vprof .ne. 0) then 
-                    call linear_interpolation (INTP_V, Target_V)
-                 end if
-                 if (Nudge_Qprof .ne. 0) then 
-                    call linear_interpolation (INTP_Q, Target_Q)
-                 end if
-                 if (Nudge_Tprof .ne. 0) then 
-                    call linear_interpolation (INTP_T, Target_T)
-                 end if
+                 call linear_interpolation   (INTP_U, Target_U)
+                 call linear_interpolation   (INTP_V, Target_V)
+                 call linear_interpolation   (INTP_Q, Target_Q)
+                 call linear_interpolation   (INTP_T, Target_T)
+                 call linear_interpolation_2d(INTP_PS, Target_PS)
+                 call linear_interpolation_2d(INTP_PHIS, Target_PHIS)
+                 if (Nudge_Land) then
+                   call linear_interpolation_2d(INTP_U10,    Target_U10)
+                   call linear_interpolation_2d(INTP_V10,    Target_V10)
+                   call linear_interpolation_2d(INTP_T2,     Target_T2)
+                   call linear_interpolation_2d(INTP_TD2,    Target_TD2)
+                   call linear_interpolation_2d(INTP_TS,     Target_TS)
+                   call linear_interpolation_2d(INTP_PRECC,  Target_PRECC)
+                   call linear_interpolation_2d(INTP_PRECL,  Target_PRECL)
+                   call linear_interpolation_2d(INTP_PRECSC, Target_PRECSC)
+                   call linear_interpolation_2d(INTP_PRECSL, Target_PRECSL)
+                   call linear_interpolation_2d(INTP_EVAP,   Target_EVAP)
+                   call linear_interpolation_2d(INTP_SHFLX,  Target_SHFLX)
+                   call linear_interpolation_2d(INTP_LHFLX,  Target_LHFLX)
+                   call linear_interpolation_2d(INTP_FSNS,   Target_NETSW)
+                   call linear_interpolation_2d(INTP_FLDS,   Target_FLWDS)
+                   call linear_interpolation_2d(INTP_FSDS,   Target_FSDS)
+                   call linear_interpolation_2d(INTP_FSDSD,  Target_FSDSD)
+                   call linear_interpolation_2d(INTP_FSDSUV, Target_FSDSUV)
+                 end if ! Nudge_Land
                  call t_stopf ('nudging_interp')
             case default
                  ! No interpolation is needed for Step or IMT
@@ -1410,83 +1856,27 @@ contains
          call endrun(err_str)
        endif 
      endif
+     if(Nudge_Land) then
+       !For land surfac nudging file 
+       if(Nudge_SRF_File_Present) then
+         Nudge_SRF_On=.true.
+       else
+         Nudge_SRF_On=.false.
+         if(Nudge_Allow_Missing_File) then
+           if(masterproc) then
+             write(iulog,*) 'NUDGING: WARNING - Nudging data file NOT FOUND. Switching '
+             write(iulog,*) 'NUDGING:           nudging OFF to coast thru the gap. '
+           endif
+         else
+           write(err_str,*) 'NUDGING: Nudging data file (',trim(adjustl(Nudge_SRF_File)),') NOT FOUND; ', errmsg(__FILE__, __LINE__)
+           call endrun(err_str)
+         endif
+       endif
+     end if 
    else
      Nudge_ON=.false.
+     Nudge_SRF_On=.false.
    endif
-
-   !-------------------------------------------------------
-   ! HERE Implement time dependence of Nudging Coefs HERE
-   !-------------------------------------------------------
-
-
-
-   !---------------------------------------------------
-   ! If Data arrays have changed update stepping arrays
-   !---------------------------------------------------
-   if ( .not. Nudge_Loc_PhysOut ) then
-      if ((Before_End).and.((Update_Nudge).or.(Update_Model))) then
-         do lchnk=begchunk,endchunk
-            ncol=phys_state(lchnk)%ncol
-            if (Nudge_Uprof .ne. 0) then
-               Nudge_Ustep(:ncol,:pver,lchnk)=(  Target_U(:ncol,:pver,lchnk)  &
-                                                 -Model_U(:ncol,:pver,lchnk)) &
-                                              *Nudge_Utau(:ncol,:pver,lchnk)
-            end if
-            if (Nudge_Vprof .ne. 0) then
-               Nudge_Vstep(:ncol,:pver,lchnk)=(  Target_V(:ncol,:pver,lchnk)  &
-                                                 -Model_V(:ncol,:pver,lchnk)) &
-                                              *Nudge_Vtau(:ncol,:pver,lchnk)
-            end if
-            if (Nudge_Tprof .ne. 0) then
-               Nudge_Tstep(:ncol,:pver,lchnk)=(  Target_T(:ncol,:pver,lchnk)  &
-                                                 -Model_T(:ncol,:pver,lchnk)) &
-                                              *Nudge_Ttau(:ncol,:pver,lchnk)
-            end if
-            if (Nudge_Qprof .ne. 0) then
-               Nudge_Qstep(:ncol,:pver,lchnk)=(  Target_Q(:ncol,:pver,lchnk)  &
-                                                 -Model_Q(:ncol,:pver,lchnk)) &
-                                              *Nudge_Qtau(:ncol,:pver,lchnk)
-            end if
-            if (Nudge_PSprof .ne. 0) then
-               Nudge_PSstep(:ncol,     lchnk)=(  Target_PS(:ncol,lchnk)  &
-                                                 -Model_PS(:ncol,lchnk)) &
-                                              *Nudge_PStau(:ncol,lchnk)
-            end if
-         end do
-
-         !******************
-         ! DIAG
-         !******************
-!        if(masterproc) then
-!         write(iulog,*) 'PFC: Target_T(1,:pver,begchunk)=',Target_T(1,:pver,begchunk)  
-!         write(iulog,*) 'PFC:  Model_T(1,:pver,begchunk)=',Model_T(1,:pver,begchunk)
-!         write(iulog,*) 'PFC: Nudge_Tstep(1,:pver,begchunk)=',Nudge_Tstep(1,:pver,begchunk)
-!         write(iulog,*) 'PFC: Nudge_Xstep arrays updated:'
-!        endif
-
-      else
-         do lchnk=begchunk,endchunk
-            ncol=phys_state(lchnk)%ncol
-            ! The following lines are used to reset the nudging tendency
-            ! to zero in order to perform an intermittent simulation
-            if (Nudge_Uprof .ne. 0) then
-                Nudge_Ustep(:ncol,:pver,lchnk) = 0._r8
-            end if
-            if (Nudge_Vprof .ne. 0) then
-                Nudge_Vstep(:ncol,:pver,lchnk) = 0._r8
-            end if
-            if (Nudge_Tprof .ne. 0) then
-                Nudge_Tstep(:ncol,:pver,lchnk) = 0._r8
-            end if
-            if (Nudge_Qprof .ne. 0) then
-                Nudge_Qstep(:ncol,:pver,lchnk) = 0._r8
-            end if
-            if (Nudge_PSprof .ne. 0) then
-                Nudge_PSstep(:ncol,lchnk)      = 0._r8
-            end if
-         end do
-      end if
-   end if   ! if for Nudge_Loc_PhysOut
 
    ! End Routine
    !------------
@@ -1500,91 +1890,644 @@ contains
   !                  the model state variables are written out.
   !                  This subroutine is called by tphysbc and works on a chunk 
   !===========================================================================
-  subroutine nudging_calc_tend(state)
+  subroutine nudging_calc_tend(state,pbuf,dtime)
    use physics_types,only: physics_state
-   use constituents ,only: cnst_get_ind
+   use constituents ,only: cnst_get_ind,pcnst
    use ppgrid       ,only: pver,pcols
+   use cam_history  ,only: outfld
+   use physconst    ,only: cpair, gravit, rga
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             pbuf_set_field, physics_buffer_desc
 
    ! Arguments
    !-----------
    type(physics_state),intent(in):: state
+   type(physics_buffer_desc), pointer :: pbuf(:)
+   real(r8), intent(in):: dtime
 
    ! Local values
    !----------------
+   integer :: pblh_idx        ! PBL pbuf
    integer :: lchnk,ncol,indw
+   integer :: i,k,m
+   real(r8):: ftem(pcols,pver), ftem2(pcols) ! temporary workspace
+   
+   real(r8):: u_tend(pcols,pver)
+   real(r8):: v_tend(pcols,pver)
+   real(r8):: t_tend(pcols,pver)
+   real(r8):: q_tend(pcols,pver)
+   real(r8):: ps_tend(pcols)
+
+   real(r8):: zm_mod(pcols,pver)
+   real(r8):: zm_obs(pcols,pver)
+
+   real(r8), pointer :: PBLH(:)                ! Planetary boundary layer height
 
    lchnk = state%lchnk
    ncol  = state%ncol
 
+   pblh_idx  = pbuf_get_index('pblh')
+   call pbuf_get_field(pbuf, pblh_idx,  PBLH)
+
    ! Load values at Current into the Model arrays
    !-----------------------------------------------
    call cnst_get_ind('Q',indw)
-   if (Nudge_Uprof .ne. 0) then      
-      Model_U(:ncol,:pver,lchnk)=state%u(:ncol,:pver)
-   end if
-   if (Nudge_Vprof .ne. 0) then      
-      Model_V(:ncol,:pver,lchnk)=state%v(:ncol,:pver)
-   end if
-   if (Nudge_Tprof .ne. 0) then      
-      Model_T(:ncol,:pver,lchnk)=state%t(:ncol,:pver)
-   end if
-   if (Nudge_Qprof .ne. 0) then      
-      Model_Q(:ncol,:pver,lchnk)=state%q(:ncol,:pver,indw)
-   end if
-   if (Nudge_PSprof .ne. 0) then      
-      Model_PS(:ncol,lchnk)=state%ps(:ncol)
-   end if
+
+   Model_U(:ncol,:pver,lchnk)=state%u(:ncol,:pver)
+   Model_V(:ncol,:pver,lchnk)=state%v(:ncol,:pver)
+   Model_T(:ncol,:pver,lchnk)=state%t(:ncol,:pver)
+   Model_Q(:ncol,:pver,lchnk)=state%q(:ncol,:pver,indw)
+   Model_PS(:ncol,lchnk)=state%ps(:ncol)
+   Model_PHIS(:ncol,lchnk)=state%phis(:ncol)
 
    if ((l_Before_End).and.((l_Update_Nudge).or.(l_Update_Model))) then
-      if (Nudge_Uprof .ne. 0) then 
-         Nudge_Ustep(:ncol,:pver,lchnk)=(  Target_U(:ncol,:pver,lchnk)  &
-                                           -Model_U(:ncol,:pver,lchnk)) &
-                                        *Nudge_Utau(:ncol,:pver,lchnk)
-      end if
-      if (Nudge_Vprof .ne. 0) then 
-         Nudge_Vstep(:ncol,:pver,lchnk)=(  Target_V(:ncol,:pver,lchnk)  &
-                                           -Model_V(:ncol,:pver,lchnk)) &
-                                        *Nudge_Vtau(:ncol,:pver,lchnk)
-      end if
-      if (Nudge_Tprof .ne. 0) then 
-         Nudge_Tstep(:ncol,:pver,lchnk)=(  Target_T(:ncol,:pver,lchnk)  &
-                                           -Model_T(:ncol,:pver,lchnk)) &
-                                        *Nudge_Ttau(:ncol,:pver,lchnk)
-      end if
-      if (Nudge_Qprof .ne. 0) then 
-         Nudge_Qstep(:ncol,:pver,lchnk)=(  Target_Q(:ncol,:pver,lchnk)  &
-                                           -Model_Q(:ncol,:pver,lchnk)) &
-                                        *Nudge_Qtau(:ncol,:pver,lchnk)
-      end if
-      if (Nudge_PSprof .ne. 0) then 
-         Nudge_PSstep(:ncol,     lchnk)=(  Target_PS(:ncol,lchnk)  &
-                                           -Model_PS(:ncol,lchnk)) &
-                                        *Nudge_PStau(:ncol,lchnk)
-      end if
+      ps_tend(:ncol)             = 0._r8
+      u_tend(:ncol,:pver)        = 0._r8
+      v_tend(:ncol,:pver)        = 0._r8
+      t_tend(:ncol,:pver)        = 0._r8
+      q_tend(:ncol,:pver)        = 0._r8 
+     
+      ! Update the nudging tendency
+      call update_nudging_tend (ncol, dtime, Model_PS(:,lchnk), Target_PS(:,lchnk), Nudge_PStau(:,lchnk),   & !In 
+                                Model_U(:,:,lchnk), Target_U(:,:,lchnk), Nudge_Utau(:,:,lchnk),             & !In 
+                                Model_V(:,:,lchnk), Target_V(:,:,lchnk), Nudge_Vtau(:,:,lchnk),             & !In 
+                                Model_T(:,:,lchnk), Target_T(:,:,lchnk), Nudge_Ttau(:,:,lchnk),             & !In  
+                                Model_Q(:,:,lchnk), Target_Q(:,:,lchnk), Nudge_Qtau(:,:,lchnk),             & !In 
+                                Target_U10(:,lchnk),Target_V10(:,lchnk), Target_T2(:,lchnk),                & !In 
+                                Target_TD2(:,lchnk),Target_Q2(:,lchnk), Nudge_SRFtau(:,lchnk),              & !In  
+                                Nudge_SRF_On, Nudge_SRF_State_On, Nudge_SRF_Q_On,                           & !In
+                                Model_PHIS(:,lchnk), Target_PHIS(:,lchnk), PBLH,                            & !In
+                                Nudge_PS_Adjust_On, Nudge_Q_Adjust_On, Nudge_Pdep_Weight_On,                & !In
+                                Nudge_Lin_Relax_On, Nudge_NO_PBL_UV, Nudge_NO_PBL_T, Nudge_NO_PBL_Q,        & !In 
+                                Nudge_PSprof, Nudge_PS_OPT, Nudge_Uprof, Nudge_Vprof, Nudge_UV_OPT,         & !In 
+                                Nudge_Tprof,  Nudge_T_OPT, Nudge_Qprof, Nudge_Q_OPT,                        & !In 
+                                zm_obs, zm_mod, ps_tend, u_tend, v_tend, t_tend, q_tend )                     !Out
+
+      Nudge_PSstep(:ncol,lchnk)      = ps_tend(:ncol)
+      Nudge_Ustep(:ncol,:pver,lchnk) = u_tend(:ncol,:pver)
+      Nudge_Vstep(:ncol,:pver,lchnk) = v_tend(:ncol,:pver)
+      Nudge_Tstep(:ncol,:pver,lchnk) = t_tend(:ncol,:pver)
+      Nudge_Qstep(:ncol,:pver,lchnk) = q_tend(:ncol,:pver)
    else
       ! The following lines are used to reset the nudging tendency
       ! to zero in order to perform an intermittent simulation
-      if (Nudge_Uprof .ne. 0) then 
-         Nudge_Ustep(:ncol,:pver,lchnk) = 0._r8
-      end if
-      if (Nudge_Vprof .ne. 0) then 
-         Nudge_Vstep(:ncol,:pver,lchnk) = 0._r8
-      end if
-      if (Nudge_Tprof .ne. 0) then 
-         Nudge_Tstep(:ncol,:pver,lchnk) = 0._r8
-      end if
-      if (Nudge_Qprof .ne. 0) then 
-         Nudge_Qstep(:ncol,:pver,lchnk) = 0._r8
-      end if
-      if (Nudge_PSprof .ne. 0) then 
-         Nudge_PSstep(:ncol,lchnk)      = 0._r8
-      end if
+      Nudge_Ustep(:ncol,:pver,lchnk) = 0._r8
+      Nudge_Vstep(:ncol,:pver,lchnk) = 0._r8
+      Nudge_Tstep(:ncol,:pver,lchnk) = 0._r8
+      Nudge_Qstep(:ncol,:pver,lchnk) = 0._r8
+      Nudge_PSstep(:ncol,lchnk)      = 0._r8
    end if         ! update nudging tendency
 
+   ftem(:ncol,:pver) = state%u(:ncol,:pver)
+   call outfld('U_bf_ndg',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = state%v(:ncol,:pver)
+   call outfld('V_bf_ndg',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = state%t(:ncol,:pver)
+   call outfld('T_bf_ndg',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = state%q(:ncol,:pver,indw)
+   call outfld('Q_bf_ndg',  ftem,  pcols,lchnk)
+   ftem2(:ncol) = state%ps(:ncol)
+   call outfld('PS_bf_ndg', ftem2, pcols,lchnk)
+   do k = 1, pver
+     ftem(:ncol,k) = zm_mod(:ncol,k) + state%phis(:ncol)*rga
+   end do
+   call outfld('Z3_bf_ndg', ftem,  pcols,lchnk)
+
+
+   ftem(:ncol,:pver) = Target_U(:ncol,:pver,lchnk)
+   call outfld('U_ref',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = Target_V(:ncol,:pver,lchnk)
+   call outfld('V_ref',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = Target_T(:ncol,:pver,lchnk)
+   call outfld('T_ref',  ftem,  pcols,lchnk)
+   ftem(:ncol,:pver) = Target_Q(:ncol,:pver,lchnk)
+   call outfld('Q_ref',  ftem,  pcols,lchnk)
+   ftem2(:ncol) = Target_PS(:ncol,lchnk)
+   call outfld('PS_ref', ftem2, pcols,lchnk)
+   ftem2(:ncol) = Target_PHIS(:ncol,lchnk)
+   call outfld('PHIS_ref', ftem2, pcols,lchnk)
+   do k = 1, pver
+     ftem(:ncol,k) = zm_obs(:ncol,k) + Target_PHIS(:ncol,lchnk)*rga
+   end do
+   call outfld('Z3_ref', ftem,  pcols,lchnk)
+
+   ftem(:ncol,:pver) = Nudge_Ustep(:ncol,:pver,lchnk)
+   call outfld('Nudge_U',ftem,pcols,lchnk)
+   ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
+   ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
+   call outfld('Nudge_U_vint',ftem2,pcols,lchnk)
+
+   ftem(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)
+   call outfld('Nudge_V',ftem,pcols,lchnk)
+   ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
+   ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
+   call outfld('Nudge_V_vint',ftem2,pcols,lchnk)
+
+   if((Nudge_Tprof.eq.0).and.(Nudge_Uprof.ne.0)) then 
+     ftem(:ncol,:pver) = ( Target_T(:ncol,:pver,lchnk)  &
+                           -Model_T(:ncol,:pver,lchnk)) &
+                         *Nudge_Utau(:ncol,:pver,lchnk)
+   else 
+     ftem(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)
+   end if 
+   call outfld('Nudge_T',ftem,pcols,lchnk)
+   ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
+   ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
+   call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
+
+   if((Nudge_Qprof.eq.0).and.(Nudge_Uprof.ne.0)) then
+     ftem(:ncol,:pver) = ( Target_Q(:ncol,:pver,lchnk)  &
+                           -Model_Q(:ncol,:pver,lchnk)) &
+                         *Nudge_Utau(:ncol,:pver,lchnk)
+   else
+     ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)
+   end if 
+   call outfld('Nudge_Q',ftem,pcols,lchnk)
+   ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
+   ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
+   call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
+
+   ftem2(:ncol) = Nudge_PSstep(:ncol,lchnk)
+   call outfld('Nudge_PS',ftem2,pcols,lchnk)
+
+   return
   end subroutine  ! nudging_calc_tend
 
   !================================================================
-  subroutine nudging_timestep_tend(phys_state,phys_tend)
+  subroutine nudging_update_land_surface(state, pbuf, cam_in, cam_out, dtime)
+   use physics_types,  only: physics_state
+   use camsrfexch   ,  only: cam_out_t, cam_in_t
+   use ppgrid       ,  only: pver,pcols,pverp
+   use cam_history  ,  only: outfld
+   use physconst    ,  only: cpair, gravit, rair, rga, stebol, zvir
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             pbuf_set_field, physics_buffer_desc
+   use geopotential,   only: geopotential_t
+   use comsrf,         only: prcsnw
+   use time_manager,   only: get_nstep
+
+   ! Arguments
+   !-----------
+   type(physics_buffer_desc), pointer :: pbuf(:)
+   type(physics_state), intent(in)    :: state
+   type(cam_out_t),     intent(inout) :: cam_out
+   type(cam_in_t),      intent(in)    :: cam_in
+   real(r8),            intent(in)    :: dtime
+
+   !convective precipitation variables
+   real(r8), pointer :: prec_dp(:)     ! total precipitation   from ZM convection
+   real(r8), pointer :: snow_dp(:)     ! snow from ZM   convection
+   real(r8), pointer :: prec_sh(:)     ! total precipitation   from Hack convection
+   real(r8), pointer :: snow_sh(:)     ! snow from   Hack convection
+   real(r8), pointer :: prec_sed(:)    ! total precipitation   from ZM convection
+   real(r8), pointer :: snow_sed(:)    ! snow from ZM   convection
+   real(r8), pointer :: prec_pcw(:)    ! total precipitation   from Hack convection
+   real(r8), pointer :: snow_pcw(:)    ! snow from Hack   convection
+   real(r8), pointer :: vmag_gust(:)
+
+   real(r8) :: rad_fac    = 1.0_r8     ! scale factor for radiative flux nudging 
+
+   !Local variables 
+   integer  :: i, k, m, lchnk, ncol
+   integer  :: nstep                ! current timestep number
+   real(r8) :: frac1, frac2 
+   real(r8) :: dflwds_mod(pcols)    ! Downward longwave flux at surface
+   real(r8) :: dnetsw_mod(pcols)    ! Surface solar absorbed flux (Total sky; downward - upward)
+   real(r8) :: sols_mod(pcols)      ! Direct downward shortwave flux, UV/vis
+   real(r8) :: soll_mod(pcols)      ! Direct downward shortwave flux, near-IR
+   real(r8) :: solsd_mod(pcols)     ! Diffuse downward shortwave flux, UV/vis
+   real(r8) :: solld_mod(pcols)     ! Diffuse downward shortwave flux, near-IR
+   real(r8) :: sols_obs(pcols)      ! Direct downward shortwave flux, UV/vis
+   real(r8) :: soll_obs(pcols)      ! Direct downward shortwave flux, near-IR
+   real(r8) :: solsd_obs(pcols)     ! Diffuse downward shortwave flux, UV/vis
+   real(r8) :: solld_obs(pcols)     ! Diffuse downward shortwave flux, near-IR
+
+   real(r8) :: precc_mod(pcols)     ! convective precip rate
+   real(r8) :: precl_mod(pcols)     ! stratiform precip rate
+   real(r8) :: snowc_mod(pcols)     ! convective snow rate
+   real(r8) :: snowl_mod(pcols)     ! stratiform snow rate
+
+   real(r8) :: radmask(pcols)
+   real(r8) :: factor(pcols)       
+   real(r8) :: psmod(pcols) 
+   real(r8) :: zsmod(pcols)  
+   real(r8) :: psobs(pcols)   
+   real(r8) :: zsobs(pcols)       
+
+   real(r8) :: zbmod(pcols)
+   real(r8) :: pbmod(pcols)
+   real(r8) :: ubmod(pcols)
+   real(r8) :: vbmod(pcols)
+   real(r8) :: tbmod(pcols)
+   real(r8) :: thbmod(pcols)
+   real(r8) :: qbmod(pcols)
+   real(r8) :: vmag(pcols)
+   real(r8) :: pslmod(pcols)
+
+   real(r8) :: umod(pcols,pver)
+   real(r8) :: vmod(pcols,pver)
+   real(r8) :: tmod(pcols,pver)
+   real(r8) :: qmod(pcols,pver)
+   real(r8) :: zi_mod(pcols,pverp)
+   real(r8) :: zm_mod(pcols,pver)
+   real(r8) :: rairv(pcols,pver)
+   real(r8) :: zvirv(pcols,pver)
+
+   real(r8) :: precc_tend(pcols)
+   real(r8) :: precl_tend(pcols)
+   real(r8) :: snowc_tend(pcols)
+   real(r8) :: snowl_tend(pcols)
+   real(r8) :: soll_tend(pcols)
+   real(r8) :: sols_tend(pcols)
+   real(r8) :: solld_tend(pcols)
+   real(r8) :: solsd_tend(pcols)
+   real(r8) :: netsw_tend(pcols)
+   real(r8) :: flwds_tend(pcols)
+
+   lchnk = state%lchnk
+   ncol  = state%ncol
+   nstep = get_nstep()
+
+   precc_tend = 0._r8 
+   precl_tend = 0._r8
+   snowc_tend = 0._r8
+   snowl_tend = 0._r8
+   netsw_tend = 0._r8
+   flwds_tend = 0._r8
+   soll_tend  = 0._r8
+   sols_tend  = 0._r8
+   solld_tend = 0._r8
+   solsd_tend = 0._r8
+   soll_obs   = 0._r8
+   sols_obs   = 0._r8
+   solld_obs  = 0._r8
+   solsd_obs  = 0._r8
+   factor     = 1.0_r8
+
+   psmod(:ncol) = state%ps(:ncol)
+   zsmod(:ncol) = state%phis(:ncol)
+   psobs(:ncol) = Target_PS(:ncol,lchnk)
+   zsobs(:ncol) = Target_PHIS(:ncol,lchnk)
+
+   ! scaling factor based on surface pressure 
+   do i = 1, ncol
+     if ((Nudge_SRF_PSWgt_On) .and. (abs(psmod(i)-psobs(i)) > 2.E2_r8)) then 
+         factor(i) = factor(i) * 2.E2_r8 / abs(psmod(i)-psobs(i))
+     end if 
+   end do 
+
+   !surface state variables 
+   if (Nudge_SRF_On .and. Nudge_SRF_State_On) then
+     !updated the state due to nudging 
+     do k=1,pver
+       do i=1,ncol
+         umod(i,k) = state%u(i,k)   + Nudge_Ustep(i,k,lchnk)*factor(i)*dtime 
+         vmod(i,k) = state%v(i,k)   + Nudge_Vstep(i,k,lchnk)*factor(i)*dtime 
+         tmod(i,k) = state%t(i,k)   + Nudge_Tstep(i,k,lchnk)*factor(i)*dtime 
+         qmod(i,k) = state%q(i,k,1) + Nudge_Qstep(i,k,lchnk)*factor(i)*dtime 
+       end do
+     end do 
+
+     !calculate geopotential height from updated temperature 
+     do i = 1, ncol
+       do k = 1, pver
+         rairv(i,k) = rair
+         zvirv(i,k) = zvir
+       end do
+     end do
+     call geopotential_t(state%lnpint, state%lnpmid, state%pint, state%pmid,&
+                         state%pdel  , state%rpdel ,  tmod     , qmod      ,&
+                         rairv, gravit, zvirv, zi_mod, zm_mod, ncol)
+
+     !update sea level pressure 
+     call cpslec (ncol, state%pmid, state%phis, state%ps, tmod, pslmod, gravit, rair)
+
+     !extract the bottom model level values required by land model 
+     do i=1,ncol
+       ubmod(i)  = umod(i,pver)
+       vbmod(i)  = vmod(i,pver)
+       tbmod(i)  = tmod(i,pver)
+       qbmod(i)  = qmod(i,pver)
+       zbmod(i)  = zm_mod(i,pver)
+       pbmod(i)  = state%pmid(i,pver)
+       thbmod(i) = tbmod(i)*state%exner(i,pver)
+     end do 
+
+     !adds gustiness (adapted from camsrfexch.F90 )
+     vmag_gust_idx = pbuf_get_index('vmag_gust')
+     call pbuf_get_field(pbuf, vmag_gust_idx, vmag_gust)
+     do i=1,ncol
+        vmag(i) = max(1.e-5_r8,sqrt( ubmod(i)**2._r8 + vbmod(i)**2._r8))
+     end do
+
+   end if
+
+   !get the model precipitation 
+   if (Nudge_SRF_On .and. Nudge_SRF_Prec_On) then
+     prec_dp_idx  = pbuf_get_index('PREC_DP')
+     snow_dp_idx  = pbuf_get_index('SNOW_DP')
+     prec_sh_idx  = pbuf_get_index('PREC_SH')
+     snow_sh_idx  = pbuf_get_index('SNOW_SH')
+     prec_sed_idx = pbuf_get_index('PREC_SED')
+     snow_sed_idx = pbuf_get_index('SNOW_SED')
+     prec_pcw_idx = pbuf_get_index('PREC_PCW')
+     snow_pcw_idx = pbuf_get_index('SNOW_PCW')
+
+     call pbuf_get_field(pbuf, prec_dp_idx, prec_dp)
+     call pbuf_get_field(pbuf, snow_dp_idx, snow_dp)
+     call pbuf_get_field(pbuf, prec_sh_idx, prec_sh)
+     call pbuf_get_field(pbuf, snow_sh_idx, snow_sh)
+     call pbuf_get_field(pbuf, prec_sed_idx, prec_sed)
+     call pbuf_get_field(pbuf, snow_sed_idx, snow_sed)
+     call pbuf_get_field(pbuf, prec_pcw_idx, prec_pcw)
+     call pbuf_get_field(pbuf, snow_pcw_idx, snow_pcw)
+
+     !Precipitation rates (multi-process)
+     precc_mod(:ncol) = prec_dp(:ncol)  + prec_sh(:ncol)
+     precl_mod(:ncol) = prec_sed(:ncol) + prec_pcw(:ncol)
+     snowc_mod(:ncol) = snow_dp(:ncol)  + snow_sh(:ncol)
+     snowl_mod(:ncol) = snow_sed(:ncol) + snow_pcw(:ncol)
+
+     !Derive the nudging tendency
+     do i = 1, ncol
+       !Note: *10-3 is to convert kg/m2/s (default unit in ERA5) to m/s  (unit in  model) 
+       !Note: this conversion depends on the unit in the reanalysis data
+       if (Target_PRECC(i,lchnk).ge.0._r8 ) then
+         precc_tend(i) = (Target_PRECC(i,lchnk)*1.e-3_r8 - precc_mod(i))  * Nudge_SRFtau(i,lchnk)
+       end if 
+       if (Target_PRECL(i,lchnk).ge.0._r8 ) then
+         precl_tend(i) = (Target_PRECL(i,lchnk)*1.e-3_r8 - precl_mod(i))  * Nudge_SRFtau(i,lchnk)
+       end if 
+       if (Target_PRECSC(i,lchnk).ge.0._r8 ) then
+         snowc_tend(i) = (Target_PRECSC(i,lchnk)*1.e-3_r8 - snowc_mod(i)) * Nudge_SRFtau(i,lchnk)
+       end if 
+       if (Target_PRECSL(i,lchnk).ge.0._r8 ) then
+         snowl_tend(i) = (Target_PRECSL(i,lchnk)*1.e-3_r8 - snowl_mod(i)) * Nudge_SRFtau(i,lchnk)
+       end if 
+     end do 
+
+   end if 
+
+   if (Nudge_SRF_On .and. Nudge_SRF_RadFlux_On) then
+
+     !Specify a scaling factor for the nudging 
+     do i = 1, ncol
+       radmask(i) = rad_fac
+       !Mask out the ocean region
+       !if (cam_in%landfrac(i).ge.0.001) then
+       !  radmask(i)=radmask(i)*0._r8
+       !endif
+     end do 
+
+     sols_mod(1:ncol)   = cam_out%sols(1:ncol)   ! Direct downward shortwave flux, UV/vis
+     soll_mod(1:ncol)   = cam_out%soll(1:ncol)   ! Direct downward shortwave flux, near-IR
+     solsd_mod(1:ncol)  = cam_out%solsd(1:ncol)  ! Diffuse downward shortwave flux, UV/vis
+     solld_mod(1:ncol)  = cam_out%solld(1:ncol)  ! Diffuse downward shortwave flux, near-IR 
+     dflwds_mod(1:ncol) = cam_out%flwds(1:ncol)  ! Downward longwave flux at surface
+     dnetsw_mod(1:ncol) = cam_out%netsw(1:ncol)  ! Surface solar absorbed flux (Total sky; downward - upward)
+
+     !Derived the SOLS, SOLL, SOLSD and SOLLD. Assume that the ratio of 
+     !SOLL/(SOLL+SOLS), SOLS/(SOLL+SOLS), SOLLD/(SOLLD+SOLSD), SOLSD/(SOLLD+SOLSD) 
+     !are the same in model and observations 
+     do i = 1,ncol
+       frac1 = cam_out%sols(i)/(cam_out%sols(i)+cam_out%soll(i))
+       frac2 = (cam_out%sols(i)+cam_out%solsd(i)) & 
+               /(cam_out%solsd(i)+cam_out%solld(i)+ cam_out%sols(i)+cam_out%soll(i))
+       sols_obs(i)  = Target_FSDSD(i,lchnk)*frac1            ! direct UV/vis 
+       soll_obs(i)  = Target_FSDSD(i,lchnk)*(1.0_r8 - frac1) ! direct near-IR 
+       solsd_obs(i) = Target_FSDS(i,lchnk)*frac2 &           ! diffuse UV/vis
+                      - Target_FSDSD(i,lchnk)*frac1 
+       solld_obs(i) = Target_FSDS(i,lchnk)*(1.0_r8 - frac2) &! diffuse near-IR
+                      - Target_FSDSD(i,lchnk)*(1.0_r8 - frac1) 
+       if (sols_obs(i).lt.0._r8)  sols_obs(i)  = 0._r8
+       if (soll_obs(i).lt.0._r8)  soll_obs(i)  = 0._r8
+       if (solsd_obs(i).lt.0._r8) solsd_obs(i) = 0._r8
+       if (solld_obs(i).lt.0._r8) solld_obs(i) = 0._r8
+     end do 
+
+     !Derive the nudging tendency
+     do i = 1, ncol
+
+       if((sols_mod(i).ge.0._r8).and.(sols_obs(i).ge.0._r8)) then 
+         sols_tend(i)  = (sols_obs(i)  - sols_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+       end if 
+
+       if((soll_mod(i).ge.0._r8).and.(soll_obs(i).ge.0._r8)) then
+         soll_tend(i)  = (soll_obs(i)  - soll_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+       end if 
+
+       if((solsd_mod(i).ge.0._r8).and.(solsd_obs(i).ge.0._r8)) then
+         solsd_tend(i) = (solsd_obs(i) - solsd_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+       end if 
+
+       if((solld_mod(i).ge.0._r8).and.(solld_obs(i).ge.0._r8)) then
+         solld_tend(i) = (solld_obs(i) - solld_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+       end if 
+
+       if((dnetsw_mod(i).ge.0._r8).and.(Target_NETSW(i,lchnk).ge.0._r8)) then
+         netsw_tend(i) = (Target_NETSW(i,lchnk) - dnetsw_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+       end if 
+
+       flwds_tend(i) = (Target_FLWDS(i,lchnk) - dflwds_mod(i)) * radmask(i) * Nudge_SRFtau(i,lchnk)
+
+     end do
+
+   end if
+
+   !Start to update the variables for land surface model
+   !surface state variables 
+   if ((nstep > 0) .and. (Nudge_SRF_On) .and. (Nudge_SRF_State_On)) then
+     do i=1,ncol
+        cam_out%ubot(i)  = ubmod(i)*((vmag_gust(i)+vmag(i))/vmag(i))
+        cam_out%vbot(i)  = vbmod(i)*((vmag_gust(i)+vmag(i))/vmag(i))
+        cam_out%tbot(i)  = tbmod(i)  
+        cam_out%thbot(i) = thbmod(i)
+        cam_out%zbot(i)  = zbmod(i)
+        cam_out%pbot(i)  = pbmod(i)
+        cam_out%rho(i)   = cam_out%pbot(i)/(rair*cam_out%tbot(i))
+        cam_out%qbot(i,1)= qbmod(i)
+     end do
+   end if 
+
+   !Set the UV/vis and near-IR direct and dirruse downward shortwave flux at surface
+   if ((nstep > 0) .and. (Nudge_SRF_On) .and. (Nudge_SRF_RadFlux_On)) then
+     !Update the quantity in cam_out
+     do i = 1,ncol
+       cam_out%sols(i)  = sols_mod(i)    + sols_tend(i)  * factor(i) * dtime 
+       cam_out%soll(i)  = soll_mod(i)    + soll_tend(i)  * factor(i) * dtime 
+       cam_out%solsd(i) = solsd_mod(i)   + solsd_tend(i) * factor(i) * dtime 
+       cam_out%solld(i) = solld_mod(i)   + solld_tend(i) * factor(i) * dtime 
+       cam_out%netsw(i) = dnetsw_mod(i)  + netsw_tend(i) * factor(i) * dtime 
+       cam_out%flwds(i) = dflwds_mod(i)  + flwds_tend(i) * factor(i) * dtime 
+     end do
+   end if
+
+   ! Precipation and snow rates from shallow convection, deep convection and stratiform processes.
+   ! Compute total convective and stratiform precipitation and snow rates
+   if ((nstep > 0) .and. Nudge_SRF_On .and. Nudge_SRF_Prec_On) then 
+     do i=1,ncol
+       cam_out%precc (i) = precc_mod(i) + precc_tend(i) * factor(i) * dtime
+       cam_out%precl (i) = precl_mod(i) + precl_tend(i) * factor(i) * dtime
+       cam_out%precsc(i) = snowc_mod(i) + snowc_tend(i) * factor(i) * dtime
+       cam_out%precsl(i) = snowl_mod(i) + snowl_tend(i) * factor(i) * dtime
+       ! Safeguard check to ensure precipitation rate > 0
+       if (cam_out%precc(i) .lt.0._r8) cam_out%precc(i)=0._r8
+       if (cam_out%precl(i) .lt.0._r8) cam_out%precl(i)=0._r8
+       if (cam_out%precsc(i).lt.0._r8) cam_out%precsc(i)=0._r8
+       if (cam_out%precsl(i).lt.0._r8) cam_out%precsl(i)=0._r8
+       if (cam_out%precsc(i).gt.cam_out%precc(i)) cam_out%precsc(i)=cam_out%precc(i)
+       if (cam_out%precsl(i).gt.cam_out%precl(i)) cam_out%precsl(i)=cam_out%precl(i)
+     end do
+
+     ! total snowfall rate: needed by slab ocean model
+     prcsnw(:ncol,lchnk) = cam_out%precsc(:ncol) + cam_out%precsl(:ncol)
+   end if
+
+   !Output the diagnostics 
+   call outfld('PRECC_bf_ndg' ,precc_mod(:ncol),pcols,lchnk)
+   call outfld('PRECL_bf_ndg' ,precl_mod(:ncol),pcols,lchnk)
+   call outfld('PRECSC_bf_ndg',snowc_mod(:ncol),pcols,lchnk)
+   call outfld('PRECSL_bf_ndg',snowl_mod(:ncol),pcols,lchnk)
+   call outfld('SOLL_bf_ndg'  ,soll_mod(:ncol),pcols,lchnk)
+   call outfld('SOLS_bf_ndg'  ,sols_mod(:ncol),pcols,lchnk)
+   call outfld('SOLLD_bf_ndg' ,solld_mod(:ncol),pcols,lchnk)
+   call outfld('SOLSD_bf_ndg' ,solsd_mod(:ncol),pcols,lchnk)
+   call outfld('NETSW_bf_ndg' ,dnetsw_mod(:ncol),pcols,lchnk)
+   call outfld('FLWDS_bf_ndg' ,dflwds_mod(:ncol),pcols,lchnk)
+
+   call outfld('PRECC_af_ndg' ,cam_out%precc(:ncol),pcols,lchnk)
+   call outfld('PRECL_af_ndg' ,cam_out%precl(:ncol),pcols,lchnk)
+   call outfld('PRECSC_af_ndg',cam_out%precsc(:ncol),pcols,lchnk)
+   call outfld('PRECSL_af_ndg',cam_out%precsl(:ncol),pcols,lchnk)
+   call outfld('SOLL_af_ndg'  ,cam_out%soll(:ncol),pcols,lchnk)
+   call outfld('SOLS_af_ndg'  ,cam_out%sols(:ncol),pcols,lchnk)
+   call outfld('SOLLD_af_ndg' ,cam_out%solld(:ncol),pcols,lchnk)
+   call outfld('SOLSD_af_ndg' ,cam_out%solsd(:ncol),pcols,lchnk)
+   call outfld('NETSW_af_ndg' ,cam_out%netsw(:ncol),pcols,lchnk)
+   call outfld('FLWDS_af_ndg' ,cam_out%flwds(:ncol),pcols,lchnk)
+
+   call outfld('PRECC_ref' ,Target_PRECC(:ncol,lchnk),pcols,lchnk)
+   call outfld('PRECL_ref' ,Target_PRECL(:ncol,lchnk),pcols,lchnk)
+   call outfld('PRECSC_ref',Target_PRECSC(:ncol,lchnk),pcols,lchnk)
+   call outfld('PRECSL_ref',Target_PRECSL(:ncol,lchnk),pcols,lchnk)
+   call outfld('NETSW_ref' ,Target_NETSW(:ncol,lchnk),pcols,lchnk)
+   call outfld('FLWDS_ref' ,Target_FLWDS(:ncol,lchnk),pcols,lchnk)
+   call outfld('SOLL_ref'  ,soll_obs(:ncol),pcols,lchnk)
+   call outfld('SOLS_ref'  ,sols_obs(:ncol),pcols,lchnk)
+   call outfld('SOLLD_ref' ,solld_obs(:ncol),pcols,lchnk)
+   call outfld('SOLSD_ref' ,solsd_obs(:ncol),pcols,lchnk)
+
+   call outfld('Nudge_PRECC' ,precc_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_PRECL' ,precl_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_PRECSC',snowc_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_PRECSL',snowl_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_SOLL'  ,soll_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_SOLS'  ,sols_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_SOLLD' ,solld_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_SOLSD' ,solsd_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_NETSW' ,netsw_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_FLWDS' ,flwds_tend(:ncol),pcols,lchnk)
+
+   return
+  end subroutine  !nudging_update_land_surface 
+
+  !================================================================
+  subroutine nudging_update_srf_flux(state, cam_in, cam_out, dtime)
+   use physics_types,  only: physics_state
+   use camsrfexch   ,  only: cam_out_t, cam_in_t
+   use ppgrid       ,  only: pver,pcols,pverp
+   use cam_history  ,  only: outfld
+   use physconst    ,  only: cpair, gravit, rair, rga, stebol, zvir
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             pbuf_set_field, physics_buffer_desc
+   use comsrf,         only: prcsnw
+
+
+   ! Arguments
+   !-----------
+   type(physics_buffer_desc), pointer :: pbuf(:)
+   type(physics_state), intent(in)    :: state
+   type(cam_out_t),     intent(in)    :: cam_out
+   type(cam_in_t),      intent(inout) :: cam_in
+   real(r8),            intent(in)    :: dtime
+
+   !Local variables 
+   integer :: i, k, m, lchnk, ncol
+
+   real(r8) :: lhf_mod(pcols)      ! latent heat fluxes 
+   real(r8) :: shf_mod(pcols)      ! sensible heat fluxes
+   real(r8) :: qflx_mod(pcols)     ! water vapor fluxes 
+
+   real(r8) :: factor(pcols)
+   real(r8) :: psmod(pcols)
+   real(r8) :: zsmod(pcols)
+   real(r8) :: psobs(pcols)
+   real(r8) :: zsobs(pcols)
+
+   real(r8) :: lhf_tend(pcols)
+   real(r8) :: shf_tend(pcols)
+   real(r8) :: qflx_tend(pcols)
+
+   lchnk = state%lchnk
+   ncol  = state%ncol
+
+   lhf_tend(:ncol)  = 0._r8
+   shf_tend(:ncol)  = 0._r8
+   qflx_tend(:ncol) = 0._r8
+
+   psmod(:ncol)  = state%ps(:ncol)
+   zsmod(:ncol)  = state%phis(:ncol)
+   psobs(:ncol)  = Target_PS(:ncol,lchnk)
+   zsobs(:ncol)  = Target_PHIS(:ncol,lchnk)
+
+   qflx_mod(:ncol) = cam_in%cflx(:ncol,1) 
+   lhf_mod(:ncol)  = cam_in%lhf(:ncol) 
+   shf_mod(:ncol)  = cam_in%shf(:ncol)  
+
+   factor(:ncol) = 1.0_r8
+   if (Nudge_SRF_PSWgt_On) then
+     do i = 1, ncol
+       if ( abs(psmod(i)-psobs(i)) > 2.E2_r8 ) then
+         factor(i) = 2.E2_r8 / abs(psmod(i)-psobs(i))
+       end if
+     enddo
+   end if
+
+   !Derive the nudging tendency 
+   do i = 1,ncol
+     lhf_tend(i)  = (-Target_LHFLX(i,lchnk) - lhf_mod(i)) * Nudge_SRFtau(i,lchnk)
+     shf_tend(i)  = (-Target_SHFLX(i,lchnk) - shf_mod(i)) * Nudge_SRFtau(i,lchnk)    
+     qflx_tend(i) = (-Target_EVAP(i,lchnk) - qflx_mod(i)) * Nudge_SRFtau(i,lchnk)
+   end do 
+   
+   !Update the quantity in cam_out
+   do i = 1,ncol
+     cam_in%cflx(i,1) = qflx_mod(i) + qflx_tend(i) * factor(i) * dtime
+     cam_in%shf(i)    = shf_mod(i)  + shf_tend(i)  * factor(i) * dtime 
+     cam_in%lhf(i)    = lhf_mod(i)  + lhf_tend(i)  * factor(i) * dtime
+   end do
+
+   call outfld('LHFLX_bf_ndg' ,lhf_mod(:ncol),pcols,lchnk)
+   call outfld('SHFLX_bf_ndg' ,shf_mod(:ncol),pcols,lchnk)
+   call outfld('QFLX_bf_ndg'  ,qflx_mod(:ncol),pcols,lchnk)
+
+   call outfld('LHFLX_af_ndg' ,cam_in%lhf(:ncol),pcols,lchnk)
+   call outfld('SHFLX_af_ndg' ,cam_in%shf(:ncol),pcols,lchnk)
+   call outfld('QFLX_af_ndg'  ,cam_in%cflx(:ncol,1),pcols,lchnk)
+
+   call outfld('LHFLX_ref' ,-Target_SHFLX(:ncol,lchnk),pcols,lchnk)
+   call outfld('SHFLX_ref' ,-Target_LHFLX(:ncol,lchnk),pcols,lchnk)
+   call outfld('QFLX_ref'  ,-Target_EVAP(:ncol,lchnk),pcols,lchnk)
+
+   call outfld('Nudge_LHFLX' ,lhf_mod(:ncol),pcols,lchnk)
+   call outfld('Nudge_SHFLX' ,shf_mod(:ncol),pcols,lchnk)
+   call outfld('Nudge_QFLX'  ,qflx_mod(:ncol),pcols,lchnk)
+
+   return
+  end subroutine  !nudging_update_srf_flux
+
+  !================================================================
+  subroutine nudging_timestep_tend(phys_state,phys_tend, dtime)
    !
    ! NUDGING_TIMESTEP_TEND:
    !                If Nudging is ON, return the Nudging contributions
@@ -1593,22 +2536,31 @@ contains
    !===============================================================
    use physics_types,only: physics_state,physics_ptend,physics_ptend_init
    use constituents ,only: cnst_get_ind,pcnst
-   use ppgrid       ,only: pver,pcols,begchunk,endchunk
+   use ppgrid       ,only: pver,pverp,pcols,begchunk,endchunk
    use cam_history  ,only: outfld
-   use physconst    ,only: cpair
+   use physconst    ,only: rga, cpair, gravit, rair, zvir, cappa
+   use hycoef       ,only: hycoef_init, hyam, hybm, hyai, hybi, ps0
 
    ! Arguments
    !-------------
-   type(physics_state), intent(in) :: phys_state
+   type(physics_state), intent(inout) :: phys_state
    type(physics_ptend), intent(out):: phys_tend
+  
+   real(r8), intent(in):: dtime 
 
    ! Local values
    !--------------------
+   real(r8):: nudge_q
+   integer ixcldliq, ixcldice
    integer indw,ncol,lchnk
    logical lq(pcnst)
    integer Year, Month, Day, Sec
+   integer i,k,m
 
    call cnst_get_ind('Q',indw)
+   call cnst_get_ind('CLDLIQ', ixcldliq)
+   call cnst_get_ind('CLDICE', ixcldice)
+
    lq(:)   =.false.
    lq(indw)=.true.
    call physics_ptend_init(phys_tend,phys_state%psetcols,'nudging',lu=.true.,lv=.true.,ls=.true.,lq=lq)
@@ -1620,38 +2572,66 @@ contains
      call get_curr_date(Year,Month,Day,Sec)
      ! the code below is necessary for a correct IMT nudging with a continue/restart run
      if ( Nudge_Method .eq. 'IMT' .and. (mod(Sec,Nudge_Step) .ne. 0) ) then
-        if (Nudge_Uprof .ne. 0) then
-           Nudge_Ustep(:ncol,:pver,lchnk) =0._r8
-        end if
-        if (Nudge_Vprof .ne. 0) then
-           Nudge_Vstep(:ncol,:pver,lchnk) =0._r8
-        end if
-        if (Nudge_Tprof .ne. 0) then
-           Nudge_Tstep(:ncol,:pver,lchnk) =0._r8
-        end if
-        if (Nudge_Qprof .ne. 0) then
-           Nudge_Qstep(:ncol,:pver,lchnk) =0._r8
-        end if
+         Nudge_Ustep(:ncol,:pver,lchnk) =0._r8
+         Nudge_Vstep(:ncol,:pver,lchnk) =0._r8
+         Nudge_Tstep(:ncol,:pver,lchnk) =0._r8
+         Nudge_Qstep(:ncol,:pver,lchnk) =0._r8
+         Nudge_PSstep(:ncol,lchnk)      =0._r8
      end if
 
      if (Nudge_Uprof .ne. 0) then
-        phys_tend%u(:ncol,:pver)       =Nudge_Ustep(:ncol,:pver,lchnk)
-     end if
-     if (Nudge_Vprof .ne. 0) then
-        phys_tend%v(:ncol,:pver)       =Nudge_Vstep(:ncol,:pver,lchnk)
-     end if
-     if (Nudge_Tprof .ne. 0) then
-        phys_tend%s(:ncol,:pver)       =Nudge_Tstep(:ncol,:pver,lchnk)*cpair
-     end if
-     if (Nudge_Qprof .ne. 0) then
-        phys_tend%q(:ncol,:pver,indw)  =Nudge_Qstep(:ncol,:pver,lchnk)
+        phys_tend%u(:ncol,:pver) = Nudge_Ustep(:ncol,:pver,lchnk)
      end if
 
-     call outfld('Nudge_U',phys_tend%u          ,pcols,lchnk)
-     call outfld('Nudge_V',phys_tend%v          ,pcols,lchnk)
-     call outfld('Nudge_T',phys_tend%s/cpair    ,pcols,lchnk)
-     call outfld('Nudge_Q',phys_tend%q(1,1,indw),pcols,lchnk)
-   endif
+     if (Nudge_Vprof .ne. 0) then
+        phys_tend%v(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)
+     end if
+
+     if (Nudge_Tprof .ne. 0) then
+        phys_tend%s(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*cpair
+     end if
+
+     if (Nudge_Qprof .ne. 0) then
+        phys_tend%q(:ncol,:pver,indw) = Nudge_Qstep(:ncol,:pver,lchnk)
+     end if
+
+     if (Nudge_PS_On) then
+       !update ps 
+       do i = 1,ncol
+          phys_state%ps(i) = phys_state%ps(i) + Nudge_PSstep(i,lchnk)*dtime
+       end do
+       !Pdel etc.
+       do k = 1, pver
+         do i = 1, ncol
+           phys_state%pdel(i,k)  = phys_state%pdel(i,k)  &
+                                  + (hybi(k+1) -hybi(k))*Nudge_PSstep(i,lchnk)*dtime
+           phys_state%rpdel(i,k) = 1._r8/phys_state%pdel(i,k)
+         end do
+       end do
+     end if
+
+     !adjust constitutes 
+     if (Nudge_Q_Adjust_On) then
+       do i = 1, ncol
+         do k = 1, pver
+           if (abs(Nudge_Qstep(i,k,lchnk)) > 0._r8) then
+             nudge_q = phys_state%q(i,k,1)
+             do m = 2, pcnst
+               phys_state%q(i,k,m) = phys_state%q(i,k,m)*phys_state%pdel(i,k)
+             end do
+             phys_state%pdel(i,k)  = phys_state%pdel(i,k)*(1.0_r8 - nudge_q)
+             nudge_q               = nudge_q + Nudge_Qstep(i,k,lchnk) * dtime
+             phys_state%pdel(i,k)  = phys_state%pdel(i,k)/(1.0_r8 - nudge_q)
+             phys_state%rpdel(i,k) = 1.0_r8/phys_state%pdel(i,k)
+             do m = 2, pcnst
+               phys_state%q(i,k,m) = phys_state%q(i,k,m)/phys_state%pdel(i,k)
+             end do
+           end if
+         end do
+       end do
+     end if
+
+   end if 
 
    ! End Routine
    !------------
@@ -1689,7 +2669,8 @@ contains
 
    integer :: cnt3(3)               ! array of counts for each dimension
    integer :: strt3(3)              ! array of starting indices
-   character(len=cl) :: nudge_file1
+   integer :: cnt2(2)               ! array of counts for each dimension
+   integer :: strt2(2)              ! array of starting indices
    integer :: n, n_cnt, ncid1, ind
    integer :: timesiz               ! size of time dimension on dataset
    integer :: Year, Month, Day, Sec
@@ -1795,26 +2776,24 @@ contains
               cnt3(1)  = ncol
               cnt3(2)  = pver
               cnt3(3)  = 1
+              strt2(1) = 1
+              strt2(2) = n_cnt
+              cnt2(1)  = ncol
+              cnt2(2)  = 1
            end if
-           if ( Nudge_Uprof .ne. 0 ) then
-              call read_and_scatter_se(ncid, 'U', strt3, cnt3, Target_U)
-           end if
-           if ( Nudge_Vprof .ne. 0 ) then
-              call read_and_scatter_se(ncid, 'V', strt3, cnt3, Target_V)
-           end if
-           if ( Nudge_Tprof .ne. 0 ) then
-              call read_and_scatter_se(ncid, 'T', strt3, cnt3, Target_T)
-           end if
-           if ( Nudge_Qprof .ne. 0 ) then
-              call read_and_scatter_se(ncid, 'Q', strt3, cnt3, Target_Q)
-           end if
+           call read_and_scatter_se(ncid, 'U', strt3, cnt3, Target_U)
+           call read_and_scatter_se(ncid, 'V', strt3, cnt3, Target_V)
+           call read_and_scatter_se(ncid, 'T', strt3, cnt3, Target_T)
+           call read_and_scatter_se(ncid, 'Q', strt3, cnt3, Target_Q)
+           call read_and_scatter_se_2d(ncid, 'PS', strt2, cnt2, Target_PS)
+           call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, Target_PHIS)
 
       case ('IMT')
            call get_curr_date(Year,Month,Day,Sec)
            if (mod(Sec,Nudge_Step) .ne. 0) return  ! ensure that intermittent simulations work for restart run
            if (masterproc) then
               call t_startf ('read_nudging_data')
-              call open_netcdf (ncid1, -Nudge_Step)
+              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
               call t_stopf ('read_nudging_data')
               n_cnt = Sec/Nudge_Step + 1
               if (n_cnt .gt. Nudge_File_Ntime) then       ! account for one time slice per file
@@ -1826,22 +2805,20 @@ contains
               cnt3(1)  = ncol
               cnt3(2)  = pver
               cnt3(3)  = 1
+              strt2(1) = 1
+              strt2(2) = n_cnt
+              cnt2(1)  = ncol
+              cnt2(2)  = 1
            end if
 
            ! Use the CURR time slice for nudging
            !------------------------------------
-           if ( Nudge_Uprof .ne. 0 ) then
-              call read_and_scatter_se(ncid1, 'U', strt3, cnt3, Target_U)
-           end if
-           if ( Nudge_Vprof .ne. 0 ) then
-              call read_and_scatter_se(ncid1, 'V', strt3, cnt3, Target_V)
-           end if
-           if ( Nudge_Tprof .ne. 0 ) then
-              call read_and_scatter_se(ncid1, 'T', strt3, cnt3, Target_T)
-           end if
-           if ( Nudge_Qprof .ne. 0 ) then
-              call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, Target_Q)
-           end if
+           call read_and_scatter_se(ncid1, 'U', strt3, cnt3, Target_U)
+           call read_and_scatter_se(ncid1, 'V', strt3, cnt3, Target_V)
+           call read_and_scatter_se(ncid1, 'T', strt3, cnt3, Target_T)
+           call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, Target_Q)
+           call read_and_scatter_se_2d(ncid1, 'PS', strt2, cnt2, Target_PS)
+           call read_and_scatter_se_2d(ncid1, 'PHIS', strt2, cnt2, Target_PHIS)
 
       case ('Linear')
            ! Single time slice per file
@@ -1851,7 +2828,7 @@ contains
                   first_file = .false.
                   if (masterproc) then
                      call t_startf ('read_nudging_data')
-                     call open_netcdf (ncid1, -Nudge_Step)
+                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
                      call t_stopf ('read_nudging_data')
                      strt3(1) = 1
                      strt3(2) = 1
@@ -1859,37 +2836,31 @@ contains
                      cnt3(1)  = ncol
                      cnt3(2)  = pver
                      cnt3(3)  = 1
+                     strt2(1) = 1
+                     strt2(2) = 1
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
                   end if
-                  
+
+                  !-----------------------------------------                  
                   ! The start point uses the CURR time slice
                   !-----------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid1, 'U', strt3, cnt3, INTP_U(:,:,:,1))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid1, 'V', strt3, cnt3, INTP_V(:,:,:,1))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid1, 'T', strt3, cnt3, INTP_T(:,:,:,1))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, INTP_Q(:,:,:,1))
-                  end if
-                
+                  call read_and_scatter_se(ncid1, 'U', strt3, cnt3, INTP_U(:,:,:,1))
+                  call read_and_scatter_se(ncid1, 'V', strt3, cnt3, INTP_V(:,:,:,1))
+                  call read_and_scatter_se(ncid1, 'T', strt3, cnt3, INTP_T(:,:,:,1))
+                  call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, INTP_Q(:,:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PS',   strt2, cnt2, INTP_PS(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,1))
+
+                  !-----------------------------------------               
                   ! The end point uses the NEXT time slice
                   !---------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
-                  end if
+                  call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PS',   strt2, cnt2, INTP_PS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,2))
 
                   call t_startf ('read_nudging_data')
                   if (masterproc) then
@@ -1905,18 +2876,12 @@ contains
                   ! The previous end point becomes the start point
                   ! Only need to read in the new end point
                   !-----------------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
-                  end if
+                  INTP_U(:,:,:,1)  = INTP_U(:,:,:,2)
+                  INTP_V(:,:,:,1)  = INTP_V(:,:,:,2)
+                  INTP_Q(:,:,:,1)  = INTP_Q(:,:,:,2)
+                  INTP_T(:,:,:,1)  = INTP_T(:,:,:,2)
+                  INTP_PS(:,:,1)   = INTP_PS(:,:,2)
+                  INTP_PHIS(:,:,1)   = INTP_PHIS(:,:,2)
                   if (masterproc) then
                      strt3(1) = 1
                      strt3(2) = 1
@@ -1924,19 +2889,17 @@ contains
                      cnt3(1)  = ncol
                      cnt3(2)  = pver
                      cnt3(3)  = 1
+                     strt2(1) = 1
+                     strt2(2) = 1
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
                   end if
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
-                  end if
+                  call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PS',   strt2, cnt2, INTP_PS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,2))
 
               end if    ! first file for single time slice per file
 
@@ -1952,7 +2915,7 @@ contains
                   if (n_cnt .eq. Nudge_File_Ntime) then
                      if (masterproc) then
                         call t_startf ('read_nudging_data')
-                        call open_netcdf (ncid1, -Nudge_Step)
+                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
                         call t_stopf ('read_nudging_data')
                         strt3(1) = 1
                         strt3(2) = 1
@@ -1960,40 +2923,36 @@ contains
                         cnt3(1)  = ncol
                         cnt3(2)  = pver
                         cnt3(3)  = 1
+                        strt2(1) = 1
+                        strt2(2) = n_cnt
+                        cnt2(1)  = ncol
+                        cnt2(2)  = 1
                      end if
 
+                     !-----------------------------------------
                      ! The start point uses the CURR time slice
                      !-----------------------------------------
-                     if ( Nudge_Uprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid1, 'U', strt3, cnt3, INTP_U(:,:,:,1))
-                     end if
-                     if ( Nudge_Vprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid1, 'V', strt3, cnt3, INTP_V(:,:,:,1))
-                     end if
-                     if ( Nudge_Tprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid1, 'T', strt3, cnt3, INTP_T(:,:,:,1))
-                     end if
-                     if ( Nudge_Qprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, INTP_Q(:,:,:,1))
-                     end if
+                     call read_and_scatter_se(ncid1, 'U', strt3, cnt3, INTP_U(:,:,:,1))
+                     call read_and_scatter_se(ncid1, 'V', strt3, cnt3, INTP_V(:,:,:,1))
+                     call read_and_scatter_se(ncid1, 'T', strt3, cnt3, INTP_T(:,:,:,1))
+                     call read_and_scatter_se(ncid1, 'Q', strt3, cnt3, INTP_Q(:,:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PS',   strt2, cnt2, INTP_PS(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,1))
 
                      if (masterproc) then
                         strt3(3) = 1
+                        strt2(2) = 1
                      end if
+
+                     !-----------------------------------------
                      ! The end point uses the NEXT time slice
                      !---------------------------------------
-                     if ( Nudge_Uprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
-                     end if
-                     if ( Nudge_Vprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
-                     end if
-                     if ( Nudge_Tprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
-                     end if
-                     if ( Nudge_Qprof .ne. 0 ) then
-                        call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
-                     end if
+                     call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
+                     call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
+                     call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
+                     call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PS',   strt2, cnt2, INTP_PS(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,2))
 
                      call t_startf ('read_nudging_data')
                      if (masterproc) then
@@ -2014,20 +2973,18 @@ contains
                            cnt3(1)  = ncol
                            cnt3(2)  = pver
                            cnt3(3)  = 1
+                           strt2(1) = 1
+                           strt2(2) = n
+                           cnt2(1)  = ncol
+                           cnt2(2)  = 1
                         end if
                         ind = n - n_cnt + 1
-                        if ( Nudge_Uprof .ne. 0 ) then
-                           call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,ind))
-                        end if
-                        if ( Nudge_Vprof .ne. 0 ) then
-                           call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,ind))
-                        end if
-                        if ( Nudge_Tprof .ne. 0 ) then
-                           call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,ind))
-                        end if
-                        if ( Nudge_Qprof .ne. 0 ) then
-                           call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,ind))
-                        end if
+                        call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,ind))
+                        call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,ind))
+                        call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,ind))
+                        call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PS',   strt2, cnt2, INTP_PS(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,ind))
                      end do
                   end if
 
@@ -2042,18 +2999,12 @@ contains
                   ! The previous end point becomes the start point
                   ! Only need to read in the new end point
                   !-----------------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
-                  end if
+                  INTP_U(:,:,:,1)  = INTP_U(:,:,:,2)
+                  INTP_V(:,:,:,1)  = INTP_V(:,:,:,2)
+                  INTP_Q(:,:,:,1)  = INTP_Q(:,:,:,2)
+                  INTP_T(:,:,:,1)  = INTP_T(:,:,:,2)
+                  INTP_PS(:,:,1)   = INTP_PS(:,:,2)
+                  INTP_PHIS(:,:,1) = INTP_PHIS(:,:,2)
                   if (masterproc) then
                      strt3(1) = 1
                      strt3(2) = 1
@@ -2061,19 +3012,17 @@ contains
                      cnt3(1)  = ncol
                      cnt3(2)  = pver
                      cnt3(3)  = 1
+                     strt2(1) = 1
+                     strt2(2) = n_cnt
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
                   end if
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
-                  end if
+                  call read_and_scatter_se(ncid, 'U', strt3, cnt3, INTP_U(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'V', strt3, cnt3, INTP_V(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'T', strt3, cnt3, INTP_T(:,:,:,2))
+                  call read_and_scatter_se(ncid, 'Q', strt3, cnt3, INTP_Q(:,:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PS',   strt2, cnt2, INTP_PS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PHIS', strt2, cnt2, INTP_PHIS(:,:,2))
 
               end if ! first_file for multiple time slices
 
@@ -2107,7 +3056,7 @@ contains
         call endrun ('UPDATE_ANALYSES_SE_CLOSE')
      end if
    end if ! (masterproc) then
-!  call scatter_field_to_chunk(1,         1,1,Nudge_ncol,PSanal,Target_PS)
+ ! call scatter_field_to_chunk(1,         1,1,Nudge_ncol,PSanal,Target_PS)
 
    ! End Routine
    !------------
@@ -2115,6 +3064,459 @@ contains
   end subroutine ! nudging_update_analyses_se
   !================================================================
 
+  !================================================================
+  subroutine nudging_update_srf_analyses_se(anal_srf_file)
+   !
+   ! NUDGING_UPDATE_SRF_ANALYSES_SE:
+   !                 Open the given analyses data file, read in
+   !                 surface state, fluxes and radiation information 
+   !                 and then distribute the values to all of the chunks.
+   !===============================================================
+   use ppgrid ,only: pver
+   use netcdf
+   use filenames ,only: interpret_filename_spec
+
+   ! Arguments
+   !-------------
+   character(len=*),intent(in):: anal_srf_file
+
+   ! Local values
+   !-------------
+   integer lev
+   integer ncol,plev,istat
+   integer ncid, varid
+
+   real(r8) Lat_anal(Nudge_ncol)
+   real(r8) Lon_anal(Nudge_ncol)
+
+   integer :: cnt2(2)               ! array of counts for each dimension
+   integer :: strt2(2)              ! array of starting indices
+   integer :: n, n_cnt, ncid1, ind
+   integer :: timesiz               ! size of time dimension on dataset
+   integer :: Year, Month, Day, Sec
+
+   ! Check the existence of the analyses file; broadcast the file status to
+   ! all the other MPI nodes. If the file is not there, then just return.
+   !------------------------------------------------------------------------
+   if(masterproc) then
+     inquire(FILE=trim(anal_srf_file),EXIST=Nudge_SRF_File_Present)
+   endif
+#ifdef SPMD
+   call mpibcast(Nudge_SRF_File_Present, 1, mpilog, 0, mpicom)
+#endif
+   if(.not.Nudge_SRF_File_Present) return
+
+   ! masterporc does all of the work here
+   !-----------------------------------------
+   if(masterproc) then
+
+     ! Open the given file
+     !-----------------------
+     istat=nf90_open(trim(anal_srf_file),NF90_NOWRITE,ncid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*)'NF90_OPEN: failed for file ',trim(anal_srf_file)
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE_OPEN')
+     endif
+     
+     ! Read in Dimensions
+     !--------------------
+     istat=nf90_inq_dimid(ncid,'ncol',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE')
+     endif
+     istat=nf90_inquire_dimension(ncid,varid,len=ncol)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE')
+     endif
+
+     istat=nf90_inq_varid(ncid,'lon',varid)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE')
+     endif
+     istat=nf90_get_var(ncid,varid,Lon_anal)
+     if(istat.ne.NF90_NOERR) then
+       write(iulog,*) nf90_strerror(istat)
+       call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE')
+     endif
+
+     if (Nudge_ncol.ne.ncol) then
+        write(iulog,*) 'ERROR: nudging_update_srf_analyses_se: ncol=',ncol,' Nudge_ncol=',Nudge_ncol
+        call endrun('nudging_update_srf_analyses_se: analyses dimension mismatch')
+     end if
+
+   end if ! (masterproc) then
+
+   select case (Nudge_Method)
+      case ('Step')
+           if (masterproc) then
+              call get_curr_date(Year,Month,Day,Sec)
+              n_cnt = Sec/Nudge_Step + 1
+              n_cnt = n_cnt + 1                      ! nudge to future model time step
+              if (n_cnt .gt. Nudge_SRF_File_Ntime) then
+                  n_cnt = 1
+              end if
+              strt2(1) = 1
+              strt2(2) = n_cnt
+              cnt2(1)  = ncol
+              cnt2(2)  = 1
+           end if
+           call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, Target_U10)
+           call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, Target_V10)
+           call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, Target_T2)
+           call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, Target_TD2)
+           call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, Target_TS)
+           call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, Target_PRECC)
+           call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, Target_PRECL)
+           call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, Target_PRECSC)
+           call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, Target_PRECSL)
+           call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, Target_EVAP)
+           call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, Target_SHFLX)
+           call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, Target_LHFLX)
+           call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, Target_NETSW)
+           call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, Target_FLWDS)
+           call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, Target_FSDS)
+           call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, Target_FSDSD)
+           call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, Target_FSDSUV)
+
+      case ('IMT')
+           call get_curr_date(Year,Month,Day,Sec)
+           if (mod(Sec,Nudge_Step) .ne. 0) return  ! ensure that intermittent simulations work for restart run
+           if (masterproc) then
+              call t_startf ('read_nudging_data')
+              call open_netcdf (ncid1, -Nudge_Step, Nudge_SRF_File_Template)
+              call t_stopf ('read_nudging_data')
+              n_cnt = Sec/Nudge_Step + 1
+              if (n_cnt .gt. Nudge_SRF_File_Ntime) then       ! account for one time slice per file
+                 n_cnt = 1
+              end if
+              strt2(1) = 1
+              strt2(2) = n_cnt
+              cnt2(1)  = ncol
+              cnt2(2)  = 1
+           end if
+
+           ! Use the CURR time slice for nudging
+           !------------------------------------
+           call read_and_scatter_se_2d(ncid1, 'U10',    strt2, cnt2, Target_U10)
+           call read_and_scatter_se_2d(ncid1, 'V10',    strt2, cnt2, Target_V10)
+           call read_and_scatter_se_2d(ncid1, 'T2',     strt2, cnt2, Target_T2)
+           call read_and_scatter_se_2d(ncid1, 'TD2',    strt2, cnt2, Target_TD2)
+           call read_and_scatter_se_2d(ncid1, 'TS',     strt2, cnt2, Target_TS)
+           call read_and_scatter_se_2d(ncid1, 'PRECC',  strt2, cnt2, Target_PRECC)
+           call read_and_scatter_se_2d(ncid1, 'PRECL',  strt2, cnt2, Target_PRECL)
+           call read_and_scatter_se_2d(ncid1, 'PRECSC', strt2, cnt2, Target_PRECSC)
+           call read_and_scatter_se_2d(ncid1, 'PRECSL', strt2, cnt2, Target_PRECSL)
+           call read_and_scatter_se_2d(ncid1, 'ER',     strt2, cnt2, Target_EVAP)
+           call read_and_scatter_se_2d(ncid1, 'SHFLX',  strt2, cnt2, Target_SHFLX)
+           call read_and_scatter_se_2d(ncid1, 'LHFLX',  strt2, cnt2, Target_LHFLX)
+           call read_and_scatter_se_2d(ncid1, 'FSNS',   strt2, cnt2, Target_NETSW)
+           call read_and_scatter_se_2d(ncid1, 'FLDS',   strt2, cnt2, Target_FLWDS)
+           call read_and_scatter_se_2d(ncid1, 'FSDS',   strt2, cnt2, Target_FSDS)
+           call read_and_scatter_se_2d(ncid1, 'FSDSD',  strt2, cnt2, Target_FSDSD)
+           call read_and_scatter_se_2d(ncid1, 'FSDSUV', strt2, cnt2, Target_FSDSUV)
+
+      case ('Linear')
+           ! Single time slice per file
+           ! Need to open a new netcdf file to get the CURR time slice
+           if (Nudge_SRF_File_Ntime .eq. 1) then
+              if (first_srf_file) then
+                  first_srf_file = .false.
+                  if (masterproc) then
+                     call t_startf ('read_nudging_data')
+                     call open_netcdf (ncid1, -Nudge_Step, Nudge_SRF_File_Template)
+                     call t_stopf ('read_nudging_data')
+                     strt2(1) = 1
+                     strt2(2) = 1
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
+                  end if
+
+                  !-----------------------------------------                  
+                  ! The start point uses the CURR time slice
+                  !-----------------------------------------
+                  call read_and_scatter_se_2d(ncid1, 'U10',    strt2, cnt2, INTP_U10(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'V10',    strt2, cnt2, INTP_V10(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'T2',     strt2, cnt2, INTP_T2(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'TD2',    strt2, cnt2, INTP_TD2(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'TS',     strt2, cnt2, INTP_TS(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'ER',     strt2, cnt2, INTP_EVAP(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,1))
+                  call read_and_scatter_se_2d(ncid1, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,1))
+
+                  !-----------------------------------------               
+                  ! The end point uses the NEXT time slice
+                  !---------------------------------------
+                  call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, INTP_U10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, INTP_V10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, INTP_T2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, INTP_TD2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, INTP_TS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, INTP_EVAP(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,2))
+
+                  call t_startf ('read_nudging_data')
+                  if (masterproc) then
+                      istat=nf90_close(ncid1)
+                      if (istat.ne.NF90_NOERR) then
+                         write(iulog,*) nf90_strerror(istat)
+                         call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE_CLOSE_LINEAR_NETCDF')
+                      end if
+                  end if
+                  call t_stopf ('read_nudging_data')
+
+
+              else
+                  ! The previous end point becomes the start point
+                  ! Only need to read in the new end point
+                  !-----------------------------------------------
+                  INTP_U10(:,:,1)    = INTP_U10(:,:,2)
+                  INTP_V10(:,:,1)    = INTP_V10(:,:,2)
+                  INTP_T2(:,:,1)     = INTP_T2(:,:,2)
+                  INTP_TD2(:,:,1)    = INTP_TD2(:,:,2)
+                  INTP_TS(:,:,1)     = INTP_TS(:,:,2)
+                  INTP_PRECC(:,:,1)  = INTP_PRECC(:,:,2)
+                  INTP_PRECL(:,:,1)  = INTP_PRECL(:,:,2)
+                  INTP_PRECSC(:,:,1) = INTP_PRECSC(:,:,2)
+                  INTP_PRECSL(:,:,1) = INTP_PRECSL(:,:,2)
+                  INTP_EVAP(:,:,1)   = INTP_EVAP(:,:,2)
+                  INTP_LHFLX(:,:,1)  = INTP_LHFLX(:,:,2)
+                  INTP_SHFLX(:,:,1)  = INTP_SHFLX(:,:,2)
+                  INTP_FSNS(:,:,1)   = INTP_FSNS(:,:,2)
+                  INTP_FLDS(:,:,1)   = INTP_FLDS(:,:,2)
+                  INTP_FSDS(:,:,1)   = INTP_FSDS(:,:,2)
+                  INTP_FSDSD(:,:,1)  = INTP_FSDSD(:,:,2)
+                  INTP_FSDSUV(:,:,1) = INTP_FSDSUV(:,:,2)
+
+                  if (masterproc) then
+                     strt2(1) = 1
+                     strt2(2) = 1
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
+                  end if
+                  call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, INTP_U10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, INTP_V10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, INTP_T2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, INTP_TD2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, INTP_TS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, INTP_EVAP(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,2))
+
+              end if    ! first file for single time slice per file
+
+           else
+              ! Multiple time slices per file
+              ! The start point uses the CURR time slice
+              ! The end point uses the NEXT time slice
+              !-----------------------------------------
+              if (first_srf_file) then
+                  first_srf_file = .false.
+                  call get_curr_date(Year,Month,Day,Sec)
+                  n_cnt = Sec/Nudge_Step + 1
+                  if (n_cnt .eq. Nudge_SRF_File_Ntime) then
+                     if (masterproc) then
+                        call t_startf ('read_nudging_data')
+                        call open_netcdf (ncid1, -Nudge_Step, Nudge_SRF_File_Template)
+                        call t_stopf ('read_nudging_data')
+                        strt2(1) = 1
+                        strt2(2) = n_cnt
+                        cnt2(1)  = ncol
+                        cnt2(2)  = 1
+                     end if
+
+                     !-----------------------------------------
+                     ! The start point uses the CURR time slice
+                     !-----------------------------------------
+                     call read_and_scatter_se_2d(ncid1, 'U10',    strt2, cnt2, INTP_U10(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'V10',    strt2, cnt2, INTP_V10(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'T2',     strt2, cnt2, INTP_T2(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'TD2',    strt2, cnt2, INTP_TD2(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'TS',     strt2, cnt2, INTP_TS(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'ER',     strt2, cnt2, INTP_EVAP(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,1))
+                     call read_and_scatter_se_2d(ncid1, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,1))
+
+                     if (masterproc) then
+                        strt2(2) = 1
+                     end if
+
+                     !-----------------------------------------
+                     ! The end point uses the NEXT time slice
+                     !---------------------------------------
+                     call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, INTP_U10(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, INTP_V10(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, INTP_T2(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, INTP_TD2(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, INTP_TS(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, INTP_EVAP(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,2))
+                     call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,2))
+
+                     call t_startf ('read_nudging_data')
+                     if (masterproc) then
+                         istat=nf90_close(ncid1)
+                         if (istat.ne.NF90_NOERR) then
+                            write(iulog,*) nf90_strerror(istat)
+                            call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE_CLOSE_LINEAR_NETCDF')
+                         end if
+                     end if
+                     call t_stopf ('read_nudging_data')
+                  else
+                     ! two time slices are in the same nudging data file
+                     do n = n_cnt, n_cnt+1
+                        if (masterproc) then
+                           strt2(1) = 1
+                           strt2(2) = n
+                           cnt2(1)  = ncol
+                           cnt2(2)  = 1
+                        end if
+                        ind = n - n_cnt + 1
+                        call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, INTP_U10(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, INTP_V10(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, INTP_T2(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, INTP_TD2(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, INTP_TS(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, INTP_EVAP(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,ind))
+                        call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,ind))
+
+                     end do
+                  end if
+
+              else
+
+                  call get_curr_date(Year,Month,Day,Sec)
+                  n_cnt = Sec/Nudge_Step + 1
+                  n_cnt = n_cnt + 1                ! open the nudging data at future model time step
+                  if (n_cnt .gt. Nudge_SRF_File_Ntime) then
+                      n_cnt = 1
+                  end if
+                  ! The previous end point becomes the start point
+                  ! Only need to read in the new end point
+                  !-----------------------------------------------
+                  INTP_U10(:,:,1)    = INTP_U10(:,:,2)
+                  INTP_V10(:,:,1)    = INTP_V10(:,:,2)
+                  INTP_T2(:,:,1)     = INTP_T2(:,:,2)
+                  INTP_TD2(:,:,1)    = INTP_TD2(:,:,2)
+                  INTP_TS(:,:,1)     = INTP_TS(:,:,2)
+                  INTP_PRECC(:,:,1)  = INTP_PRECC(:,:,2)
+                  INTP_PRECL(:,:,1)  = INTP_PRECL(:,:,2)
+                  INTP_PRECSC(:,:,1) = INTP_PRECSC(:,:,2)
+                  INTP_PRECSL(:,:,1) = INTP_PRECSL(:,:,2)
+                  INTP_EVAP(:,:,1)   = INTP_EVAP(:,:,2)
+                  INTP_LHFLX(:,:,1)  = INTP_LHFLX(:,:,2)
+                  INTP_SHFLX(:,:,1)  = INTP_SHFLX(:,:,2)
+                  INTP_FSNS(:,:,1)   = INTP_FSNS(:,:,2)
+                  INTP_FLDS(:,:,1)   = INTP_FLDS(:,:,2)
+                  INTP_FSDS(:,:,1)   = INTP_FSDS(:,:,2)
+                  INTP_FSDSD(:,:,1)  = INTP_FSDSD(:,:,2)
+                  INTP_FSDSUV(:,:,1) = INTP_FSDSUV(:,:,2)
+
+                  if (masterproc) then
+                     strt2(1) = 1
+                     strt2(2) = n_cnt
+                     cnt2(1)  = ncol
+                     cnt2(2)  = 1
+                  end if
+
+                  call read_and_scatter_se_2d(ncid, 'U10',    strt2, cnt2, INTP_U10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'V10',    strt2, cnt2, INTP_V10(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'T2',     strt2, cnt2, INTP_T2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TD2',    strt2, cnt2, INTP_TD2(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'TS',     strt2, cnt2, INTP_TS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECC',  strt2, cnt2, INTP_PRECC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECL',  strt2, cnt2, INTP_PRECL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSC', strt2, cnt2, INTP_PRECSC(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'PRECSL', strt2, cnt2, INTP_PRECSL(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'ER',     strt2, cnt2, INTP_EVAP(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'LHFLX',  strt2, cnt2, INTP_LHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'SHFLX',  strt2, cnt2, INTP_SHFLX(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSNS',   strt2, cnt2, INTP_FSNS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FLDS',   strt2, cnt2, INTP_FLDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDS',   strt2, cnt2, INTP_FSDS(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSD',  strt2, cnt2, INTP_FSDSD(:,:,2))
+                  call read_and_scatter_se_2d(ncid, 'FSDSUV', strt2, cnt2, INTP_FSDSUV(:,:,2))
+
+              end if ! first_srf_file for multiple time slices
+
+           end if     ! single vs. multiple time slices per file
+
+      case default
+          write(iulog,*) 'ERROR: Unknown Input Nudge Method'
+          call endrun('nudging_update_srf_analyses_se: bad input nudge method')
+   end select
+
+   if(masterproc) then
+     istat=nf90_close(ncid)
+     if (istat.ne.NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun ('UPDATE_LAND_SURFACE_ANALYSES_SE_CLOSE')
+     end if
+   end if ! (masterproc) then
+
+   ! End Routine
+   !------------
+   return
+  end subroutine ! nudging_update_srf_analyses_se
 
   !================================================================
   subroutine nudging_update_analyses_eul(anal_file)
@@ -2402,7 +3804,6 @@ contains
 
    integer :: cnt4(4)               ! array of counts for each dimension
    integer :: strt4(4)              ! array of starting indices
-   character(len=cl) :: nudge_file1
    integer :: n, n_cnt, ncid1, ind
    integer :: Year, Month, Day, Sec
 
@@ -2524,25 +3925,17 @@ contains
               cnt4(3)  = pver
               cnt4(4)  = 1
            end if
-           if ( Nudge_Uprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid, 'U', strt4, cnt4, Target_U)
-           end if
-           if ( Nudge_Vprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid, 'V', strt4, cnt4, Target_V)
-           end if
-           if ( Nudge_Tprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid, 'T', strt4, cnt4, Target_T)
-           end if
-           if ( Nudge_Qprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, Target_Q)
-           end if
+           call read_and_scatter_fv(ncid, 'U', strt4, cnt4, Target_U)
+           call read_and_scatter_fv(ncid, 'V', strt4, cnt4, Target_V)
+           call read_and_scatter_fv(ncid, 'T', strt4, cnt4, Target_T)
+           call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, Target_Q)
 
       case ('IMT')
            call get_curr_date(Year,Month,Day,Sec)
            if (mod(Sec,Nudge_Step) .ne. 0) return  ! ensure that intermittent simulations work for restart run
            if (masterproc) then
               call t_startf ('read_nudging_data')
-              call open_netcdf (ncid1, -Nudge_Step)
+              call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
               call t_stopf ('read_nudging_data')
               n_cnt = Sec/Nudge_Step + 1
               if (n_cnt .gt. Nudge_File_Ntime) then       ! account for one time slice per file
@@ -2559,18 +3952,10 @@ contains
            end if
            ! Use the CURR time slice for nudging
            !------------------------------------
-           if ( Nudge_Uprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, Target_U)
-           end if
-           if ( Nudge_Vprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, Target_V)
-           end if
-           if ( Nudge_Tprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, Target_T)
-           end if
-           if ( Nudge_Qprof .ne. 0 ) then
-              call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, Target_Q)
-           end if
+           call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, Target_U)
+           call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, Target_V)
+           call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, Target_T)
+           call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, Target_Q)
 
       case ('Linear')
            ! Single time slice per file
@@ -2580,7 +3965,7 @@ contains
                   first_file = .false.
                   if (masterproc) then
                      call t_startf ('read_nudging_data')
-                     call open_netcdf (ncid1, -Nudge_Step)
+                     call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
                      call t_stopf ('read_nudging_data')
                      strt4(1) = 1
                      strt4(2) = 1
@@ -2592,35 +3977,21 @@ contains
                      cnt4(4)  = 1
                   end if
 
+                  !---------------------------------------
                   ! The start point uses the CURR time slice
                   !-----------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, INTP_U(:,:,:,1))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, INTP_V(:,:,:,1))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, INTP_T(:,:,:,1))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, INTP_Q(:,:,:,1))
-                  end if
+                  call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, INTP_U(:,:,:,1))
+                  call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, INTP_V(:,:,:,1))
+                  call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, INTP_T(:,:,:,1))
+                  call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, INTP_Q(:,:,:,1))
 
+                  !---------------------------------------
                   ! The end point uses the NEXT time slice
                   !---------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
-                  end if
+                  call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
 
                   call t_startf ('read_nudging_data')
                   if (masterproc) then
@@ -2633,21 +4004,14 @@ contains
                   call t_stopf ('read_nudging_data')
 
               else
+                  !-----------------------------------------------
                   ! The previous end point becomes the start point
                   ! Only need to read in the new end point
                   !-----------------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
-                  end if
+                  INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
+                  INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
+                  INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
+                  INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
                   if (masterproc) then
                      strt4(1) = 1
                      strt4(2) = 1
@@ -2658,18 +4022,10 @@ contains
                      cnt4(3)  = pver
                      cnt4(4)  = 1
                   end if
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
-                  end if
+                  call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
 
               end if    ! first file for single time slice per file
 
@@ -2685,7 +4041,7 @@ contains
                   if (n_cnt .eq. Nudge_File_Ntime) then
                      if (masterproc) then
                         call t_startf ('read_nudging_data')
-                        call open_netcdf (ncid1, -Nudge_Step)
+                        call open_netcdf (ncid1, -Nudge_Step, Nudge_File_Template)
                         call t_stopf ('read_nudging_data')
                         strt4(1) = 1
                         strt4(2) = 1
@@ -2697,38 +4053,25 @@ contains
                         cnt4(4)  = 1
                      end if
 
+                     !-----------------------------------------
                      ! The start point uses the CURR time slice
                      !-----------------------------------------
-                     if ( Nudge_Uprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, INTP_U(:,:,:,1))
-                     end if
-                     if ( Nudge_Vprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, INTP_V(:,:,:,1))
-                     end if
-                     if ( Nudge_Tprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, INTP_T(:,:,:,1))
-                     end if
-                     if ( Nudge_Qprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, INTP_Q(:,:,:,1))
-                     end if
+                     call read_and_scatter_fv(ncid1, 'U', strt4, cnt4, INTP_U(:,:,:,1))
+                     call read_and_scatter_fv(ncid1, 'V', strt4, cnt4, INTP_V(:,:,:,1))
+                     call read_and_scatter_fv(ncid1, 'T', strt4, cnt4, INTP_T(:,:,:,1))
+                     call read_and_scatter_fv(ncid1, 'Q', strt4, cnt4, INTP_Q(:,:,:,1))
 
                      if (masterproc) then
                         strt4(4) = 1
                      end if
+
+                     !-----------------------------------------
                      ! The end point uses the NEXT time slice
                      !---------------------------------------
-                     if ( Nudge_Uprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
-                     end if
-                     if ( Nudge_Vprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
-                     end if
-                     if ( Nudge_Tprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
-                     end if
-                     if ( Nudge_Qprof .ne. 0 ) then
-                        call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
-                     end if
+                     call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
+                     call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
+                     call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
+                     call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
 
                      call t_startf ('read_nudging_data')
                      if (masterproc) then
@@ -2753,18 +4096,10 @@ contains
                            cnt4(4)  = 1
                         end if
                         ind = n - n_cnt + 1
-                        if ( Nudge_Uprof .ne. 0 ) then
-                           call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,ind))
-                        end if
-                        if ( Nudge_Vprof .ne. 0 ) then
-                           call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,ind))
-                        end if
-                        if ( Nudge_Tprof .ne. 0 ) then
-                           call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,ind))
-                        end if
-                        if ( Nudge_Qprof .ne. 0 ) then
-                           call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,ind))
-                        end if
+                        call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,ind))
+                        call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,ind))
+                        call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,ind))
+                        call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,ind))
                      end do
                   end if
 
@@ -2780,18 +4115,10 @@ contains
                   ! The previous end point becomes the start point
                   ! Only need to read in the new end point
                   !-----------------------------------------------
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
-                  end if
+                  INTP_U(:,:,:,1) = INTP_U(:,:,:,2)
+                  INTP_V(:,:,:,1) = INTP_V(:,:,:,2)
+                  INTP_Q(:,:,:,1) = INTP_Q(:,:,:,2)
+                  INTP_T(:,:,:,1) = INTP_T(:,:,:,2)
                   if (masterproc) then
                      strt4(1)        = 1
                      strt4(2)        = 1
@@ -2802,18 +4129,11 @@ contains
                      cnt4(3)         = pver
                      cnt4(4)         = 1
                   end if
-                  if ( Nudge_Uprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
-                  end if
-                  if ( Nudge_Vprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
-                  end if
-                  if ( Nudge_Tprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
-                  end if
-                  if ( Nudge_Qprof .ne. 0 ) then
-                     call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
-                  end if
+
+                  call read_and_scatter_fv(ncid, 'U', strt4, cnt4, INTP_U(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'V', strt4, cnt4, INTP_V(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'T', strt4, cnt4, INTP_T(:,:,:,2))
+                  call read_and_scatter_fv(ncid, 'Q', strt4, cnt4, INTP_Q(:,:,:,2))
 
               end if ! first_file for multiple time slices
 
@@ -3114,20 +4434,59 @@ contains
   !================================================================
 
   !================================================================
+  real(r8) function nudging_set_SRFprofile(rlat,rlon,Nudge_SRFprof)
+   !
+   ! NUDGING_SET_SRFPROFILE: for the given lat and lon set the land 
+   !                      surface profile value for the specified index.
+   !                      Values range from 0. to 1. to affect spatial
+   !                      variations on nudging strength.
+   !===============================================================
+
+   ! Arguments
+   !--------------
+   real(r8) rlat,rlon
+   integer  Nudge_SRFprof
+
+   ! Local values
+   !----------------
+
+   !---------------
+   ! set coeffcient
+   !---------------
+   if(Nudge_SRFprof.eq.0) then
+     ! No Nudging
+     !-------------
+     nudging_set_SRFprofile=0.0
+   elseif(Nudge_SRFprof.eq.1) then
+     ! Uniform Nudging
+     !-----------------
+     nudging_set_SRFprofile=1.0
+   else
+     call endrun('nudging_set_SRFprofile:: Unknown Nudge_prof value')
+   endif
+
+   ! End Routine
+   !------------
+   return
+  end function ! nudging_seat_SRFprofile
+  !================================================================
+
+  !================================================================
   ! JS - 04/11/2020 : subroutines for new functions and flexibility
   !================================================================
 
   !-----------------------
   ! open a new netcdf file
   !-----------------------
-  subroutine open_netcdf (ncid, incre_step)
+  subroutine open_netcdf (ncid, incre_step, Nudge_File_Template)
   use cam_abortutils, only : endrun
   use perf_mod
   use netcdf
   use filenames ,only      : interpret_filename_spec
 
-  integer, intent(out)    :: ncid
-  integer, intent(in)     :: incre_step
+  integer, intent(out)          :: ncid
+  integer, intent(in)           :: incre_step
+  character(len=cl), intent(in) :: Nudge_File_Template
 
   ! local variable  
   integer :: YMD3, YMD4, Nudge_Next1_Sec, Nudge_Next1_Year, &
@@ -3136,19 +4495,23 @@ contains
 
   YMD3 = (Nudge_Next_Year*10000) + &
          (Nudge_NEXT_Month*100) + Nudge_Next_Day
+
   call timemgr_time_inc(YMD3,Nudge_Next_Sec,  &
                         YMD4,Nudge_Next1_Sec, &
                         incre_step,0,0)
+
   Nudge_Next1_Year = YMD4/10000
   YMD4 = YMD4-(Nudge_Next1_Year*10000)
   Nudge_Next1_Month = YMD4/100
   Nudge_Next1_Day   = YMD4-(Nudge_Next1_Month*100)
+
   nudge_file = interpret_filename_spec (  &
                     Nudge_File_Template,  &
                yr_spec=Nudge_Next1_Year,  &
               mon_spec=Nudge_Next1_Month, &
               day_spec=Nudge_Next1_Day  , &
               sec_spec=Nudge_Next1_Sec    )
+
   istat=nf90_open(trim(Nudge_Path)//trim(nudge_file),NF90_NOWRITE,ncid)
   if (istat .ne. NF90_NOERR) then
       write(iulog,*) 'NF90_OPEN: failed for file',trim(nudge_file)
@@ -3157,7 +4520,61 @@ contains
   endif
   write(iulog,*) 'NUDGING: Reading new analyses:',trim(Nudge_Path)//trim(nudge_file)
 
-  end subroutine
+  return
+  end subroutine !open_netcdf
+
+  !--------------------------------------------
+  ! Get and scatter nudging data for SE 2d var 
+  !--------------------------------------------
+  subroutine read_and_scatter_se_2d (ncid, vname, strt2, cnt2, out_x)
+  use ppgrid, only                 : pver,pcols,begchunk,endchunk
+  use cam_abortutils, only         : endrun
+  use perf_mod
+  use netcdf
+
+  integer, intent(in)             :: ncid
+  integer, intent(in)             :: strt2(2), cnt2(2)
+  character (len = *), intent(in) :: vname
+  real(r8), intent(out)           :: out_x(pcols,begchunk:endchunk)
+
+  ! local variables
+  real(r8)                        :: Xanal(Nudge_ncol)
+  real(r8)                        :: tinfo
+  integer                         :: istat, varid, varid1
+
+  if (masterproc) then
+    call t_startf ('read_nudging_data')
+    istat = nf90_inq_varid(ncid,vname,varid)
+    if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun ('ANALYSES_SE_INQ_VARID')
+    end if
+    istat = nf90_get_var(ncid,varid,Xanal,strt2,cnt2)
+    if (istat .ne. NF90_NOERR) then
+        write(iulog,*) nf90_strerror(istat)
+        call endrun ('ANALYSES_SE_GET_VAR')
+    end if
+    call t_stopf ('read_nudging_data')
+
+    ! check whether the time slice is read in correctly
+    istat = nf90_inq_varid(ncid,'time',varid1)
+    if (istat .ne. NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun ('ANALYSES_SE_INQ_VARID')
+     end if
+     istat = nf90_get_var(ncid,varid1,tinfo,start=(/strt2(2)/))
+     if (istat .ne. NF90_NOERR) then
+         write(iulog,*) nf90_strerror(istat)
+         call endrun ('ANALYSES_SE_GET_VAR')
+     end if
+     write(iulog,*) 'NUDGING: Current time slice is: ', tinfo, ', strt2(2) = ', strt2(2), ', reading variable: ', vname
+  end if
+  call t_startf ('distribute_data')
+  call scatter_field_to_chunk(1,1,1,Nudge_ncol,Xanal,out_x)
+  call t_stopf ('distribute_data')
+
+  return
+  end subroutine !read_and_scatter_se_2d
 
   !------------------------------------
   ! Get and scatter nudging data for SE
@@ -3209,7 +4626,8 @@ contains
   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_ncol,Xanal,out_x)                
   call t_stopf ('distribute_data')          
                
-  end subroutine               
+  return
+  end subroutine !read_and_scatter_se              
                 
   !------------------------------------        
   ! Get and scatter nudging data for FV         
@@ -3270,7 +4688,8 @@ contains
   call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,out_x)
   call t_stopf ('distribute_data')
 
-  end subroutine
+  return 
+  end subroutine !read_and_scatter_fv
 
   !---------------------
   ! Linear interpolation
@@ -3301,7 +4720,878 @@ contains
      output = ( input(:,:,:,2) - input(:,:,:,1) ) * &
               factor + input(:,:,:,1)
   end if
+ 
+  return
+  end subroutine !linear_interpolation
 
-  end subroutine
+  !----------------------------------
+  ! Linear interpolation 2d variable
+  !----------------------------------
+  subroutine linear_interpolation_2d (input, output)
+  use ppgrid,      only : pver,pcols,begchunk,endchunk
+  real(r8), intent(in)  :: input(pcols,begchunk:endchunk,2)
+  real(r8), intent(out) :: output(pcols,begchunk:endchunk)
+
+  ! Local variable
+  integer               :: Year, Month, Day, Sec
+  real(r8)              :: factor
+  call get_curr_date(Year,Month,Day,Sec)
+
+  if ( Nudge_CurrentStep ) then
+     factor = (Sec - (Sec/Nudge_Step)*Nudge_Step) * &
+              1._r8 / (Nudge_Step * 1._r8)
+  else
+     factor = (Sec - (Sec/Nudge_Step)*Nudge_Step + Model_Step) * &
+              1._r8 / (Nudge_Step * 1._r8)
+  end if
+
+  if ( factor .eq. 1._r8 ) then
+     output = input(:,:,2)
+  else if ( factor .eq. 0._r8 ) then
+     output = input(:,:,1)
+  else
+     output = ( input(:,:,2) - input(:,:,1) ) * &
+              factor + input(:,:,1)
+  end if
+
+  return
+  end subroutine ! linear_interpolation_2d
+
+  !------------------------------------
+  ! Update nudging tendency for 3d field SE 
+  !------------------------------------
+  subroutine update_nudging_tend (ncol, dtime, psmod, psobs, psfac,     & !In
+                                  umod, uobs, ufac, vmod, vobs, vfac,   & !In 
+                                  tmod, tobs, tfac, qmod, qobs, qfac,   & !In 
+                                  ubobs, vbobs, tbobs, tdbobs, qbobs,   & !In 
+                                  sfac, ndg_srf_on, ndg_srf_state_on,   & !In
+                                  ndg_srf_q, phis_mod, phis_obs, pblh,  & !In
+                                  use_ps_adj, use_q_adj, use_pdep_nudge,& !In 
+                                  use_upp_lrelx, no_pbl_uv, no_pbl_t,   & !In 
+                                  no_pbl_q, ndg_ps_flg, ndg_ps_opt,     & !In
+                                  ndg_u_flg, ndg_v_flg, ndg_uv_opt,     & !In
+                                  ndg_t_flg, ndg_t_opt,                 & !In 
+                                  ndg_q_flg, ndg_q_opt,                 & !In 
+                                  zm_obs, zm_mod, psdt,                 & !Out
+                                  udt, vdt, tdt, qdt)                     !Out 
+
+  use hycoef,        only  : hycoef_init, hyam, hybm, hyai, hybi, ps0
+  use ppgrid,        only  : pver,pverp,pcols
+  use shr_vmath_mod, only  : shr_vmath_log
+  use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
+  use constituents,  only  : cnst_get_ind, pcnst
+  use cam_abortutils,only  : endrun
+  use wv_saturation, only  : qsat, qsat_water, svp_ice
+  use geopotential,  only  : geopotential_t
+
+  integer, intent(in)  :: ncol    ! number of columns
+ 
+  logical, intent(in)  :: use_pdep_nudge
+  logical, intent(in)  :: use_upp_lrelx
+  logical, intent(in)  :: use_ps_adj
+  logical, intent(in)  :: use_q_adj
+
+  integer, intent(in)  :: no_pbl_uv
+  integer, intent(in)  :: no_pbl_t
+  integer, intent(in)  :: no_pbl_q
+
+  real(r8), intent(in) :: dtime
+  real(r8), intent(in) :: pblh(pcols)
+
+  !!variables for land-surface nudging 
+  logical, intent(in)  :: ndg_srf_on
+  logical, intent(in)  :: ndg_srf_state_on
+  logical, intent(in)  :: ndg_srf_q
+
+  real(r8), intent(in) :: sfac(pcols)
+  real(r8), intent(in) :: ubobs(pcols) ! 10m wind 
+  real(r8), intent(in) :: vbobs(pcols) ! 10m wind 
+  real(r8), intent(in) :: tbobs(pcols) ! 2m temperature 
+  real(r8), intent(in) :: tdbobs(pcols)! 2m dewpoint tempeature 
+  real(r8), intent(in) :: qbobs(pcols) ! 2m humidity
+
+  !!variables for 3-D atmosphere nudging 
+  integer, intent(in)  :: ndg_ps_opt
+  integer, intent(in)  :: ndg_uv_opt
+  integer, intent(in)  :: ndg_t_opt
+  integer, intent(in)  :: ndg_q_opt
+
+  integer, intent(in)  :: ndg_ps_flg
+  integer, intent(in)  :: ndg_u_flg
+  integer, intent(in)  :: ndg_v_flg
+  integer, intent(in)  :: ndg_t_flg
+  integer, intent(in)  :: ndg_q_flg
+
+  real(r8), intent(in) :: phis_mod(pcols)
+  real(r8), intent(in) :: phis_obs(pcols)
+
+  real(r8), intent(inout) :: psmod(pcols)
+  real(r8), intent(inout) :: umod(pcols,pver)
+  real(r8), intent(inout) :: vmod(pcols,pver)
+  real(r8), intent(inout) :: tmod(pcols,pver)
+  real(r8), intent(inout) :: qmod(pcols,pver)
+
+  real(r8), intent(inout) :: psobs(pcols)
+  real(r8), intent(inout) :: uobs(pcols,pver)
+  real(r8), intent(inout) :: vobs(pcols,pver)
+  real(r8), intent(inout) :: tobs(pcols,pver)
+  real(r8), intent(inout) :: qobs(pcols,pver)
+
+  real(r8), intent(inout) :: psfac(pcols)
+  real(r8), intent(inout) :: ufac(pcols,pver)
+  real(r8), intent(inout) :: vfac(pcols,pver)
+  real(r8), intent(inout) :: tfac(pcols,pver)
+  real(r8), intent(inout) :: qfac(pcols,pver)
+
+  real(r8), intent(inout) :: psdt(pcols)
+  real(r8), intent(inout) :: udt(pcols,pver)
+  real(r8), intent(inout) :: vdt(pcols,pver)
+  real(r8), intent(inout) :: tdt(pcols,pver)
+  real(r8), intent(inout) :: qdt(pcols,pver)
+
+  real(r8), intent(out)   :: zm_mod(pcols,pver)
+  real(r8), intent(out)   :: zm_obs(pcols,pver)
+
+  ! local variables 
+  real(r8) :: pint_obs(pcols,pverp)
+  real(r8) :: pmid_obs(pcols,pver)
+  real(r8) :: pdel_obs(pcols,pver)
+  real(r8) :: rpdel_obs(pcols,pver)
+  real(r8) :: lnpint_obs(pcols,pverp)
+  real(r8) :: lnpmid_obs(pcols,pver)
+  real(r8) :: exner_obs(pcols,pver)
+  real(r8) :: zi_obs(pcols,pverp)
+
+  real(r8) :: pint_mod(pcols,pverp)
+  real(r8) :: pmid_mod(pcols,pver)
+  real(r8) :: pdel_mod(pcols,pver)
+  real(r8) :: rpdel_mod(pcols,pver)
+  real(r8) :: lnpint_mod(pcols,pverp)
+  real(r8) :: lnpmid_mod(pcols,pver)
+  real(r8) :: exner_mod(pcols,pver)
+  real(r8) :: zi_mod(pcols,pverp)
+
+  real(r8) :: dqsdT_mod(pcols,pver)
+  real(r8) :: dqsdT_obs(pcols,pver)
+  real(r8) :: qsmod(pcols,pver)
+  real(r8) :: qsobs(pcols,pver)
+  real(r8) :: esmod(pcols,pver)
+  real(r8) :: esobs(pcols,pver)
+  real(r8) :: rhmod(pcols,pver)
+  real(r8) :: rhobs(pcols,pver)
+  real(r8) :: tvmod(pcols,pver)
+  real(r8) :: tvobs(pcols,pver)
+
+  real(r8) :: rairv(pcols,pver)
+  real(r8) :: zvirv(pcols,pver)
+  real(r8) :: qref(pcols,pver)
+  real(r8) :: tref(pcols,pver)
+  real(r8) :: uref(pcols,pver)
+  real(r8) :: vref(pcols,pver)
+  real(r8) :: psref(pcols)
+
+  integer  :: i, k, m
+  logical  :: l_adj_super_saturation 
+
+  ! initialize the flag for supersaturation adjustment 
+  if(ndg_t_opt > 0 .or. ndg_q_opt > 0 ) then
+    l_adj_super_saturation = .true.
+  else
+    l_adj_super_saturation = .false.
+  end if
+
+  ! initialize all
+  do i = 1, ncol
+    psdt(i)  = 0._r8
+    psref(i) = psobs(i)
+    do k = 1, pver
+      udt(i,k)  = 0._r8
+      vdt(i,k)  = 0._r8
+      tdt(i,k)  = 0._r8
+      qdt(i,k)  = 0._r8
+      rairv(i,k) = rair
+      zvirv(i,k) = zvir
+    end do
+  end do
+
+  !compute pressure and ln(pres) at layer interfaces
+  do k = 1, pver
+     do i = 1, ncol 
+       pint_obs(i,k) = hyai(k)*ps0 + hybi(k)* psobs(i)
+       pmid_obs(i,k) = hyam(k)*ps0 + hybm(k)* psobs(i)
+       pint_mod(i,k) = hyai(k)*ps0 + hybi(k)* psmod(i)
+       pmid_mod(i,k) = hyam(k)*ps0 + hybm(k)* psmod(i)
+     end do 
+     !logrithm of pressure 
+     call shr_vmath_log(pint_obs(1:ncol,k),lnpint_obs(1:ncol,k),ncol)
+     call shr_vmath_log(pmid_obs(1:ncol,k),lnpmid_obs(1:ncol,k),ncol)
+     call shr_vmath_log(pint_mod(1:ncol,k),lnpint_mod(1:ncol,k),ncol)
+     call shr_vmath_log(pmid_mod(1:ncol,k),lnpmid_mod(1:ncol,k),ncol)
+  end do 
+
+  !top interface level pver+1 
+  do i=1,ncol
+     pint_obs(i,pverp)=hyai(pverp)*ps0+hybi(pverp)*psobs(i)
+     pint_mod(i,pverp)=hyai(pverp)*ps0+hybi(pverp)*psmod(i)
+  end do
+  !logrithm of pressure 
+  call shr_vmath_log(pint_obs(1:ncol,pverp),lnpint_obs(1:ncol,pverp),ncol)
+  call shr_vmath_log(pint_mod(1:ncol,pverp),lnpint_mod(1:ncol,pverp),ncol)
+
+  !derive the layer thickness and exner
+  do k = 1, pver
+     do i = 1, ncol
+        pdel_obs(i,k)  = pint_obs(i,k+1) - pint_obs(i,k)
+        pdel_mod(i,k)  = pint_mod(i,k+1) - pint_mod(i,k)
+        rpdel_obs(i,k) = 1._r8/pdel_obs(i,k)
+        rpdel_mod(i,k) = 1._r8/pdel_mod(i,k)
+        exner_mod(i,k) = (pint_mod(i,pverp)/pmid_mod(i,k))**cappa
+        exner_obs(i,k) = (pint_obs(i,pverp)/pmid_obs(i,k))**cappa 
+     end do
+  end do
+
+  !derive the geoptential height 
+  call geopotential_t(lnpint_obs, lnpmid_obs, pint_obs, pmid_obs, pdel_obs, rpdel_obs, &
+                      tobs, qobs, rairv,gravit,zvirv,zi_obs,zm_obs,ncol)
+
+  call geopotential_t(lnpint_mod, lnpmid_mod, pint_mod, pmid_mod, pdel_mod, rpdel_mod, &
+                      tmod, qmod, rairv,gravit,zvirv,zi_mod,zm_mod,ncol)
+
+  !Nudge surface pressure 
+  if ( ndg_ps_flg > 0 ) then
+    select case (ndg_ps_opt)
+       case (0)
+        !mimic the ps nudging in GFDL model 
+         do k = 1, pver
+           do i = 1, ncol
+             uref(i,k) = umod(i,k)
+             vref(i,k) = vmod(i,k) 
+             tref(i,k) = tmod(i,k)*(1.0_r8 + zvir * qmod(i,k)) 
+             qref(i,k) = qmod(i,k)
+           end do
+         end do
+         call ps_nudging(ncol, dtime, use_ps_adj, zi_obs, zm_obs, &
+                         pint_obs, pint_mod, pmid_obs, pmid_mod, &
+                         lnpint_obs, lnpint_mod, lnpmid_obs, lnpmid_mod, & 
+                         pdel_obs, pdel_mod, rpdel_obs, rpdel_mod, &
+                         uref, vref, tref, qref, tobs, psref, &
+                         phis_obs, phis_mod, psobs, psmod, psfac, psdt )
+         do k = 1, pver
+           do i = 1, ncol
+             udt(i,k)  = udt(i,k) + (uref(i,k) - umod(i,k)) / dtime
+             vdt(i,k)  = vdt(i,k) + (vref(i,k) - vmod(i,k)) / dtime
+             tdt(i,k)  = tdt(i,k) + (tref(i,k)/(1.0_r8 + zvir * qref(i,k)) - tmod(i,k)) / dtime
+             qdt(i,k)  = qdt(i,k) + (qref(i,k) - qmod(i,k)) / dtime
+           enddo
+         enddo
+       case default
+         call endrun('nudging_tend error: invalid option for PS nudging')
+    end select
+  
+  end if
+
+  !Apply scaling on nudging strength in upper and bottom model layers 
+  call update_nudge_prof (ncol, zm_mod, zi_mod, pmid_mod, pblh, & !In 
+                          use_pdep_nudge, use_upp_lrelx,        & !In 
+                          no_pbl_uv, no_pbl_t, no_pbl_q,        & !In 
+                          ufac, vfac, tfac, qfac)                 !Out 
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! Start to calculate nudging tendency 
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !calculate the virtual temperature, saturation mixing ratio and relative humidity 
+  !these information are needed for option 1 and 2 of T nudging 
+  !and for option 1 of Q nudging 
+  if ( ndg_t_opt > 0 .or. ndg_q_opt > 0 .or. ndg_srf_on ) then
+   ! calculate the virtual temperature, saturation mixing ratio and relative
+   ! humidity 
+     do k = 1, pver
+      do i = 1, ncol
+        call qsat(tobs(i,k), pmid_obs(i,k), esobs(i,k), qsobs(i,k), dqsdt=dqsdT_obs(i,k))
+        call qsat(tmod(i,k), pmid_mod(i,k), esmod(i,k), qsmod(i,k), dqsdt=dqsdT_mod(i,k))
+        rhobs(i,k) = qobs(i,k) / qsobs(i,k)
+        rhmod(i,k) = qmod(i,k) / qsmod(i,k)
+        tvobs(i,k) = tobs(i,k) * (1.0_r8 + zvir * qobs(i,k))
+        tvmod(i,k) = tmod(i,k) * (1.0_r8 + zvir * qmod(i,k))
+      end do
+    end do
+    ! limit humidity in the observational data 
+    do k = 1, pver
+      do i = 1, ncol
+        qref(i,k)  = max(1.E-8_r8, qobs(i,k))
+        ! adjust supersaturation
+        if(l_adj_super_saturation .and. (qobs(i,k) > qsobs(i,k))) then
+           qref(i,k)  = qsobs(i,k)
+           rhobs(i,k) = 1._r8
+        end if
+      end do
+    end do
+  end if
+
+  ! zonal wind component
+  if ( ndg_u_flg > 0 ) then 
+    select case (ndg_uv_opt)
+       case (0)
+         ! direct nudging 
+         udt(:,:) = udt(:,:) + (uobs(:,:) - umod(:,:))*ufac(:,:)  
+       case default
+       call endrun('nudging_tend error: invalid option for U nudging')
+    end select
+  end if 
+
+  ! meridional wind component
+  if ( ndg_v_flg > 0 ) then
+    select case (ndg_uv_opt)
+       case (0)
+         ! direct nudging 
+         vdt(:,:) = vdt(:,:) + (vobs(:,:) - vmod(:,:))*vfac(:,:)
+       case default
+       call endrun('nudging_tend error: invalid option for V nudging')
+    end select
+  end if
+
+  ! temperature 
+  if ( ndg_t_flg > 0 ) then
+    select case (ndg_t_opt)
+       case (0)
+         ! direct nudging 
+         tdt(:,:) = tdt(:,:) + (tobs(:,:) - tmod(:,:))*tfac(:,:) 
+       case (1)
+         ! nudge virtual temperature (Tv) 
+         ! Tangent linear of Tv with respect to T and q 
+         ! dT/dTv = d(Tv/(1 + zvir * q))/dTv = 1/(1 + zvir * q)
+         ! dT     = dTv / (1 + zvir * q) 
+         do k = 1, pver
+          do i = 1, ncol
+            tdt(i,k) = tdt(i,k) + (tvobs(i,k) - tvmod(i,k))*tfac(i,k) &
+                                  /(1.0_r8 + zvir * qmod(i,k)) 
+          end do            
+         end do 
+       case (2)
+         ! Reference: Yang et. al. (2021, JMR), Fan and Tilley (2005, MWR)
+         ! nudge relative humidity (RH) to adjust T 
+         ! Tangent linear of RH with respect to T and q 
+         ! dRH/dT = d(q/qs)/dT = - q/qs^2 * dqs/dT 
+         ! dT     = dRH / (-RH/qs * dqs/dT )
+         do k = 1, pver
+          do i = 1, ncol
+            if ( (qmod(i,k) > 0._r8) .and. (dqsdT_mod(i,k) > 0._r8) ) then
+              tdt(i,k) = tdt(i,k) - (rhobs(i,k)-rhmod(i,k))*qfac(i,k) &
+                                   *qsmod(i,k)*qsmod(i,k)/(max(qmod(i,k),1.E-8_r8)*dqsdT_mod(i,k))
+            else 
+              tdt(i,k) = tdt(i,k) + (tvobs(i,k) - tvmod(i,k))*tfac(i,k) &
+                                   /(1.0_r8 + zvir * qmod(i,k))
+            end if     
+          end do 
+         end do
+       case default
+         call endrun('nudging_tend error: invalid option for T nudging')
+    end select
+  end if 
+
+  ! humidity
+  if ( ndg_q_flg > 0 ) then
+    select case (ndg_q_opt)
+       case (0)
+         ! direct nudging 
+         qdt(:,:) = qdt(:,:) + (qref(:,:) - qmod(:,:))*qfac(:,:) 
+       case (1)
+         ! Reference: Yang et. al. (2021, JMR), Fan and Tilley (2005, MWR)
+         ! nudge relative humidity (RH), only adjust q
+         ! Tangent linear of RH with respect to q 
+         ! dRH/dT   = d(q/qs)/dT = - q/qs^2 * dqs/dT = -RH/qs * dqs/dT 
+         ! dRH/dq   = d(q/qs)/dq = 1/qs = RH / q 
+         ! dq       = qs*dRH
+         do k = 1, pver
+          do i = 1, ncol
+             qdt(i,k) = qdt(i,k) + (rhobs(i,k)-rhmod(i,k))*qsmod(i,k)*qfac(i,k)
+          end do
+         end do
+       case default
+         call endrun('nudging_tend error: invalid option for Q nudging')
+    end select
+  end if   
+
+  ! use the surface pressure to scale down the tendency at surface 
+  if (ndg_ps_flg > 0 ) then
+    do i = 1,ncol
+      udt(i,pver) = udt(i,pver)* psfac(i)
+      vdt(i,pver) = vdt(i,pver)* psfac(i)
+      tdt(i,pver) = tdt(i,pver)* psfac(i)
+      qdt(i,pver) = qdt(i,pver)* psfac(i)
+    end do
+  end if
+
+  ! land surface nudging 
+  if (ndg_srf_on .and. ndg_srf_state_on) then 
+
+    call update_land_nudging_tend(ncol, umod, vmod, tvmod, qmod,    & ! In 
+                                  ubobs, vbobs, tbobs, tdbobs,      & ! In 
+                                  qbobs, pmid_obs, sfac, ndg_srf_q, & ! In           
+                                  udt, vdt, tdt, qdt )                ! Out 
+
+  end if 
+
+  return
+  end subroutine !update_nudging_tend
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !!Following subroutine is used to apply nudging at the surface layer only  
+  !! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)   
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+  subroutine update_land_nudging_tend(ncol, umod, vmod, tvmod, qmod,    & ! In 
+                                      ubobs, vbobs, tbobs, tdbobs,      & ! In  
+                                      qbobs, pmid_obs, sfac, ndg_srf_q, & ! In 
+                                      udt, vdt, tdt, qdt )                ! Out 
+
+  use ppgrid,        only  : pver,pverp,pcols
+  use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
+  use cam_abortutils,only  : endrun
+  use wv_saturation, only  : qsat, qsat_water, svp_ice
+
+
+  integer,  intent(in) :: ncol    ! number of columns
+  logical,  intent(in) :: ndg_srf_q
+
+  real(r8), intent(in) :: sfac(pcols)
+  real(r8), intent(in) :: umod(pcols,pver)
+  real(r8), intent(in) :: vmod(pcols,pver)
+  real(r8), intent(in) :: tvmod(pcols,pver)
+  real(r8), intent(in) :: qmod(pcols,pver)
+
+  real(r8), intent(in) :: pmid_obs(pcols,pver)
+  real(r8), intent(in) :: ubobs(pcols) ! 10m wind 
+  real(r8), intent(in) :: vbobs(pcols) ! 10m wind 
+  real(r8), intent(in) :: tbobs(pcols) ! 2m temperature 
+  real(r8), intent(in) :: tdbobs(pcols)! 2m dewpoint tempeature 
+  real(r8), intent(in) :: qbobs(pcols) ! 2m humidity
+
+  real(r8), intent(inout) :: udt(pcols,pver)
+  real(r8), intent(inout) :: vdt(pcols,pver)
+  real(r8), intent(inout) :: tdt(pcols,pver)
+  real(r8), intent(inout) :: qdt(pcols,pver)
+
+  !Local variable 
+
+  !use dewpoint temperature to derive specific humidity at 2-m 
+  !because ERA5 reanalysis only provides dewpoint temperature at 2-m  
+  logical, parameter :: l_q2_from_td = .true.
+
+  !adjust supersaturation 
+  logical, parameter :: l_adj_super_saturation = .false.
+
+  integer  :: i, k, m
+
+  real(r8) :: wuprof(pcols,pver)
+  real(r8) :: wvprof(pcols,pver)
+  real(r8) :: wtprof(pcols,pver)
+  real(r8) :: wqprof(pcols,pver)
+
+  real(r8) :: qsbobs(pcols)
+  real(r8) :: esbobs(pcols)
+  real(r8) :: tvbobs(pcols)
+  real(r8) :: qbref(pcols)
+
+  !specify the vertical weighting 
+  do i = 1, ncol
+    do k = 1, pver
+     if( k < pver ) then
+       wuprof(i,k) = 0._r8
+       wvprof(i,k) = 0._r8
+       wtprof(i,k) = 0._r8
+       wqprof(i,k) = 0._r8
+     else
+       wuprof(i,k) = 1.0_r8
+       wvprof(i,k) = 1.0_r8
+       wtprof(i,k) = 1.0_r8
+       wqprof(i,k) = 1.0_r8
+     end if
+    end do
+  end do
+
+  if ( l_q2_from_td ) then
+    !derive the specific humidity from dewpoint temperature 
+    !see Eq(11) in LAWRENCE(2005,MWR)
+    do i = 1, ncol
+      call qsat(tbobs(i), pmid_obs(i,pver), esbobs(i), qsbobs(i))
+      qbref(i) = qsbobs(i) * exp((1.0_r8 - tbobs(i)/tdbobs(i))*latvap/rh2o/tbobs(i))
+    end do
+  else
+    !limit humidity in the observational data 
+    do i = 1, ncol
+      qbref(i)  = max(1.E-8_r8, qbobs(i))
+      ! adjust supersaturation
+      call qsat(tbobs(i), pmid_obs(i,pver), esbobs(i), qsbobs(i))
+      if(l_adj_super_saturation .and. (qbobs(i) > qsbobs(i))) then
+         qbref(i) = qsbobs(i)
+      end if
+    end do
+  end if
+
+  !convert the obs temperture to virtual temperature 
+  do i = 1, ncol
+    tvbobs(i) = tbobs(i) * (1.0_r8 + zvir * qbref(i))
+  end do
+
+  !calcualte the nudging tendency 
+  do k = 1, pver
+    do i = 1, ncol
+      udt(i,k) = udt(i,k) + (ubobs(i) - umod(i,pver))*wuprof(i,k)*sfac(i)
+      vdt(i,k) = vdt(i,k) + (vbobs(i) - vmod(i,pver))*wvprof(i,k)*sfac(i)
+      tdt(i,k) = tdt(i,k) + (tvbobs(i) - tvmod(i,pver))*wtprof(i,k)*sfac(i) &
+                            /(1.0_r8 + zvir * qmod(i,pver))
+      if (ndg_srf_q) then
+        qdt(i,k) = qdt(i,k) + (qbref(i) - qmod(i,pver))*wqprof(i,k)*sfac(i)
+      end if
+    end do
+  end do
+
+  return 
+  end subroutine !update_land_nudging_tend
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !!Following subroutine is used to modify the weight profiles of nudging tendency with
+  !!(1) a linear relaxation method to linearly relax the weight from 1 to 0 at upper   
+  !!    model levels so that weaker nudging is applied. This is becase the
+  !!    reanalysis and E3SM show large discrepencies in these layers                    
+  !!(2) a method to exclude the nudging tendencies within boundary layers as the
+  !!    nudging are found to significantly interfere model climate when the
+  !!    moisture is nudged within the boundary layers.  
+  !! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)   
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+  subroutine update_nudge_prof (ncol, zm_mod, zi_mod, pmid_mod, pblh, & !In 
+                                use_pdep_nudge, use_upp_lrelx,        & !In 
+                                no_pbl_uv, no_pbl_t, no_pbl_q,        & !In 
+                                ufac, vfac, tfac, qfac)                 !Out 
+
+  use ppgrid,        only  : pver,pverp,pcols
+  use physconst,     only  : rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
+  use cam_abortutils,only  : endrun
+
+  logical, intent(in)  :: use_upp_lrelx
+  logical, intent(in)  :: use_pdep_nudge
+
+  integer, intent(in)  :: ncol    
+  integer, intent(in)  :: no_pbl_uv
+  integer, intent(in)  :: no_pbl_t
+  integer, intent(in)  :: no_pbl_q
+
+  real(r8), intent(in) :: pmid_mod(pcols,pver) 
+  real(r8), intent(in) :: zi_mod(pcols,pverp) 
+  real(r8), intent(in) :: zm_mod(pcols,pverp) 
+  real(r8), intent(in) :: pblh(pcols)
+
+  real(r8), intent(inout) :: ufac(pcols,pver)
+  real(r8), intent(inout) :: vfac(pcols,pver)
+  real(r8), intent(inout) :: tfac(pcols,pver)
+  real(r8), intent(inout) :: qfac(pcols,pver)
+
+  !local variables 
+
+  !Parameters determined with experiment 
+  !From p_relax upwards, nudging is reduced linearly
+  real(r8), parameter :: p_uv_relax = 30.E2_r8  ! p_relax for u/v wind 
+  real(r8), parameter :: p_T_relax  = 10.E2_r8  ! p_relax for temperature  
+  real(r8), parameter :: p_q_relax  = 100.E2_r8 ! p_relax for humidity 
+  real(r8), parameter :: p_norelax  = 1.0_r8    ! from p_norelax upwards, no nudging
+  real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
+
+  integer  :: i, k, m
+
+  real(r8) :: kpblt(pcols)
+  real(r8) :: wuprof(pcols,pver)
+  real(r8) :: wvprof(pcols,pver)
+  real(r8) :: wtprof(pcols,pver)
+  real(r8) :: wqprof(pcols,pver)
+ 
+  ! initialize kpbl and weigthing profiles 
+  do i = 1, ncol
+    kpblt(i) = pver
+    do k = 1,pver
+      wuprof(i,k) = 0.0_r8 
+      wvprof(i,k) = 0.0_r8
+      wtprof(i,k) = 0.0_r8
+      wqprof(i,k) = 0.0_r8
+    end do 
+  end do
+
+  !Apply scaling such that nudging strength falls off with pressure.
+  if (use_pdep_nudge) then
+    do k = 1, pver
+      do i = 1, ncol
+        ufac(i,k) = ufac(i,k) * (pmid_mod(i,k) / pmid_mod(i,pver))
+        vfac(i,k) = vfac(i,k) * (pmid_mod(i,k) / pmid_mod(i,pver))
+        tfac(i,k) = tfac(i,k) * (pmid_mod(i,k) / pmid_mod(i,pver))
+        qfac(i,k) = qfac(i,k) * (pmid_mod(i,k) / pmid_mod(i,pver))
+      end do
+    end do
+  end if
+   
+  ! Add a linear relexation of the nudging tendency on the upper layer 
+  if (use_upp_lrelx) then
+    do i = 1, ncol
+      do k = pver, 1, -1
+        if ( pmid_mod(i,k) < p_uv_relax ) then
+          ufac(i,k) = ufac(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
+          vfac(i,k) = vfac(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
+        end if
+        if ( pmid_mod(i,k) < p_T_relax ) then
+          tfac(i,k) = tfac(i,k) * max(0.01_r8, pmid_mod(i,k)/p_T_relax)
+        end if
+        if ( pmid_mod(i,k) < p_q_relax ) then
+          qfac(i,k) = qfac(i,k) * max(0.01_r8, pmid_mod(i,k)/p_q_relax)
+        end if
+        if ( pmid_mod(i,k) < p_norelax ) then
+          ufac(i,k) = 0._r8
+          vfac(i,k) = 0._r8
+          tfac(i,k) = 0._r8
+          qfac(i,k) = 0._r8
+        end if
+      end do
+    end do
+  end if
+
+  !Exclude the nudging tendency in boundary layer
+  !Note: PBL height is in AGL  
+  do k = pver-1,1,-1
+     do i = 1,ncol
+        if (abs(zm_mod(i,k)-pblh(i)) < (zi_mod(i,k)-zi_mod(i,k+1))*0.5_r8) kpblt(i) = k
+     end do
+  end do
+
+  !--------------------------------------------------
+  ! Strategy to exclude the nudging at near surface 
+  !--------------------------------------------------
+  do i = 1, ncol
+    do k = pver, 1, -1
+      select case (no_pbl_uv)
+         case (0)
+           wuprof(i,k) = 1.0_r8
+           wvprof(i,k) = 1.0_r8
+         case (1)
+           wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+           wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+         case (2)
+           wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((zm_mod(i,k)-z_min)/(0.1_r8*z_min)))
+           wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((zm_mod(i,k)-z_min)/(0.1_r8*z_min)))
+         case default
+         call endrun('nudging_tend error: invalid option for no_pbl_uv nudging')
+      end select
+
+      select case (no_pbl_t)
+         case (0)
+           wtprof(i,k) = 1.0_r8
+         case (1)
+           wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+         case (2)
+           wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((zm_mod(i,k)-z_min)/(0.1_r8*z_min)))
+         case default
+         call endrun('nudging_tend error: invalid option for no_pbl_t nudging')
+      end select
+
+      select case (no_pbl_q)
+         case (0)
+           wqprof(i,k) = 1.0_r8
+         case (1)
+           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+         case (2)
+           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((zm_mod(i,k)-z_min)/(0.1_r8*z_min)))
+         case default
+           call endrun('nudging_tend error: invalid option for no_pbl_q nudging')
+      end select
+    end do
+  end do
+
+  ! apply the weighting on the nudging coefficient 
+  do i = 1, ncol
+    do k = pver, 1, -1
+      ufac(i,k) = ufac(i,k) * wuprof(i,k)
+      vfac(i,k) = vfac(i,k) * wvprof(i,k)
+      tfac(i,k) = tfac(i,k) * wtprof(i,k)
+      qfac(i,k) = qfac(i,k) * wqprof(i,k)
+    end do
+  end do
+
+  return 
+  end subroutine !update_nudge_prof
+
+  !!!!!!!!!!!!!!!!!!!!!!
+  !ps nudigng subroutine 
+  !!!!!!!!!!!!!!!!!!!!!!
+  subroutine ps_nudging(ncol, dtime, use_ps_adj, zi_obs, zm_obs, &
+                        pint_obs, pint_mod, pmid_obs, pmid_mod, &
+                        lnpint_obs, lnpint_mod, lnpmid_obs, lnpmid_mod, &
+                        pdel_obs, pdel_mod, rpdel_obs, rpdel_mod, &
+                        uref, vref, tref, qref, tobs, psref, &
+                        phis_obs, phis_mod, psobs, psmod, psfac, psdt )
+
+  use physconst,     only  : rga, cpair, gravit, rair, zvir, cappa
+  use shr_vmath_mod, only  : shr_vmath_log
+  use hycoef,        only  : hycoef_init, hyam, hybm, hyai, hybi, ps0
+  use ppgrid,        only  : pver,pverp,pcols
+
+  logical,  intent(in) :: use_ps_adj
+  integer,  intent(in) :: ncol
+  real(r8), intent(in) :: dtime
+
+  real(r8), intent(in) :: phis_mod(pcols)
+  real(r8), intent(in) :: phis_obs(pcols)
+  real(r8), intent(in) :: tobs(pcols,pver)
+  real(r8), intent(in) :: zi_obs(pcols,pverp)
+  real(r8), intent(in) :: zm_obs(pcols,pver)
+
+  real(r8), intent(in) :: psobs(pcols)
+  real(r8), intent(in) :: pint_obs(pcols,pverp)
+  real(r8), intent(in) :: pmid_obs(pcols,pver)
+  real(r8), intent(in) :: pdel_obs(pcols,pver)
+  real(r8), intent(in) :: rpdel_obs(pcols,pver)
+  real(r8), intent(in) :: lnpint_obs(pcols,pverp)
+  real(r8), intent(in) :: lnpmid_obs(pcols,pver)
+
+  real(r8), intent(inout) :: psmod(pcols)
+  real(r8), intent(inout) :: psfac(pcols)
+  real(r8), intent(inout) :: pint_mod(pcols,pverp)
+  real(r8), intent(inout) :: pmid_mod(pcols,pver)
+  real(r8), intent(inout) :: pdel_mod(pcols,pver)
+  real(r8), intent(inout) :: rpdel_mod(pcols,pver)
+  real(r8), intent(inout) :: lnpint_mod(pcols,pverp)
+  real(r8), intent(inout) :: lnpmid_mod(pcols,pver)
+
+  real(r8), intent(inout) :: psdt(pcols)
+  real(r8), intent(inout) :: psref(pcols)
+  real(r8), intent(inout) :: uref(pcols,pver)
+  real(r8), intent(inout) :: vref(pcols,pver)
+  real(r8), intent(inout) :: tref(pcols,pver)
+  real(r8), intent(inout) :: qref(pcols,pver)
+
+  !local variables 
+  !Parameters to adjust surface pressure 
+  !Reference: !https://github.com/NOAA-GFDL/GFDL_atmos_cubed_sphere/blob/main/tools/fv_clim_nudge.F90
+  real(r8) :: dtdz       = -6.5E-3_r8 ! Lapse rate for adjustment of PS
+  real(r8) :: t_ref1     = 290.5_r8   ! reference temperature for adjustment of PS
+  real(r8) :: t_ref2     = 255.0_r8   ! reference temperature for adjustment of PS
+  real(r8) :: dz_thres   = 1.E-3_r8   ! threshold of topography difference for adjustment of PS 
+
+  real(r8), parameter :: z_min      = 150._r8
+
+  integer  :: i, k, m, kk
+  real(r8) :: x
+  real(r8) :: del_phis, tbot, pbot, tmp
+  real(r8) :: tsurf, lapse, t0
+  real(r8) :: tvobs(pcols,pver)
+  real(r8) :: zobs(pcols,pverp)
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  do i = 1,ncol
+    psref(i) = psobs(i) 
+  end do 
+
+  !adjust the nudging coefficient 
+  do i = 1, ncol
+    if ( abs(psmod(i)-psref(i)) > 2.E2_r8 ) then
+      psfac(i) = psfac(i) * 2.E2_r8 / abs(psmod(i)-psref(i))
+    else
+      psfac(i) = psfac(i) * 1.0_r8
+    end if
+  enddo
+
+  !surface pressure adjustment due to topography difference 
+  !adjust observed ps to model topography (if the pre-processing does not appy it)
+  !Following the method developed by ECMWF  
+  if ( use_ps_adj ) then
+
+    do i = 1,ncol
+
+      del_phis = phis_obs(i) - phis_mod(i)
+
+      if(abs(del_phis) > dz_thres) then 
+        !Tbot and Pbot are determined from the first model level that is at
+        !least 150m above the surface
+ 
+        kk = pver
+        do k = pver-1,1,-1
+          if (abs(zm_obs(i,k)-z_min) < (zi_obs(i,k)-zi_obs(i,k+1))*0.5_r8) kk = k
+        end do 
+ 
+        lapse = -dtdz
+        k     = kk
+        ! Define Tbot & Pbot
+        tbot  = tobs(i,k)
+        pbot  = pmid_obs(i,k)
+        tmp   = lapse*(rair/gravit)*(psobs(i)/pbot - 1.0_r8)
+        tsurf = tbot*(1.0_r8 + tmp)
+        t0    = tsurf + lapse*phis_obs(i)/gravit
+ 
+        if (t0 .gt. t_ref1 .and. tsurf .le. t_ref1) then
+          lapse = (t_ref1 - tsurf)*gravit/phis_obs(i)
+        else if (t0 .gt. t_ref1 .and. tsurf .gt. t_ref1) then
+          lapse = 0._r8
+          tsurf = (t_ref1 + tsurf)*0.5_r8
+        end if
+ 
+        if (tsurf .lt. t_ref2) then
+          lapse = -dtdz
+          tsurf = (t_ref2 + tsurf)*0.5_r8
+        end if
+  
+        x   = lapse*del_phis/(gravit*tsurf)
+        tmp = 1._r8 - x/2._r8 + x**2._r8/3._r8
+        tmp = del_phis/(rair*tsurf)*tmp
+        psref(i) = psobs(i)*exp(tmp)
+      end if
+
+    end do 
+
+  end if 
+ 
+  do i = 1,ncol
+    psdt(i) = psref(i) - psmod(i)
+    !limit the ps tendency 
+    psdt(i) = sign ( min(10.E2, abs(psdt(i))), psdt(i) )
+    psdt(i) = psdt(i) * psfac(i)
+  end do
+
+  !convert the values to conserve the geopotential height 
+  do i=1,ncol
+    do k=1,pver
+      uref(i,k) = uref(i,k) * pdel_mod(i,k)
+      vref(i,k) = vref(i,k) * pdel_mod(i,k)
+      tref(i,k) = tref(i,k) * (lnpint_mod(i,k+1) - lnpint_mod(i,k))
+      qref(i,k) = qref(i,k) * pdel_mod(i,k)
+    enddo
+  end do 
+
+  !Update ps
+  do i = 1,ncol
+    psmod(i) = psmod(i) + psdt(i)*dtime
+  end do 
+
+  !Pdel etc.
+  do i = 1,ncol
+    do k = 1,pver
+      pint_mod(i,k)     = hyai(k)*ps0+hybi(k)*psmod(i)
+      lnpint_mod(i,k)   = log(pint_mod(i,k))
+    end do 
+    pint_mod(i,pverp)   = hyai(pverp)*ps0+hybi(pverp)*psmod(i)
+    lnpint_mod(i,pverp) = log(pint_mod(i,pverp))
+    do k = 1,pver
+      pdel_mod(i,k)     = pint_mod(i,k+1) - pint_mod(i,k) 
+      rpdel_mod(i,k)    = 1._r8/pdel_mod(i,k)
+    end do
+  end do 
+
+ !Convert back to model quantities 
+  do i = 1,ncol
+    do k=1,pver
+      uref(i,k) = uref(i,k) / pdel_mod(i,k)
+      vref(i,k) = vref(i,k) / pdel_mod(i,k)
+      tref(i,k) = tref(i,k) / (lnpint_mod(i,k+1) - lnpint_mod(i,k))
+      qref(i,k) = qref(i,k) / pdel_mod(i,k)
+    enddo
+  end do
+
+  return
+  end subroutine !ps_nudging
 
 end module nudging
