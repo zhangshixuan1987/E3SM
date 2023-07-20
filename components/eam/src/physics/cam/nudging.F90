@@ -384,6 +384,8 @@ module nudging
   use spmd_utils  ,only:masterproc
   use cam_logfile ,only:iulog
   use shr_log_mod, only:errMsg => shr_log_errMsg
+  use ioFileMod, only: getfil
+  use cam_pio_utils, only: cam_pio_openfile
   use perf_mod
 #ifdef SPMD
   use mpishorthand
@@ -417,6 +419,10 @@ module nudging
   public:: nudging_update_land_surface
   public:: nudging_update_srf_flux
   public:: Nudge_Loc_PhysOut
+  private::DeepONet_nudging
+  private::update_nudging_tend
+  private::update_nudge_prof
+  private::ps_nudging
   private::nudging_update_analyses_se
   private::nudging_update_srf_analyses_se
   private::nudging_update_analyses_eul
@@ -1776,39 +1782,47 @@ contains
      ! Update the Nudge arrays with analysis
      ! data at the NEXT time
      !-----------------------------------------------
-     Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
-                                         yr_spec=Nudge_Next_Year , &
-                                        mon_spec=Nudge_Next_Month, &
-                                        day_spec=Nudge_Next_Day  , &
-                                        sec_spec=Nudge_Next_Sec    )
+     if (.not. DeepONet_Nudge) then 
+       Nudge_File=interpret_filename_spec(Nudge_File_Template      , &
+                                           yr_spec=Nudge_Next_Year , &
+                                          mon_spec=Nudge_Next_Month, &
+                                          day_spec=Nudge_Next_Day  , &
+                                          sec_spec=Nudge_Next_Sec    )
 
-     Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template  , &
-                                            yr_spec=Nudge_Next_Year  , &
-                                            mon_spec=Nudge_Next_Month, &
-                                            day_spec=Nudge_Next_Day  , &
-                                            sec_spec=Nudge_Next_Sec    )  
+       Nudge_SRF_File=interpret_filename_spec(Nudge_SRF_File_Template  , &
+                                              yr_spec=Nudge_Next_Year  , &
+                                              mon_spec=Nudge_Next_Month, &
+                                              day_spec=Nudge_Next_Day  , &
+                                              sec_spec=Nudge_Next_Sec    )  
 
-     if(masterproc) then
-      write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
-      if(Nudge_Land) then 
-        write(iulog,*) 'NUDGING: Reading surface analyses:',trim(Nudge_Path)//trim(Nudge_SRF_File)
-      end if 
-     endif
-
+       if(masterproc) then
+        write(iulog,*) 'NUDGING: Reading analyses:',trim(Nudge_Path)//trim(Nudge_File)
+        if(Nudge_Land) then 
+          write(iulog,*) 'NUDGING: Reading surface analyses:',trim(Nudge_Path)//trim(Nudge_SRF_File)
+        end if 
+       endif
+     else
+        if(masterproc) then
+        write(iulog,*) 'NUDGING: using the DeepONet ML model to predict the nudging tendency, no need to read reference data'
+        if(Nudge_Land) then
+          write(iulog,*) 'NUDGING: using the DeepONet ML model to predict the nudging tendency, no need to read reference data'
+        end if
+       endif 
+     end if 
      ! How to manage MISSING values when there are 'Gaps' in the analyses data?
      !  Check for analyses file existence. If it is there, then read data.
      !  If it is not, then issue a warning and switch off nudging to 'coast'
      !  thru the gap.
      !------------------------------------------------------------------------
      if(dycore_is('UNSTRUCTURED')) then 
-
-       ! read nudging data from reanalysis or user specified file 
-       call nudging_update_analyses_se(trim(Nudge_Path)//trim(Nudge_File))
-
-       if(Nudge_Land) then 
-         call nudging_update_srf_analyses_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
-       end if
- 
+       if (.not. DeepONet_Nudge) then
+         ! read nudging data from reanalysis or user specified file 
+         call nudging_update_analyses_se(trim(Nudge_Path)//trim(Nudge_File))
+  
+         if(Nudge_Land) then 
+           call nudging_update_srf_analyses_se(trim(Nudge_Path)//trim(Nudge_SRF_File))
+         end if
+       end if 
      elseif(dycore_is('EUL')) then
        call nudging_update_analyses_eul(trim(Nudge_Path)//trim(Nudge_File))
      else !if(dycore_is('LR')) then
@@ -1909,8 +1923,8 @@ contains
             if (Nudge_Uprof .ne. 0) then
               if (DeepONet_Nudge) then
                 Nudge_Ustep(:ncol,:pver,lchnk)=0._r8
-                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                      ncol,pver, "U", &
+                call DeepONet_nudging(trim(DeepONet_Path), &
+                                      ncol, "U", &
                                       Model_U(:ncol,:pver,lchnk), &
                                       Nudge_Ustep(:ncol,:pver,lchnk))
               else
@@ -1922,8 +1936,8 @@ contains
             if (Nudge_Vprof .ne. 0) then
               if (DeepONet_Nudge) then
                 Nudge_Vstep(:ncol,:pver,lchnk)=0._r8
-                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                      ncol,pver, "V", &
+                call DeepONet_nudging(trim(DeepONet_Path), &
+                                      ncol, "V", &
                                       Model_V(:ncol,:pver,lchnk), &
                                       Nudge_Vstep(:ncol,:pver,lchnk))
               else
@@ -1935,8 +1949,8 @@ contains
             if (Nudge_Tprof .ne. 0) then
               if (DeepONet_Nudge) then
                 Nudge_Tstep(:ncol,:pver,lchnk)=0._r8
-                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                      ncol,pver, "T", &
+                call DeepONet_nudging(trim(DeepONet_Path), &
+                                      ncol, "T", &
                                       Model_T(:ncol,:pver,lchnk), &
                                       Nudge_Tstep(:ncol,:pver,lchnk))
               else
@@ -1948,8 +1962,8 @@ contains
             if (Nudge_Qprof .ne. 0) then
               if (DeepONet_Nudge) then
                 Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
-                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                      ncol,pver, "Q", &
+                call DeepONet_nudging(trim(DeepONet_Path), &
+                                      ncol, "Q", &
                                       Model_Q(:ncol,:pver,lchnk), &
                                       Nudge_Qstep(:ncol,:pver,lchnk))
               else
@@ -1961,8 +1975,8 @@ contains
             if (Nudge_PSprof .ne. 0) then
               if (DeepONet_Nudge) then
                 Nudge_PSstep(:ncol,lchnk)=0._r8
-                call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                      ncol,1, "PS", &
+                call DeepONet_nudging(trim(DeepONet_Path), &
+                                      ncol, "PS", &
                                       Model_PS(:ncol,lchnk), &
                                       Nudge_PSstep(:ncol,lchnk))
               else
@@ -2103,32 +2117,32 @@ contains
        Nudge_Tstep(:ncol,:pver,lchnk)=0._r8
        Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
        if (Nudge_Uprof .ne. 0) then
-           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                 ncol,pver, "U", &
+           call DeepONet_nudging(trim(DeepONet_Path), &
+                                 ncol, "U", &
                                  Model_U(:ncol,:pver,lchnk), &
                                  Nudge_Ustep(:ncol,:pver,lchnk))
        end if 
        if (Nudge_Vprof .ne. 0) then
-           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                 ncol,pver, "V", &
+           call DeepONet_nudging(trim(DeepONet_Path), &
+                                 ncol, "V", &
                                  Model_V(:ncol,:pver,lchnk), &
                                  Nudge_Vstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_Tprof .ne. 0) then
-           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                 ncol,pver, "T", &
+           call DeepONet_nudging(trim(DeepONet_Path), &
+                                 ncol, "T", &
                                  Model_T(:ncol,:pver,lchnk), &
                                  Nudge_Tstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_Qprof .ne. 0) then
-           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                 ncol,pver, "Q", &
+           call DeepONet_nudging(trim(DeepONet_Path), &
+                                 ncol, "Q", &
                                  Model_Q(:ncol,:pver,lchnk), &
                                  Nudge_Qstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_PSprof .ne. 0) then
-           call deeponet_nudging(trim(DeepONet_Path)//trim(DeepONet_File), &
-                                 ncol,1, "PS", &
+           call DeepONet_nudging(trim(DeepONet_Path), &
+                                 ncol, "PS", &
                                  Model_PS(:ncol,lchnk), &
                                  Nudge_PSstep(:ncol,lchnk))
        end if
@@ -5325,46 +5339,203 @@ contains
   !                  tendency using the trained DeepONet Machine Learning (ML)
   !                  method, the subroutine works on a chunk and a specific
   !                  model state variables
+  ! SZ - 06/21/2023: Merge the DeepOnet model developed by Brown University 
+   
   !===========================================================================
-  subroutine deeponet_nudging(filename,ncol,pver,var, model_state, nugding_tend)
+  subroutine DeepONet_nudging(file_path,ncol,var, model_state, nugding_tend)
+   use ppgrid, only         : pver,pcols,begchunk,endchunk
+   use cam_abortutils, only : endrun
+   use perf_mod
+   use netcdf
+   use units, only: getunit, freeunit
+   use mpishorthand  
    use torch_ftn
    use iso_c_binding
    use iso_fortran_env
 
+   implicit none
    ! Arguments
    !-----------
    type(torch_module) :: torch_mod
    type(torch_tensor_wrap) :: input_tensors
    type(torch_tensor) :: out_tensor
 
-   integer, intent(in) :: ncol, pver
-   character(len=*), intent(in) :: filename        ! DeepONet ML PT files 
-   character(len=*), intent(in) :: var             ! nudge method 
-   real(r8),intent(in) ::model_state(ncol,pver)    !(ncols,pver)
-   real(r8),intent(inout)::nugding_tend(ncol,pver) !(pcols,begchunk:endchunk)
-
+   integer, intent(in) :: ncol
+   character(len=*), intent(in) :: file_path         !Path to DeepONet ML files 
+   character(len=*), intent(in) :: var               !nudge method 
+   real(r8),intent(in) :: model_state(ncol,pver)     !(ncols,pver)
+   real(r8),intent(inout) :: nugding_tend(ncol,pver) !(pcols,begchunk:endchunk)
+   integer, parameter :: NX = 70, NY = 70
+   integer, parameter :: NX1 = 6, NY1 = 6, NT1 = 248
+   
    ! Local values
    !----------------
-   integer :: i,j,k,l
-   real(r4) :: input(224, 224, 3, 10)
-   real(r4), pointer :: output(:, :)
-   integer :: arglen, stat
+   integer  :: i,j,k,l
+   integer  :: unitn, ierr
+   integer  :: arglen, stat
+   integer  :: NXY, NXY1, NXYT1 
+   character(len=10) :: fencoder
+   character(len=11) :: fdeeponet
+   character(len=10) :: fdecoder
+   real(r8) :: lat_pt,lon_pt
+   real(r4), allocatable :: data_in(:)
+   real(r4), allocatable :: data_in_t(:,:)
+   real(r4), allocatable :: input(:, :)
+   real(r4), allocatable :: input_t(:)
+   real(r4), allocatable :: input_f(:, :, :, :)
+   real(r4), pointer     :: output1(:, :)
+   real(r4), pointer     :: output2(:, :)
+   real(r4), pointer     :: output3(:, :)
+   
+   NXY       = NX * NY 
+   NXY1      = NX1 * NY1 
+   NXYT1     = NX1 * NY1 * NT1
 
-   input(:,:,:,:) = 1.0
+   fencoder  = "encoder.pt" 
+   fdeeponet = "deepONet.pt"
+   fdecoder  = "decoder.pt"
+
+  !!!!!Debug code!!!!!!!!!
+  !run encoder to convert data in model space to data in deepONet space 
+   allocate (data_in(NXY))
+   allocate (input(NX, NY))
+   allocate (input_f(NX, NY, 1, 1))
+   unitn = getunit()
+   open(unitn, file=trim(file_path)//"/encoder/U_bf_revised_checked.out", status='old')
+   do i = 1,NXY
+     read(unitn, *,iostat=ierr) data_in(i)
+     if (ierr /= 0) then
+        call endrun('ERROR reading U_bf_revised_checked.out')
+     end if
+   end do 
+   close(unitn)
+
+   input   = reshape(data_in, (/NX, NY/))
+   input_f = reshape(data_in, (/NX, NY, 1, 1/))
+   if (masterproc) then              
+     print *, "data_in Shape is: ", shape(data_in)
+     print *, "input Shape is: ", shape(input)
+     print *, "input_f Shape is: ", shape(input)
+   end if 
+
    call input_tensors%create
-   call input_tensors%add_array(input)
-   call torch_mod%load(trim(filename))
+   call input_tensors%add_array(input_f)
+   print *, "test input_f: ", input_f(1,1,1,1)
+
+   if (masterproc) then
+     print *, "pt file  is : ", fencoder
+   end if 
+   call torch_mod%load(fencoder)
+   print *, "torch forward...." 
    call torch_mod%forward(input_tensors, out_tensor)
-   call out_tensor%to_array(output)
-   !print *, output(1:5, 1)
-   if (masterproc) write(iulog,*) 'TEST FOR Pytorch: ', output(1:5, 1)
+   print *, "torch to array...."
+   call out_tensor%to_array(output1)
+   print *, "output Shape is: ", shape(output1)
+
+   unitn = getunit()
+   open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
+   write(unitn, *) output1
+   close(unitn)
+
+   IF (ALLOCATED(data_in)) THEN
+        DEALLOCATE(data_in)
+   END IF
+   IF (ALLOCATED(input)) THEN
+        DEALLOCATE(input)
+   END IF
+   IF (ALLOCATED(input_f)) THEN
+        DEALLOCATE(input_f)
+   END IF
+
+  !run deepONet ML model to predict the nudging tendency
+   allocate (data_in(NT1))
+   allocate (data_in_t(1, NT1))
+   allocate (input_t(NXYT1))
+   allocate (input_f(NXY1, NT1, 1, 1))
+   unitn = getunit()
+   open(unitn, file=trim(file_path)//"/deeponet/x_trunk.out")
+   do i = 1,NT1
+     read(unitn, *,iostat=ierr) data_in(i)
+     if (ierr /= 0) then
+        call endrun('ERROR reading x_trunk.out')
+     end if
+   end do
+   close(unitn)
+   unitn = getunit()
+   open(unitn, file=trim(file_path)//"/deeponet/U_branch_rev2.out")
+   do i = 1,NXYT1
+     read(unitn, *,iostat=ierr) input_t(i)
+     if (ierr /= 0) then
+        call endrun('ERROR reading U_branch_rev2.out')
+     end if
+   end do 
+   close(unitn)
+   data_in_t  = reshape(data_in, (/1, NT1/))
+   input_f = reshape(input_t, (/NXY1, NT1, 1, 1/))
+   call input_tensors%create
+   call input_tensors%add_array(input_f)
+   call input_tensors%add_array(data_in_t)
+   call torch_mod%load(fdeeponet)
+   call torch_mod%forward(input_tensors, out_tensor, 1)
+   call out_tensor%to_array(output2)
+   print *, "Output is", shape(output2)
+   unitn = getunit()
+   open(unitn, file = "dnet.dat", action="write", status = "replace")
+   write(unitn, *) output2
+   close(unitn)
+   IF (ALLOCATED(data_in)) THEN
+        DEALLOCATE(data_in)
+   END IF
+   IF (ALLOCATED(data_in_t)) THEN
+        DEALLOCATE(data_in_t)
+   END IF
+   IF (ALLOCATED(input_f)) THEN
+        DEALLOCATE(input_f)
+   END IF
+   IF (ALLOCATED(input_t)) THEN
+        DEALLOCATE(input_t)
+   END IF
+
+   ! run decoder to convert data in deepONet space to data in model space 
+   allocate (data_in(NXY))
+   allocate (input(NX, NY))
+   allocate (input_f(NX, NY, 1, 1))
+   unitn = getunit()
+   open(unitn, file=trim(file_path)//"/decoder/U_bf_revised_checked.out")
+   do i = 1, NXY
+     read(unitn, *) data_in(i)
+   end do 
+   close(unitn)
+   input = reshape(data_in, (/NX, NY/))
+   input_f = reshape(data_in, (/NX, NY, 1, 1/))
+   call input_tensors%create
+   call input_tensors%add_array(input_f)
+   call torch_mod%load(file_name=fdecoder,flags=0)
+   call torch_mod%forward(input_tensors, out_tensor)
+   call out_tensor%to_array(output3)
+   unitn = getunit()
+   open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
+   write(unitn, *) output3
+   close(unitn)
+   IF (ALLOCATED(data_in)) THEN
+        DEALLOCATE(data_in)
+   END IF
+   IF (ALLOCATED(input)) THEN
+        DEALLOCATE(input)
+   END IF
+   IF (ALLOCATED(input_f)) THEN
+        DEALLOCATE(input_f)
+   END IF
+  !!!end of debug code!!!!!!!!
+
+   if (masterproc) write(iulog,*) 'TEST FOR Pytorch: ', output3(1:5, 1)
 
    return
-  end subroutine  ! deeponet_nudging 
+  end subroutine  ! DeepONet_nudging 
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  !!Following subroutine is used to apply nudging at the surface layer only  
-  !! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)   
+  !!Following subroutine is used to apply nudging at the surface layer only   !! 
+  !! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                           !! 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
   subroutine update_land_nudging_tend(ncol, umod, vmod, tvmod, qmod,    & ! In 
                                       ubobs, vbobs, tbobs, tdbobs,      & ! In  

@@ -1839,28 +1839,28 @@ module torch_ftn
 
     subroutine torch_tensor_wrap_add_scalar_fp32 (this, value)
         class(torch_tensor_wrap), intent(inout) :: this
-        real (real32), pointer, intent(in)    :: value
+        real (real32), target, intent(in)    :: value
 
         call torch_tensor_wrap_add_scalar_cpp(this%handle, c_loc(value), TORCH_FTN_TYPE_FP, 4)
     end subroutine
 
     subroutine torch_tensor_wrap_add_scalar_fp64 (this, value)
         class(torch_tensor_wrap), intent(inout) :: this
-        real (real64), pointer, intent(in)    :: value
+        real (real64), target, intent(in)    :: value
 
         call torch_tensor_wrap_add_scalar_cpp(this%handle, c_loc(value), TORCH_FTN_TYPE_FP, 8)
     end subroutine
 
     subroutine torch_tensor_wrap_add_scalar_int32(this, value)
         class(torch_tensor_wrap), intent(inout) :: this
-        integer (int32), pointer, intent(in)    :: value
+        integer (int32), target, intent(in)    :: value
 
         call torch_tensor_wrap_add_scalar_cpp(this%handle, c_loc(value), TORCH_FTN_TYPE_INT, 4)
     end subroutine
 
     subroutine torch_tensor_wrap_add_scalar_int64(this, value)
         class(torch_tensor_wrap), intent(inout) :: this
-        integer (int64), pointer, intent(in)    :: value
+        integer (int64), target, intent(in)    :: value
 
         call torch_tensor_wrap_add_scalar_cpp(this%handle, c_loc(value), TORCH_FTN_TYPE_INT, 8)
     end subroutine
