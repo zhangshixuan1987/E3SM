@@ -502,16 +502,24 @@
        Toggle Model Nudging with DeepONet ML model ON/OFF.
        Default: FALSE
        </entry>
-
 <entry id="DeepONet_Path" type="char*256" input_pathname="abs" category="nudging"
        group="nudging_nl" valid_values="" >
        Full pathname of DeepONet model file to use for nudging.
        Default: none
        </entry>
-
-<entry id="DeepONet_File" type="char*80" category="nudging"
+<entry id="DeepONet_FdeCoder" type="char*80" category="nudging"
        group="nudging_nl" valid_values="" >
-       DeepONet model PT files trained for Nudging bias correction 
+       DeepONet ML Decoder PT files trained for Nudging bias correction 
+       Default: none
+       </entry>
+<entry id="DeepONet_FenCoder" type="char*80" category="nudging"
+       group="nudging_nl" valid_values="" >
+       DeepONet ML Encoder PT files trained for Nudging bias correction
+       Default: none
+       </entry>
+<entry id="DeepONet_FdeepONet" type="char*80" category="nudging"
+       group="nudging_nl" valid_values="" >
+       DeepONet DeepONet model PT files trained for Nudging bias correction
        Default: none
        </entry>
 

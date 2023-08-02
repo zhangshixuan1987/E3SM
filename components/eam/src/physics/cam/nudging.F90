@@ -390,6 +390,8 @@ module nudging
 #ifdef SPMD
   use mpishorthand
 #endif
+  use torch_ftn
+  use iso_fortran_env
 
   ! Set all Global values and routines to private by default
   ! and then explicitly set their exposure.
@@ -461,7 +463,9 @@ module nudging
   logical::         Nudge_Hwin_Invert    = .false.
   logical::         Nudge_Vwin_Invert    = .false.
   character(len=cl) DeepONet_Path 
-  character(len=cl) DeepONet_File 
+  character(len=cl) DeepONet_FenCoder
+  character(len=cl) DeepONet_FdeepONet
+  character(len=cl) DeepONet_FdeCoder
   character(len=cl) Nudge_Path
   character(len=cl) Nudge_File,Nudge_File_Template
   character(len=cl) Nudge_SRF_File,Nudge_SRF_File_Template
@@ -670,7 +674,9 @@ contains
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
-                         DeepONet_Nudge, DeepONet_Path, DeepONet_File 
+                         DeepONet_Nudge, DeepONet_Path,                & 
+                         DeepONet_FenCoder, DeepONet_FdeCoder,         & 
+                         DeepONet_FdeepONet                            
   
    ! Nudging is NOT initialized yet, For now
    ! Nudging will always begin/end at midnight.
@@ -853,11 +859,14 @@ contains
    ! Broadcast namelist variables
    !------------------------------
 #ifdef SPMD
+   call mpibcast(DeepONet_Path           ,len(DeepONet_Path)      ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_FenCoder       ,len(DeepONet_FenCoder)  ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_FdeCoder       ,len(DeepONet_FdeCoder)  ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_FdeepONet      ,len(DeepONet_FdeepONet) ,mpichar,0,mpicom)
+   call mpibcast(DeepONet_Nudge          , 1, mpilog, 0, mpicom)
+
    call mpibcast(Nudge_Path              ,len(Nudge_Path)         ,mpichar,0,mpicom)
    call mpibcast(Nudge_File_Template     ,len(Nudge_File_Template),mpichar,0,mpicom)
-   call mpibcast(DeepONet_Path           ,len(DeepONet_Path)      ,mpichar,0,mpicom)
-   call mpibcast(DeepONet_File           ,len(DeepONet_File)      ,mpichar,0,mpicom)
-   call mpibcast(DeepONet_Nudge          , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Model             , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Initialized       , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_ON                , 1, mpilog, 0, mpicom)
@@ -1324,7 +1333,9 @@ contains
      write(iulog,*) '---------------------------------------------------------'
      write(iulog,*) 'DeepONet_Nudge=',DeepONet_Nudge
      write(iulog,*) 'DeepONet_Path=', DeepONet_Path
-     write(iulog,*) 'DeepONet_File=', DeepONet_File 
+     write(iulog,*) 'DeepONet_File (encoder)=', DeepONet_FenCoder 
+     write(iulog,*) 'DeepONet_File (decoder)=', DeepONet_FdeCoder
+     write(iulog,*) 'DeepONet_File (deepONet)=', DeepONet_FdeepONet
      write(iulog,*) 'NUDGING: Nudge_Model=',Nudge_Model
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
@@ -1924,6 +1935,9 @@ contains
               if (DeepONet_Nudge) then
                 Nudge_Ustep(:ncol,:pver,lchnk)=0._r8
                 call DeepONet_nudging(trim(DeepONet_Path), &
+                                      trim(DeepONet_FenCoder), &
+                                      trim(DeepONet_FdeCoder), &
+                                      trim(DeepONet_FdeepONet), &
                                       ncol, "U", &
                                       Model_U(:ncol,:pver,lchnk), &
                                       Nudge_Ustep(:ncol,:pver,lchnk))
@@ -1937,6 +1951,9 @@ contains
               if (DeepONet_Nudge) then
                 Nudge_Vstep(:ncol,:pver,lchnk)=0._r8
                 call DeepONet_nudging(trim(DeepONet_Path), &
+                                      trim(DeepONet_FenCoder), &
+                                      trim(DeepONet_FdeCoder), &
+                                      trim(DeepONet_FdeepONet), &
                                       ncol, "V", &
                                       Model_V(:ncol,:pver,lchnk), &
                                       Nudge_Vstep(:ncol,:pver,lchnk))
@@ -1950,6 +1967,9 @@ contains
               if (DeepONet_Nudge) then
                 Nudge_Tstep(:ncol,:pver,lchnk)=0._r8
                 call DeepONet_nudging(trim(DeepONet_Path), &
+                                      trim(DeepONet_FenCoder), &
+                                      trim(DeepONet_FdeCoder), &
+                                      trim(DeepONet_FdeepONet), &
                                       ncol, "T", &
                                       Model_T(:ncol,:pver,lchnk), &
                                       Nudge_Tstep(:ncol,:pver,lchnk))
@@ -1963,6 +1983,9 @@ contains
               if (DeepONet_Nudge) then
                 Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
                 call DeepONet_nudging(trim(DeepONet_Path), &
+                                      trim(DeepONet_FenCoder), &
+                                      trim(DeepONet_FdeCoder), &
+                                      trim(DeepONet_FdeepONet), &
                                       ncol, "Q", &
                                       Model_Q(:ncol,:pver,lchnk), &
                                       Nudge_Qstep(:ncol,:pver,lchnk))
@@ -1976,6 +1999,9 @@ contains
               if (DeepONet_Nudge) then
                 Nudge_PSstep(:ncol,lchnk)=0._r8
                 call DeepONet_nudging(trim(DeepONet_Path), &
+                                      trim(DeepONet_FenCoder), &
+                                      trim(DeepONet_FdeCoder), &
+                                      trim(DeepONet_FdeepONet), &
                                       ncol, "PS", &
                                       Model_PS(:ncol,lchnk), &
                                       Nudge_PSstep(:ncol,lchnk))
@@ -2118,30 +2144,45 @@ contains
        Nudge_Qstep(:ncol,:pver,lchnk)=0._r8
        if (Nudge_Uprof .ne. 0) then
            call DeepONet_nudging(trim(DeepONet_Path), &
+                                 trim(DeepONet_FenCoder), &
+                                 trim(DeepONet_FdeCoder), &
+                                 trim(DeepONet_FdeepONet), &
                                  ncol, "U", &
                                  Model_U(:ncol,:pver,lchnk), &
                                  Nudge_Ustep(:ncol,:pver,lchnk))
        end if 
        if (Nudge_Vprof .ne. 0) then
            call DeepONet_nudging(trim(DeepONet_Path), &
+                                 trim(DeepONet_FenCoder), &
+                                 trim(DeepONet_FdeCoder), &
+                                 trim(DeepONet_FdeepONet), &
                                  ncol, "V", &
                                  Model_V(:ncol,:pver,lchnk), &
                                  Nudge_Vstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_Tprof .ne. 0) then
            call DeepONet_nudging(trim(DeepONet_Path), &
+                                 trim(DeepONet_FenCoder), &
+                                 trim(DeepONet_FdeCoder), &
+                                 trim(DeepONet_FdeepONet), &
                                  ncol, "T", &
                                  Model_T(:ncol,:pver,lchnk), &
                                  Nudge_Tstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_Qprof .ne. 0) then
            call DeepONet_nudging(trim(DeepONet_Path), &
+                                 trim(DeepONet_FenCoder), &
+                                 trim(DeepONet_FdeCoder), &
+                                 trim(DeepONet_FdeepONet), &
                                  ncol, "Q", &
                                  Model_Q(:ncol,:pver,lchnk), &
                                  Nudge_Qstep(:ncol,:pver,lchnk))
        end if
        if (Nudge_PSprof .ne. 0) then
            call DeepONet_nudging(trim(DeepONet_Path), &
+                                 trim(DeepONet_FenCoder), &
+                                 trim(DeepONet_FdeCoder), &
+                                 trim(DeepONet_FdeepONet), &
                                  ncol, "PS", &
                                  Model_PS(:ncol,lchnk), &
                                  Nudge_PSstep(:ncol,lchnk))
@@ -5342,16 +5383,16 @@ contains
   ! SZ - 06/21/2023: Merge the DeepOnet model developed by Brown University 
    
   !===========================================================================
-  subroutine DeepONet_nudging(file_path,ncol,var, model_state, nugding_tend)
+  subroutine DeepONet_nudging(file_path,file_encoder,file_decoder,file_deeponet,& 
+                              ncol,var, model_state, nugding_tend)
    use ppgrid, only         : pver,pcols,begchunk,endchunk
    use cam_abortutils, only : endrun
    use perf_mod
    use netcdf
    use units, only: getunit, freeunit
    use mpishorthand  
-   use torch_ftn
-   use iso_c_binding
-   use iso_fortran_env
+   !use torch_ftn
+   !use iso_fortran_env
 
    implicit none
    ! Arguments
@@ -5362,6 +5403,9 @@ contains
 
    integer, intent(in) :: ncol
    character(len=*), intent(in) :: file_path         !Path to DeepONet ML files 
+   character(len=*), intent(in) :: file_encoder      !DeepONet Decoder files 
+   character(len=*), intent(in) :: file_decoder      !DeepONet Encoder files 
+   character(len=*), intent(in) :: file_deeponet     !DeepONet model   files 
    character(len=*), intent(in) :: var               !nudge method 
    real(r8),intent(in) :: model_state(ncol,pver)     !(ncols,pver)
    real(r8),intent(inout) :: nugding_tend(ncol,pver) !(pcols,begchunk:endchunk)
@@ -5374,161 +5418,206 @@ contains
    integer  :: unitn, ierr
    integer  :: arglen, stat
    integer  :: NXY, NXY1, NXYT1 
-   character(len=10) :: fencoder
-   character(len=11) :: fdeeponet
-   character(len=10) :: fdecoder
    real(r8) :: lat_pt,lon_pt
-   real(r4), allocatable :: data_in(:)
-   real(r4), allocatable :: data_in_t(:,:)
-   real(r4), allocatable :: input(:, :)
-   real(r4), allocatable :: input_t(:)
-   real(r4), allocatable :: input_f(:, :, :, :)
-   real(r4), pointer     :: output1(:, :)
-   real(r4), pointer     :: output2(:, :)
-   real(r4), pointer     :: output3(:, :)
-   
-   NXY       = NX * NY 
-   NXY1      = NX1 * NY1 
-   NXYT1     = NX1 * NY1 * NT1
+   real(r8), allocatable :: outputx1(:,:)
+   real(r8), allocatable :: outputx2(:,:)
+   real(r8), allocatable :: outputx3(:,:)
 
-   fencoder  = "encoder.pt" 
-   fdeeponet = "deepONet.pt"
-   fdecoder  = "decoder.pt"
+   real(real32), allocatable :: data_in(:)
+   real(real32), allocatable :: input(:,:)
+   real(real32), pointer     :: output1(:,:)
+
+   real(real32), allocatable :: data_in_t(:,:)   
+   real(real32), allocatable :: input_t(:)
+   real(real32), allocatable :: input_f(:,:,:,:)
+   real(real32), pointer     :: output2(:,:,:,:)
+   real(real32), pointer     :: output3(:,:)
+
+   character(:), allocatable :: ptfile
+
+
+   NXY = NX * NY 
+   NXY1 = NX1 * NY1 
+   NXYT1 = NX1 * NY1 * NT1
 
   !!!!!Debug code!!!!!!!!!
   !run encoder to convert data in model space to data in deepONet space 
-   allocate (data_in(NXY))
-   allocate (input(NX, NY))
-   allocate (input_f(NX, NY, 1, 1))
-   unitn = getunit()
-   open(unitn, file=trim(file_path)//"/encoder/U_bf_revised_checked.out", status='old')
-   do i = 1,NXY
-     read(unitn, *,iostat=ierr) data_in(i)
-     if (ierr /= 0) then
-        call endrun('ERROR reading U_bf_revised_checked.out')
-     end if
-   end do 
-   close(unitn)
+  allocate (data_in(NXY))
+  allocate (input(NX, NY))
+  allocate (input_f(NX, NY, 1, 1))
+  allocate (outputx1(NX, NY))
 
-   input   = reshape(data_in, (/NX, NY/))
-   input_f = reshape(data_in, (/NX, NY, 1, 1/))
-   if (masterproc) then              
+  if (masterproc) then
+    !read debug data for encoder 
+     unitn = getunit()
+     open(unitn, file=trim(file_path)//"/encoder/U_bf_revised_checked.out", status='old')
+     do i = 1,NXY
+       read(unitn, *,iostat=ierr) data_in(i)
+       if (ierr /= 0) then
+          call endrun('ERROR reading U_bf_revised_checked.out')
+       end if
+     end do 
+     close(unitn)
+     call freeunit(unitn)
+
+     ptfile  = trim(file_path)//trim(file_encoder)
+     input   = reshape(data_in, (/NX, NY/))
+     input_f = reshape(data_in, (/NX, NY, 1, 1/))
+     print *, "input data: ", input_f(1,1,1,1)
      print *, "data_in Shape is: ", shape(data_in)
      print *, "input Shape is: ", shape(input)
-     print *, "input_f Shape is: ", shape(input)
-   end if 
+     print *, "input_f Shape is: ", shape(input_f)
 
-   call input_tensors%create
-   call input_tensors%add_array(input_f)
-   print *, "test input_f: ", input_f(1,1,1,1)
+     call input_tensors%create
+     call input_tensors%add_array(input_f)
+     print *, "load pt file from master processors......"
+     call torch_mod%load(ptfile)
+     print *, "torch forward...." 
+     call torch_mod%forward(input_tensors, out_tensor)
+     print *, "torch to array...."
+     call out_tensor%to_array(output1)
+     print *, "output Shape is: ", shape(output1)
+     outputx1 = output1
 
-   if (masterproc) then
-     print *, "pt file  is : ", fencoder
-   end if 
-   call torch_mod%load(fencoder)
-   print *, "torch forward...." 
-   call torch_mod%forward(input_tensors, out_tensor)
-   print *, "torch to array...."
-   call out_tensor%to_array(output1)
-   print *, "output Shape is: ", shape(output1)
-
-   unitn = getunit()
-   open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
-   write(unitn, *) output1
-   close(unitn)
-
+     print *, "output diagnostic data" 
+     unitn = getunit()
+     open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
+     write(unitn, *) outputx1
+     close(unitn)
+     call freeunit(unitn)
+   end if
+   IF (ALLOCATED(ptfile)) THEN
+      DEALLOCATE(ptfile)
+   END IF
    IF (ALLOCATED(data_in)) THEN
-        DEALLOCATE(data_in)
+      DEALLOCATE(data_in)
    END IF
    IF (ALLOCATED(input)) THEN
-        DEALLOCATE(input)
+      DEALLOCATE(input)
    END IF
    IF (ALLOCATED(input_f)) THEN
-        DEALLOCATE(input_f)
+      DEALLOCATE(input_f)
    END IF
 
-  !run deepONet ML model to predict the nudging tendency
    allocate (data_in(NT1))
    allocate (data_in_t(1, NT1))
    allocate (input_t(NXYT1))
    allocate (input_f(NXY1, NT1, 1, 1))
-   unitn = getunit()
-   open(unitn, file=trim(file_path)//"/deeponet/x_trunk.out")
-   do i = 1,NT1
-     read(unitn, *,iostat=ierr) data_in(i)
-     if (ierr /= 0) then
-        call endrun('ERROR reading x_trunk.out')
-     end if
-   end do
-   close(unitn)
-   unitn = getunit()
-   open(unitn, file=trim(file_path)//"/deeponet/U_branch_rev2.out")
-   do i = 1,NXYT1
-     read(unitn, *,iostat=ierr) input_t(i)
-     if (ierr /= 0) then
-        call endrun('ERROR reading U_branch_rev2.out')
-     end if
-   end do 
-   close(unitn)
-   data_in_t  = reshape(data_in, (/1, NT1/))
-   input_f = reshape(input_t, (/NXY1, NT1, 1, 1/))
-   call input_tensors%create
-   call input_tensors%add_array(input_f)
-   call input_tensors%add_array(data_in_t)
-   call torch_mod%load(fdeeponet)
-   call torch_mod%forward(input_tensors, out_tensor, 1)
-   call out_tensor%to_array(output2)
-   print *, "Output is", shape(output2)
-   unitn = getunit()
-   open(unitn, file = "dnet.dat", action="write", status = "replace")
-   write(unitn, *) output2
-   close(unitn)
+
+  !run deepONet ML model to predict the nudging tendency
+   if (masterproc) then
+    !read debug data for deepONet ML model 
+     unitn = getunit()
+     open(unitn, file=trim(file_path)//"/deeponet/x_trunk.out")
+     do i = 1,NT1
+       read(unitn, *,iostat=ierr) data_in(i)
+       if (ierr /= 0) then
+          call endrun('ERROR reading x_trunk.out')
+       end if
+     end do
+     close(unitn)
+     call freeunit(unitn)
+
+     unitn = getunit()
+     open(unitn, file=trim(file_path)//"/deeponet/U_branch_rev2.out")
+     do i = 1,NXYT1
+       read(unitn, *,iostat=ierr) input_t(i)
+       if (ierr /= 0) then
+          call endrun('ERROR reading U_branch_rev2.out')
+       end if
+     end do 
+     close(unitn)
+     call freeunit(unitn)
+
+     ptfile    = trim(file_path)//trim(file_deeponet)
+     data_in_t = reshape(data_in, (/1, NT1/))
+     input_f   = reshape(input_t, (/NXY1, NT1, 1, 1/))
+
+     call input_tensors%create
+     call input_tensors%add_array(input_f)
+     call input_tensors%add_array(data_in_t)
+     print *, "load pt file from master processors......"
+     call torch_mod%load(ptfile)
+     print *, "torch forward...."
+     call torch_mod%forward(input_tensors, out_tensor, 1)
+     print *, "torch to array...."
+     call out_tensor%to_array(output2)
+     print *, "Output is", shape(output2)
+     
+     unitn = getunit()
+     open(unitn, file = "dnet.dat", action="write", status = "replace")
+     write(unitn, *) output2
+     close(unitn)
+     call freeunit(unitn)
+   end if 
+
+   IF (ALLOCATED(ptfile)) THEN
+      DEALLOCATE(ptfile)
+   END IF
    IF (ALLOCATED(data_in)) THEN
-        DEALLOCATE(data_in)
+      DEALLOCATE(data_in)
    END IF
    IF (ALLOCATED(data_in_t)) THEN
-        DEALLOCATE(data_in_t)
-   END IF
-   IF (ALLOCATED(input_f)) THEN
-        DEALLOCATE(input_f)
+      DEALLOCATE(data_in_t)
    END IF
    IF (ALLOCATED(input_t)) THEN
-        DEALLOCATE(input_t)
+      DEALLOCATE(input_t)
+   END IF
+   IF (ALLOCATED(input_f)) THEN
+      DEALLOCATE(input_f)
    END IF
 
-   ! run decoder to convert data in deepONet space to data in model space 
    allocate (data_in(NXY))
    allocate (input(NX, NY))
    allocate (input_f(NX, NY, 1, 1))
-   unitn = getunit()
-   open(unitn, file=trim(file_path)//"/decoder/U_bf_revised_checked.out")
-   do i = 1, NXY
-     read(unitn, *) data_in(i)
-   end do 
-   close(unitn)
-   input = reshape(data_in, (/NX, NY/))
-   input_f = reshape(data_in, (/NX, NY, 1, 1/))
-   call input_tensors%create
-   call input_tensors%add_array(input_f)
-   call torch_mod%load(file_name=fdecoder,flags=0)
-   call torch_mod%forward(input_tensors, out_tensor)
-   call out_tensor%to_array(output3)
-   unitn = getunit()
-   open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
-   write(unitn, *) output3
-   close(unitn)
+   ! run decoder to convert data in deepONet space to data in model space 
+   if (masterproc) then
+    !read debug data for decoder 
+     unitn = getunit()
+     open(unitn, file=trim(file_path)//"/decoder/U_bf_revised_checked.out")
+     do i = 1, NXY
+       read(unitn, *) data_in(i)
+     end do 
+     close(unitn)
+     call freeunit(unitn)
+
+     ptfile  = trim(file_path)//trim(file_decoder)
+     input   = reshape(data_in, (/NX, NY/))
+     input_f = reshape(data_in, (/NX, NY, 1, 1/))
+
+     call input_tensors%create
+     call input_tensors%add_array(input_f)
+     print *, "load pt file from master processors......"
+     call torch_mod%load(ptfile)
+     print *, "torch forward...."
+     call torch_mod%forward(input_tensors, out_tensor)
+     print *, "torch to array...."
+     call out_tensor%to_array(output3)
+     write(iulog,*) 'TEST FOR Pytorch: ', output3(1:5, 1)
+
+     unitn = getunit()
+     open(unit=unitn, file = "dec.dat", action="write", status = 'replace')
+     write(unitn, *) output3
+     close(unitn)
+     call freeunit(unitn)
+   end if
+   IF (ALLOCATED(ptfile)) THEN
+      DEALLOCATE(ptfile)
+   END IF
    IF (ALLOCATED(data_in)) THEN
-        DEALLOCATE(data_in)
+      DEALLOCATE(data_in)
    END IF
    IF (ALLOCATED(input)) THEN
-        DEALLOCATE(input)
+      DEALLOCATE(input)
    END IF
    IF (ALLOCATED(input_f)) THEN
-        DEALLOCATE(input_f)
+      DEALLOCATE(input_f)
    END IF
   !!!end of debug code!!!!!!!!
 
-   if (masterproc) write(iulog,*) 'TEST FOR Pytorch: ', output3(1:5, 1)
+  !call t_startf ('distribute_data')
+  !call scatter_field_to_chunk(1,Nudge_nlev,1,Nudge_nlon,Xtrans,out_x)
+  !call t_stopf ('distribute_data')
 
    return
   end subroutine  ! DeepONet_nudging 
