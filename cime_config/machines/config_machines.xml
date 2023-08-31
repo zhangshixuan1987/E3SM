@@ -250,11 +250,11 @@
     <TEST_TPUT_TOLERANCE>0.1</TEST_TPUT_TOLERANCE>
 
     <environment_variables compiler="gnu">
-      <env name="TORCH_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch</env>
-      <env name="TORCH_FORTRAN_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch-fortran</env>
-      <env name="PYTHONPATH">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch/torch/lib/python3.10/site-packages</env>
-      <env name="LD_LIBRARY_PATH">$ENV{LD_LIBRARY_PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch/torch/lib</env>
-      <env name="PATH">$ENV{PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/E3SM/pytorch/torch/lib</env>
+      <env name="TORCH_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch</env>
+      <env name="TORCH_FORTRAN_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran</env>
+      <env name="PYTHONPATH">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/lib/python3.10/site-packages</env>
+      <env name="LD_LIBRARY_PATH">$ENV{LD_LIBRARY_PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/lib</env>
+      <env name="PATH">$ENV{PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/lib</env>
     </environment_variables>
 
     <environment_variables>
