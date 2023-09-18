@@ -17,7 +17,7 @@ module physpkg
   use spmd_utils,       only: masterproc
   use physconst,        only: latvap, latice, rh2o
   use physics_types,    only: physics_state, physics_tend, physics_state_set_grid, &
-       physics_ptend, physics_tend_init,    &
+       physics_ptend, physics_tend_init, &
        physics_type_alloc, physics_ptend_dealloc,&
        physics_state_alloc, physics_state_dealloc, physics_tend_alloc, physics_tend_dealloc
   use physics_update_mod,  only: physics_update, physics_update_init, hist_vars, nvars_prtrb_hist, get_var
@@ -976,6 +976,10 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
     type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
     type(cam_in_t),                     dimension(begchunk:endchunk) :: cam_in
     type(cam_out_t),                    dimension(begchunk:endchunk) :: cam_out
+    
+    !save state variable for deepnet nudging prediction
+    type(physics_state), dimension(begchunk:endchunk) :: deeponet_state
+
     !-----------------------------------------------------------------------
     !
     !---------------------------Local workspace-----------------------------
@@ -1031,7 +1035,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        !-----------------------------------------------------------------------
 
        call t_startf('phys_timestep_init')
-       call phys_timestep_init( phys_state, cam_out, pbuf2d)
+       call phys_timestep_init( phys_state, cam_out, pbuf2d, deeponet_state )
        call t_stopf('phys_timestep_init')
 
        call t_stopf ('physpkg_st1')
@@ -1074,7 +1078,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
 
           call tphysbc (ztodt, fsns(1,c), fsnt(1,c), flns(1,c), flnt(1,c), phys_state(c),        &
                        phys_tend(c), phys_buffer_chunk,  fsds(1,c),                       &
-                       sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c) )
+                       sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c), deeponet_state(c))
 
           call system_clock(count=end_chnk_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
           if ( end_chnk_cnt < beg_chnk_cnt ) end_chnk_cnt = end_chnk_cnt + sysclock_max
@@ -1082,6 +1086,9 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
           call update_cost_p(c, chunk_cost)
 
        end do
+
+       !call deepONet nudging prediction 
+       call deeponet_nudging(ztodt,deeponet_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
        if ( end_proc_cnt < beg_proc_cnt ) end_proc_cnt = end_proc_cnt + sysclock_max
@@ -1909,7 +1916,7 @@ end subroutine tphysac
 subroutine tphysbc (ztodt,               &
        fsns,    fsnt,    flns,    flnt,    state,   &
        tend,    pbuf,     fsds,                     &
-       sgh, sgh30, cam_out, cam_in )
+       sgh, sgh30, cam_out, cam_in, state1)
     !----------------------------------------------------------------------- 
     ! 
     ! Purpose: 
@@ -1945,7 +1952,7 @@ subroutine tphysbc (ztodt,               &
     use microp_driver,   only: microp_driver_tend
     use microp_aero,     only: microp_aero_run
     use macrop_driver,   only: macrop_driver_tend
-    use physics_types,   only: physics_state, physics_tend, physics_ptend, &
+    use physics_types,   only: physics_state, physics_state_copy, physics_tend, physics_ptend, &
          physics_ptend_init, physics_ptend_sum, physics_state_check, physics_ptend_scale
     use cam_diagnostics, only: diag_conv_tend_ini, diag_phys_writeout, diag_conv, diag_export, diag_state_b4_phys_write
     use cam_history,     only: outfld, fieldname_len
@@ -1977,7 +1984,8 @@ subroutine tphysbc (ztodt,               &
     use phys_control,    only: use_qqflx_fixer, use_mass_borrower
     use nudging,         only: Nudge_Model,Nudge_Loc_PhysOut, &
                                Nudge_Land, nudging_calc_tend, &
-                               nudging_update_land_surface
+                               nudging_update_land_surface, & 
+                               DeepONet_Nudge
     use lnd_infodata,    only: precip_downscaling_method
 
     implicit none
@@ -1995,6 +2003,7 @@ subroutine tphysbc (ztodt,               &
     real(r8), intent(in) :: sgh30(pcols)                     ! Std. deviation of 30 s orography for tms
 
     type(physics_state), intent(inout) :: state
+    type(physics_state), intent(inout) :: state1
     type(physics_tend ), intent(inout) :: tend
     type(physics_buffer_desc), pointer :: pbuf(:)
 
@@ -2725,6 +2734,9 @@ end if
     !===================================
     if (Nudge_Model .and. Nudge_Loc_PhysOut) then
        call nudging_calc_tend(state, pbuf, ztodt)
+       if (DeepONet_Nudge) then 
+         call physics_state_copy(state,state1)
+       end if   
     endif
 
     !===================================================
@@ -2796,7 +2808,7 @@ end if ! l_rad
 
 end subroutine tphysbc
 
-subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
+subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, deeponet_state)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place for parameterizations to call per timestep initializations.
@@ -2807,7 +2819,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use chemistry,           only: chem_timestep_init
   use chem_surfvals,       only: chem_surfvals_set
-  use physics_types,       only: physics_state
+  use physics_types,       only: physics_state, physics_state_copy
   use physics_buffer,      only: physics_buffer_desc
   use ghg_data,            only: ghg_data_timestep_init
   use cam3_aero_data,      only: cam3_aero_data_on, cam3_aero_data_timestep_init
@@ -2829,7 +2841,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
   use aerodep_flx,         only: aerodep_flx_adv
   use aircraft_emit,       only: aircraft_emit_adv
   use prescribed_volcaero, only: prescribed_volcaero_adv
-  use nudging,             only: Nudge_Model,nudging_timestep_init
+  use nudging,             only: Nudge_Model,DeepONet_Nudge,nudging_timestep_init
 
   use seasalt_model,       only: advance_ocean_data, has_mam_mom
 
@@ -2837,8 +2849,12 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
 
   type(physics_state), intent(inout), dimension(begchunk:endchunk) :: phys_state
   type(cam_out_t),     intent(inout), dimension(begchunk:endchunk) :: cam_out
+
+  type(physics_state), optional, intent(inout), dimension(begchunk:endchunk) :: deeponet_state
   
   type(physics_buffer_desc), pointer                 :: pbuf2d(:,:)
+
+  integer :: lchnk 
 
   !-----------------------------------------------------------------------------
 
@@ -2907,10 +2923,17 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
 
   ! Update Nudging values, if needed
   !----------------------------------
-  if(Nudge_Model) call nudging_timestep_init(phys_state)
+  if (Nudge_Model) then 
+    call nudging_timestep_init(phys_state)
+    if (DeepONet_Nudge) then 
+      !copy the state to the array for deeponet machine learning prediction 
+      do lchnk = begchunk, endchunk
+        call physics_state_copy(phys_state(lchnk), deeponet_state(lchnk))
+      end do
+    end if         
+  end if 
 
 end subroutine phys_timestep_init
-
 
 subroutine add_fld_default_calls()
   !BSINGH -  For adding addfld and add defualt calls
@@ -2948,5 +2971,32 @@ subroutine add_fld_default_calls()
   enddo
 
 end subroutine add_fld_default_calls
+
+subroutine deeponet_nudging(dtime,phys_state)
+!-----------------------------------------------------------------------------------
+!
+! Purpose: The place to call deepOnet machine learning model to predict nudging 
+!          tendencies. This module is added here to flexibly provide the model 
+!          state variable at any locations to deepOnet model 
+! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)
+!
+!-----------------------------------------------------------------------------------
+  use shr_kind_mod,        only: r8 => shr_kind_r8
+  use physics_types,       only: physics_state
+  use nudging,             only: Nudge_Model,DeepONet_Nudge,deeponet_timestep_init
+
+  implicit none
+
+  type(physics_state), intent(in), dimension(begchunk:endchunk) :: phys_state
+  real(r8), intent(in) :: dtime ! model time step sizes 
+
+  !===================================
+  ! Update Nudging tendency if needed
+  !===================================
+  if (Nudge_Model .and. DeepONet_Nudge) then
+     call deeponet_timestep_init(phys_state, dtime)
+  endif
+
+end subroutine deeponet_nudging
 
 end module physpkg
