@@ -5872,9 +5872,9 @@ contains
    !call DeepONet to predict nudging tendency or model state 
    if (DeepONet_Conv2d) then
 
-     if (masterproc) then
-       write(iulog,*) 'deeponet_advance: runing convolution 2D ML model with ngcols=',ngcols
-     end if 
+     !if (masterproc) then
+     !  write(iulog,*) 'deeponet_advance: runing convolution 2D ML model with ngcols=',ngcols
+     !end if 
 
      ! convolution 2D model only predicts horizontal wind 
      if ((trim(varname) .ne. 'U') .and. (trim(varname) .ne. 'V')) return
