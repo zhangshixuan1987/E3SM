@@ -429,6 +429,7 @@ module nudging
   public:: Nudge_Loc_PhysOut
   public:: deeponet_timestep_init
   private::se2latlon_interp_init
+  private::latlon2se_interp_init
   private::deeponet_advance
   private::update_nudging_tend
   private::update_nudge_prof
@@ -556,6 +557,9 @@ module nudging
                         l_Before_End
   real(r8),parameter :: sec_per_hour = 3600._r8
   real(r8),parameter :: fillvalue = 1.e+20_r8               ! fill value for netcdf fields
+  integer,parameter  :: imissing = -99999                   ! special value for integer missing data 
+  real(r8),parameter :: rmissing = -1.e36_r8                ! special value for missing data 
+
   character(len=10)  :: Nudge_Method                        ! nudge method 
   logical            :: Nudge_Loc_PhysOut                   ! whether nudging tendency is calculated at the same 
                                                             ! location where the model state variables are written out
@@ -574,13 +578,15 @@ module nudging
   real(r8), allocatable, dimension(:,:,:)   :: INTP_PHIS    ! (pcols,begchunk:endchunk,:)
 
 !Variables for deepONet nudging 
-  real(r8), allocatable :: Model_rlat(:)             !(Nudge_ncol)
-  real(r8), allocatable :: Model_rlon(:)             !(Nudge_ncol)
-  real(r8), allocatable :: Model_wgth(:)             !(Nudge_ncol)
-  real(r8), allocatable :: DeepONet_Conv2d_lon(:)    !(DeepONet_Conv2d_NXY)
-  real(r8), allocatable :: DeepONet_Conv2d_lat(:)    !(DeepONet_Conv2d_NXY)
-  integer,  allocatable :: DeepONet_Conv2d_cind(:,:) !(DeepONet_Conv2d_NXY,5)
-  real(r8), allocatable :: DeepONet_Conv2d_wgth(:,:) !(DeepONet_Conv2d_NXY,5)
+  real(r8), allocatable :: Model_rlat(:)               !(Nudge_ncol)
+  real(r8), allocatable :: Model_rlon(:)               !(Nudge_ncol)
+  real(r8), allocatable :: Model_wgth(:)               !(Nudge_ncol)
+  real(r8), allocatable :: DeepONet_Conv2d_lon(:)      !(DeepONet_Conv2d_NXY)
+  real(r8), allocatable :: DeepONet_Conv2d_lat(:)      !(DeepONet_Conv2d_NXY)
+  integer,  allocatable :: DeepONet_se2latlon_ind(:,:) !(DeepONet_Conv2d_NXY,5)
+  real(r8), allocatable :: DeepONet_se2latlon_wgt(:,:) !(DeepONet_Conv2d_NXY,5)
+  integer,  allocatable :: DeepONet_latlon2se_ind(:,:) !(Nudge_ncol,4)
+  real(r8), allocatable :: DeepONet_latlon2se_wgt(:,:) !(Nudge_ncol,4)
 
 !Variables for surface nudging 
   real(r8), allocatable :: Target_U10(:,:)     !(pcols,begchunk:endchunk)
@@ -1761,10 +1767,15 @@ contains
              call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_lat',DeepONet_Conv2d_NY)
              allocate(DeepONet_Conv2d_lon(DeepONet_Conv2d_NX),stat=istat)
              call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_lon',DeepONet_Conv2d_NX)
-             allocate(DeepONet_Conv2d_cind(DeepONet_Conv2d_NXY,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_cind',5*DeepONet_Conv2d_NXY)
-             allocate(DeepONet_Conv2d_wgth(DeepONet_Conv2d_NXY,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_wgth',5*DeepONet_Conv2d_NXY)
+             allocate(DeepONet_se2latlon_ind(DeepONet_Conv2d_NXY,5),stat=istat)
+             call alloc_err(istat,'DeepONet NUDGING','DeepONet_se2latlon_ind',5*DeepONet_Conv2d_NXY)
+             allocate(DeepONet_se2latlon_wgt(DeepONet_Conv2d_NXY,5),stat=istat)
+             call alloc_err(istat,'DeepONet NUDGING','DeepONet_se2latlon_wgt',5*DeepONet_Conv2d_NXY)
+             allocate(DeepONet_latlon2se_ind(Nudge_ncol,4),stat=istat)
+             call alloc_err(istat,'DeepONet NUDGING','DeepONet_latlon2se_ind',4*Nudge_ncol)
+             allocate(DeepONet_latlon2se_wgt(Nudge_ncol,4),stat=istat)
+             call alloc_err(istat,'DeepONet NUDGING','DeepONet_latlon2se_wgt',4*Nudge_ncol)
+
              if (masterproc) then
                do i = 1, DeepONet_Conv2d_NX
                  DeepONet_Conv2d_lon(i) = (val1_0+(i-1)*DeepONet_Conv2d_DX)*SHR_CONST_PI/180._r8
@@ -1772,20 +1783,30 @@ contains
                do j = 1, DeepONet_Conv2d_NY
                  DeepONet_Conv2d_lat(j) = (val3_0+(j-1)*DeepONet_Conv2d_DY)*SHR_CONST_PI/180._r8
                end do
+
+               !initialize the weigthing fuction to interpolate model grid to lat-lon 
                call se2latlon_interp_init(Nudge_ncol, Model_rlon, Model_rlat, & 
                                           DeepONet_Conv2d_NX, DeepONet_Conv2d_NY, & 
                                           DeepONet_Conv2d_lon, DeepONet_Conv2d_lat,  &
-                                          DeepONet_Conv2d_cind, DeepONet_Conv2d_wgth) 
+                                          DeepONet_se2latlon_ind, DeepONet_se2latlon_wgt)  
+
+               !initialize the weigthing fuction to interpolate lat-lon to model grid 
+               call latlon2se_interp_init(Nudge_ncol, Model_rlon, Model_rlat, &
+                                          DeepONet_Conv2d_NX, DeepONet_Conv2d_NY, &
+                                          DeepONet_Conv2d_lon, DeepONet_Conv2d_lat,  &
+                                          DeepONet_latlon2se_ind, DeepONet_latlon2se_wgt) 
              end if 
 
 #ifdef SPMD
-             call mpibcast(DeepONet_Conv2d_NX,   1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_NY,   1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_NXY,  1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_lat,  DeepONet_Conv2d_NX,    mpir8,   0, mpicom)
-             call mpibcast(DeepONet_Conv2d_lon,  DeepONet_Conv2d_NY,    mpir8,   0, mpicom)
-             call mpibcast(DeepONet_Conv2d_cind, 5*DeepONet_Conv2d_NXY, mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_wgth, 5*DeepONet_Conv2d_NXY, mpir8,   0, mpicom)
+             call mpibcast(DeepONet_Conv2d_NX,     1,                     mpiint,  0, mpicom)
+             call mpibcast(DeepONet_Conv2d_NY,     1,                     mpiint,  0, mpicom)
+             call mpibcast(DeepONet_Conv2d_NXY,    1,                     mpiint,  0, mpicom)
+             call mpibcast(DeepONet_Conv2d_lat,    DeepONet_Conv2d_NX,    mpir8,   0, mpicom)
+             call mpibcast(DeepONet_Conv2d_lon,    DeepONet_Conv2d_NY,    mpir8,   0, mpicom)
+             call mpibcast(DeepONet_se2latlon_ind, 5*DeepONet_Conv2d_NXY, mpiint,  0, mpicom)
+             call mpibcast(DeepONet_se2latlon_wgt, 5*DeepONet_Conv2d_NXY, mpir8,   0, mpicom)
+             call mpibcast(DeepONet_latlon2se_ind, 4*Nudge_ncol,          mpiint,  0, mpicom)
+             call mpibcast(DeepONet_latlon2se_wgt, 4*Nudge_ncol,          mpir8,   0, mpicom)
 #endif
            else 
              write(iulog,*) 'DeepONet NUDGING: 1D convolution ML model: global area' 
@@ -2163,6 +2184,7 @@ contains
    use cam_history,  only: outfld
    use physconst,    only: cpair, gravit, rga
    use phys_grid,    only: get_rlat_all_p, get_rlon_all_p
+   use parallel_mod, only: par
 
    ! Arguments
    !-----------
@@ -2313,6 +2335,7 @@ contains
      !call deepONet to predict nudging tendency   
      if (Nudge_Uprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
+       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, Nudge_nlev
           arr(:,:,1) = Model_U(:,k,:) 
           arr_field(:,:,1) = 0.0_r8
@@ -2336,6 +2359,7 @@ contains
      end if
      if (Nudge_Vprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
+       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_V(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -2359,6 +2383,7 @@ contains
      end if
      if (Nudge_Tprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
+       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_T(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -2378,6 +2403,7 @@ contains
      end if
      if (Nudge_Qprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
+       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_Q(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -5836,7 +5862,7 @@ contains
        do i = 1, DeepONet_Conv2d_NX
          do j = 1, DeepONet_Conv2d_NY
            m = (i-1)*DeepONet_Conv2d_NY +j
-           n = DeepONet_Conv2d_cind(m,5)
+           n = DeepONet_se2latlon_ind(m,5)
            wrk_rgd(i,j) = model_state(n)
          end do
        end do
@@ -5846,8 +5872,8 @@ contains
          do j = 1, DeepONet_Conv2d_NY
            m  = (i-1)*DeepONet_Conv2d_NY + j
            do k = 1, 4
-             wrk_rgd(i,j) = wrk_rgd(i,j) + model_state(DeepONet_Conv2d_cind(m,k)) & 
-                                         * DeepONet_Conv2d_wgth(m,k) 
+             wrk_rgd(i,j) = wrk_rgd(i,j) + model_state(DeepONet_se2latlon_ind(m,k)) & 
+                                         * DeepONet_se2latlon_wgt(m,k) 
            end do 
          end do
        end do
@@ -6013,33 +6039,28 @@ contains
        do i = 1, DeepONet_Conv2d_NX
          do j = 1, DeepONet_Conv2d_NY
            m = (i-1)*DeepONet_Conv2d_NY +j
-           n = DeepONet_Conv2d_cind(m,5)
+           n = DeepONet_se2latlon_ind(m,5)
            nugding_tend(n) = 0.5_r8*(dcdout(m,1)+1.0_r8)*(dcdmax-dcdmin)+dcdmin 
          end do
        end do
      else 
        !method 2: linear interpolation to destination grid 
-       allocate(wrk_rgd(DeepONet_Conv2d_NX,DeepONet_Conv2d_NY))
-       do i = 1, DeepONet_Conv2d_NX
-         do j = 1, DeepONet_Conv2d_NY
-           m = (i-1)*DeepONet_Conv2d_NY +j
-           wrk_rgd(i,j) = 0.5_r8*(dcdout(m,1)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
-         end do
-       end do
-       call lininterp_init(DeepONet_Conv2d_lon,DeepONet_Conv2d_NX,rlon,ngcols,horzextrap,lon_wgt)
-       call lininterp_init(DeepONet_Conv2d_lat,DeepONet_Conv2d_NY,rlat,ngcols,horzextrap,lat_wgt)
-       call lininterp(wrk_rgd,DeepONet_Conv2d_NX,DeepONet_Conv2d_NY,nugding_tend,ngcols,lon_wgt,lat_wgt)
-       call lininterp_finish(lon_wgt)
-       call lininterp_finish(lat_wgt)
+       do i = 1, ngcols
+         do j = 1, 4 
+           m = DeepONet_latlon2se_ind(i,j) 
+           nugding_tend(i) = nugding_tend(i) & 
+                            + DeepONet_latlon2se_wgt(i,j) & 
+                              *(0.5_r8*(dcdout(m,1)+1.0_r8)*(dcdmax-dcdmin)+dcdmin)
+         end do  
+       end do   
        !if (masterproc) then
-       !  write(iulog,*) 'var(min/max) = ',MINVAL(wrk_rgd),MAXVAL(wrk_rgd)
+       !  write(iulog,*) 'var(min/max) = ',MINVAL(dcdout),MAXVAL(dcdout)
        !  write(iulog,*) 'lon(min/max) = ',MINVAL(DeepONet_Conv2d_lon)/deg2rad,MAXVAL(DeepONet_Conv2d_lon)/deg2rad
        !  write(iulog,*) 'lat(min/max) = ',MINVAL(DeepONet_Conv2d_lat)/deg2rad,MAXVAL(DeepONet_Conv2d_lat)/deg2rad
        !  write(iulog,*) 'rlon(min/max) = ',MINVAL(rlon)/deg2rad,MAXVAL(rlon)/deg2rad
        !  write(iulog,*) 'rlat(min/max) = ',MINVAL(rlat)/deg2rad,MAXVAL(rlat)/deg2rad
        !  write(iulog,*) 'regrid var(min/max) = ',MINVAL(nugding_tend(:)),MAXVAL(nugding_tend(:))
        !end if 
-       deallocate(wrk_rgd)
      end if 
 
      !if (masterproc) then
@@ -6514,6 +6535,93 @@ contains
   return
   end subroutine !ps_nudging
 
+  subroutine latlon2se_interp_init(ngcols, rlon_d, rlat_d, &
+                                   nrlon, nrlat, reclon, reclat, &
+                                   close_ind, weight_lin)
+   !---------------------------------------------------------------------------
+   ! This program computes weighting functions to map a variable on 
+   ! (nlat,nlon) resolution to global SE grid 
+   ! Author: Shixuan Zhang  -- August 2023
+   !---------------------------------------------------------------------------
+   use shr_kind_mod,     only : r8 => shr_kind_r8
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+   use dycore,           only : dycore_is
+   use interpolate_data, only : lininterp_init, lininterp, lininterp_finish, interp_type
+   use units,            only : getunit, freeunit
+   use error_messages,   only : handle_ncerr
+   use cam_history  ,    only : outfld
+
+   implicit none
+   integer,  parameter  :: horzextrap = 0 ! For values which extend beyond boundaries, the weights are zero 
+   real(r8), parameter  :: deg2rad    = SHR_CONST_PI/180._r8
+   integer,  intent(in) :: nrlat, nrlon, ngcols
+   real(r8), intent(in) :: rlon_d(ngcols) !lon for model grid in radians 
+   real(r8), intent(in) :: rlat_d(ngcols) !lat for model grid in radians  
+   real(r8), intent(in) :: reclon(nrlon)
+   real(r8), intent(in) :: reclat(nrlat)
+
+   type(interp_type)    :: lon_wgt, lat_wgt
+
+   integer,  allocatable, intent(out) :: close_ind(:,:)
+   real(r8), allocatable, intent(out) :: weight_lin(:,:)
+
+   ! local variables
+   integer :: i, j, m  ! indices
+   integer,  pointer :: iim(:), jjm(:)
+   integer,  pointer :: iip(:), jjp(:)
+   real(r8), pointer :: wgts(:), wgte(:)
+   real(r8), pointer :: wgtn(:), wgtw(:)
+
+   if (.not. dycore_is('UNSTRUCTURED')) then
+      call endrun ('se2latlon_interp_init ERROR: only works for  SE dycore')
+   end if
+
+   call lininterp_init(reclon,nrlon,rlon_d,ngcols,horzextrap,lon_wgt)
+   call lininterp_init(reclat,nrlat,rlat_d,ngcols,horzextrap,lat_wgt)
+   jjm  => lat_wgt%jjm
+   jjp  => lat_wgt%jjp
+   wgts => lat_wgt%wgts
+   wgtn => lat_wgt%wgtn
+
+   iim  => lon_wgt%jjm
+   iip  => lon_wgt%jjp
+   wgtw => lon_wgt%wgts
+   wgte => lon_wgt%wgtn
+
+   !initialize arrary for interpolation 
+   allocate(close_ind(ngcols,4))
+   allocate(weight_lin(ngcols,4))
+   close_ind(:,:)  = imissing 
+   weight_lin(:,:) = rmissing
+
+   !save the weights for linear interpolation from lat-lon to SE 
+   do i = 1,ngcols 
+     close_ind(i,1)  = (iim(i)-1)*nrlat + jjm(i) !(i,j)
+     close_ind(i,2)  = (iip(i)-1)*nrlat + jjm(i) !(i+1,j)
+     close_ind(i,3)  = (iip(i)-1)*nrlat + jjp(i) !(i+1,j+1)
+     close_ind(i,4)  = (iim(i)-1)*nrlat + jjp(i) !(i,j+1)
+     weight_lin(i,1) = wgtw(i) * wgts(i)
+     weight_lin(i,2) = wgte(i) * wgts(i)
+     weight_lin(i,3) = wgte(i) * wgtn(i)
+     weight_lin(i,4) = wgtw(i) * wgtn(i) 
+   end do 
+   call lininterp_finish(lon_wgt)
+   call lininterp_finish(lat_wgt)
+   
+   !final sanity check 
+   if(masterproc) then 
+     if (any(close_ind == imissing)) then 
+       call endrun('latlon2se_interp_init: ERROR, interpolation index contains missing values')
+     else if (any( weight_lin == rmissing)) then
+       call endrun('latlon2se_interp_init: ERROR, interpolation weight contains missing values')
+     else
+       write(iulog,*) 'latlon2se_interp_init: interpolation initialization succeed!'
+     end if 
+   end if 
+
+   return 
+  end subroutine !latlon2se_interp_init
+
   subroutine se2latlon_interp_init(ngcols, rlon_d, rlat_d, & 
                                    nrlon, nrlat, reclon, reclat, & 
                                    close_ind, weight_qdl) 
@@ -6533,13 +6641,10 @@ contains
    real(r8), parameter  :: half_PI = 0.5_r8 * SHR_CONST_PI
    real(r8), parameter  :: two_PI  = 2.0_r8 * SHR_CONST_PI
    real(r8), parameter  :: deg2rad = SHR_CONST_PI/180._r8
-   real(r8), parameter  :: rspval  = -1.e36_r8 ! special value for missing data 
-   real(r8), parameter  :: ispval  = -99999    ! special value for missing data 
 
-   integer,  intent(in) :: ngcols
+   integer,  intent(in) :: nrlat, nrlon, ngcols
    real(r8), intent(in) :: rlon_d(ngcols) !lon for model grid in radians 
    real(r8), intent(in) :: rlat_d(ngcols) !lat for model grid in radians  
-   integer,  intent(in) :: nrlat, nrlon 
    real(r8), intent(in) :: reclon(nrlon)
    real(r8), intent(in) :: reclat(nrlat)
 
@@ -6582,11 +6687,11 @@ contains
    allocate(weight_qdl(nrecg,5))
    allocate(olat(ngcols))
    allocate(olon(ngcols))
-   close_lat(:,:)  = rspval
-   close_lon(:,:)  = rspval
-   close_dst(:,:)  = rspval
-   close_ind(:,:)  = ispval
-   weight_qdl(:,:) = rspval 
+   close_lat(:,:)  = rmissing
+   close_lon(:,:)  = rmissing
+   close_dst(:,:)  = rmissing
+   close_ind(:,:)  = imissing 
+   weight_qdl(:,:) = rmissing
 
    !find the cell-center grid point closest to DeepONet lat-lon grid
    do i = 1, nrlon
@@ -6609,8 +6714,8 @@ contains
            olat = rlat_d
            olon = rlon_d
          else
-           olat(:) = rspval
-           olon(:) = rspval
+           olat(:) = rmissing 
+           olon(:) = rmissing
            dlat    = close_lat(m,5) - rlat 
            dlon    = close_lon(m,5) - rlon
            if(dlat <= 0._r8 .and. dlon <= 0._r8) then 
@@ -6688,10 +6793,10 @@ contains
          !loop model grid to locate nearest point 
          ntcs      = 0  
          nmin      = 0
-         dmin      = 1.e36_r8
-         this_dist = 1.e36_r8 
+         dmin      = fillvalue ! initialize a large value 
+         this_dist = fillvalue ! initialize a large value  
          do n = 1,ngcols 
-           if( (olon(n) /= rspval) .and. (olat(n) /= rspval)) then 
+           if( (olon(n) /= rmissing) .and. (olat(n) /= rmissing)) then 
              dlon = olon(n) - rlon 
              if(abs(olat(n)) >= half_PI .or. abs(rlat) >= half_PI .or. dlon == 0.0_r8) then
                this_dist = abs(olat(n) - rlat) 
@@ -6725,12 +6830,12 @@ contains
          close_ind(m,k) = nmin
        end do 
 
-       xa    = rspval
-       xb    = rspval
-       xaxbr = rspval
-       xplr  = rspval
-       yplr  = rspval
-       bearg = rspval
+       xa    = rmissing 
+       xb    = rmissing 
+       xaxbr = rmissing 
+       xplr  = rmissing 
+       yplr  = rmissing 
+       bearg = rmissing 
        !loop corner to calculate interpolation weights
        !cshift is used to shift array to the left so 
        !corner(4,4) is the nearest point to target 
@@ -6785,17 +6890,6 @@ contains
        xb(2) = yplr(1)
        xb(1) = yplr(2) - yplr(1)
 
-      !Diag output
-      ! write(iulog,*) 'se2latlon_interp_init: xa(3,k)  =', xa(:) 
-      ! write(iulog,*) 'se2latlon_interp_init: xb(2,k)  =', xb(:) 
-      ! write(iulog,*) 'se2latlon_interp_init: xaxbr(k) =', xaxbr 
-      ! write(iulog,*) 'se2latlon_interp_init: close_ind(m,k) =', m, close_ind(m,:) 
-      ! write(iulog,*) 'se2latlon_interp_init: close_dst(m,k) =', m, close_dst(m,:)
-      ! write(iulog,*) 'se2latlon_interp_init: close_lat(m,k) =', m, close_lat(m,:)/deg2rad
-      ! write(iulog,*) 'se2latlon_interp_init: close_lon(m,k) =', m, close_lon(m,:)/deg2rad
-      ! write(iulog,*) 'se2latlon_interp_init: nearest lat    =', m, rlat/deg2rad
-      ! write(iulog,*) 'se2latlon_interp_init: nearest lon    =', m, rlon/deg2rad
-
        !target grid location 
        if ((half_PI - abs(close_lat(m,iorg))) < epsilon(close_lat(m,iorg))) then
          lon1c = 0.0_r8
@@ -6825,14 +6919,25 @@ contains
        as    = xaa / max(abs(xaa), abs(xbb), abs(xcc)) 
        bs    = xbb / max(abs(xaa), abs(xbb), abs(xcc))
        cs    = xcc / max(abs(xaa), abs(xbb), abs(xcc))
-       write(iulog,*) 'se2latlon_interp_init: normalized coef as,bs,cs=', as,bs,cs 
 
-       p     = rspval
-       q     = rspval
-       p1    = rspval
-       p2    = rspval
-       p_neg = rspval
-       q_neg = rspval
+      !Diag output
+      ! write(iulog,*) 'se2latlon_interp_init: normalized coef as,bs,cs=', as,bs,cs
+      ! write(iulog,*) 'se2latlon_interp_init: xa(3,k)  =', xa(:) 
+      ! write(iulog,*) 'se2latlon_interp_init: xb(2,k)  =', xb(:) 
+      ! write(iulog,*) 'se2latlon_interp_init: xaxbr(k) =', xaxbr 
+      ! write(iulog,*) 'se2latlon_interp_init: close_ind(m,k) =', m, close_ind(m,:) 
+      ! write(iulog,*) 'se2latlon_interp_init: close_dst(m,k) =', m, close_dst(m,:)
+      ! write(iulog,*) 'se2latlon_interp_init: close_lat(m,k) =', m, close_lat(m,:)/deg2rad
+      ! write(iulog,*) 'se2latlon_interp_init: close_lon(m,k) =', m, close_lon(m,:)/deg2rad
+      ! write(iulog,*) 'se2latlon_interp_init: nearest lat    =', m, rlat/deg2rad
+      ! write(iulog,*) 'se2latlon_interp_init: nearest lon    =', m, rlon/deg2rad
+
+       p     = rmissing 
+       q     = rmissing 
+       p1    = rmissing 
+       p2    = rmissing 
+       p_neg = rmissing 
+       q_neg = rmissing 
        if (abs(as) < epsilon(as)) then
          p1 = - cs / bs
        else
@@ -6850,7 +6955,7 @@ contains
            end if
          end if
        end if
-       if (p1 == rspval .and. p2 == rspval) then
+       if (p1 == rmissing .and. p2 == rmissing) then
          call endrun('se2latlon_interp_init: ERROR in find interp p1, p2 coef.')
        end if 
 
@@ -6861,9 +6966,9 @@ contains
          else if (p2 >=0.0_r8 .and. p2 <= 1._r8) then
            p = p2
          else
-           p = rspval
+           p = rmissing 
          end if
-       else if (p1 /= rspval .and. p2 == rspval ) then
+       else if (p1 /= rmissing .and. p2 == rmissing ) then
          p = p1
        else
          p = p1
@@ -6894,7 +6999,7 @@ contains
        end if 
 
        ! Repeat for the -root, if it is a possibility.
-       if (p_neg /= rspval) then
+       if (p_neg /= rmissing) then
          det = (xa(3) + xa(1)*p_neg)
          if (det /= 0.0_r8) then
            q_neg = (x_o - xa(2)*p_neg) / det
@@ -6964,12 +7069,14 @@ contains
    deallocate(close_dst)
     
    !final sanity check 
-   if (any(close_ind == ispval)) then 
-     call endrun('se2latlon_interp_init: ERROR, interpolation index contains missing values')
-   else if (any( weight_qdl == rspval)) then 
-     call endrun('se2latlon_interp_init: ERROR, interpolation weight contains missing values')
-   else 
-     write(iulog,*) 'se2latlon_interp_init: interpolation initialization succeed!' 
+   if(masterproc) then 
+     if (any(close_ind == imissing)) then 
+       call endrun('se2latlon_interp_init: ERROR, interpolation index contains missing values')
+     else if (any( weight_qdl == rmissing)) then 
+       call endrun('se2latlon_interp_init: ERROR, interpolation weight contains missing values')
+     else 
+       write(iulog,*) 'se2latlon_interp_init: interpolation initialization succeed!' 
+     end if 
    end if 
 
    return 
