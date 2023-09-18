@@ -5781,7 +5781,7 @@ contains
 
    ! Local values
    !----------------
-   integer  :: i,j,ifld,n,m,k,lchnk,ii,jj,ncols
+   integer  :: i,j,ifld,n,m,k,lchnk,ii,jj
    real(r8) :: sum_x
 
    !setup for convolution 2D model 
@@ -5873,7 +5873,7 @@ contains
    if (DeepONet_Conv2d) then
 
      if (masterproc) then
-       write(iulog,*) 'deeponet_advance: number of working columns, ncols,ngcols=',ncols,ngcols
+       write(iulog,*) 'deeponet_advance: runing convolution 2D ML model with ngcols=',ngcols
      end if 
 
      ! convolution 2D model only predicts horizontal wind 
