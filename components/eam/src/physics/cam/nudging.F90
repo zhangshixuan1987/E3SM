@@ -6042,10 +6042,10 @@ contains
        deallocate(wrk_rgd)
      end if 
 
-     if (masterproc) then
-       write(iulog,*) 'deeponet_advance: nudging tendency from DeepONet prediction'
-       write(iulog,*) 'nugding_tend(min/max) = ',minval(nugding_tend),maxval(nugding_tend)
-     end if 
+     !if (masterproc) then
+     !  write(iulog,*) 'deeponet_advance: nudging tendency from DeepONet prediction'
+     !  write(iulog,*) 'nugding_tend(min/max) = ',minval(nugding_tend),maxval(nugding_tend)
+     !end if 
 
    else
 
