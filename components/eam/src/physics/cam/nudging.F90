@@ -646,6 +646,13 @@ module nudging
   integer  :: snow_pcw_idx = 0
   integer  :: vmag_gust_idx= 0
 
+!parameters for deepONet convolution 2D model 
+  integer  :: DeepONet_Conv2d_NT  = 248! Dummy time array size  
+  integer  :: DeepONet_Conv2d_NX1 = 6  ! ML model trunk in X 6 
+  integer  :: DeepONet_Conv2d_NY1 = 6  ! ML model trunk in Y 6 
+  integer  :: DeepONet_Conv2d_NN  = 36 ! DeepONet_Conv2d_NX1 * DeepONet_Conv2d_NY1 
+  real(r8) :: DeepONet_dtime     = 10800._r8
+
 contains
   !================================================================
   subroutine nudging_readnl(nlfile)
@@ -5796,8 +5803,6 @@ contains
 
    real(r8), parameter          :: PI = SHR_CONST_PI
    real(r8), parameter          :: deg2rad = SHR_CONST_PI/180._r8
-   character(len=10), parameter :: Interp_Method = "Linear" !"Nearest"
-   type(interp_type)            :: lon_wgt, lat_wgt
 
    ! Arguments
    !-----------
@@ -5810,14 +5815,6 @@ contains
    integer  :: i,j,ifld,n,m,k,lchnk,ii,jj
    real(r8) :: sum_x
 
-   !setup for convolution 2D model 
-   integer,  parameter  :: horzextrap          = 0 ! if 0 set values outside output grid to 0
-   integer,  parameter  :: DeepONet_Conv2d_NT  = 248
-   integer,  parameter  :: DeepONet_Conv2d_NX1 = 6  ! ML model trunk in X 6 
-   integer,  parameter  :: DeepONet_Conv2d_NY1 = 6  ! ML model trunk in Y 6 
-   integer,  parameter  :: DeepONet_Conv2d_NN  = 36 ! DeepONet_Conv2d_NX1 * DeepONet_Conv2d_NY1 
-   real(r8), parameter  :: DeepONet_dtime      = 10800._r8
-   
    !file names for DeepONet pt files 
    character(len=cl)    :: file_encoder     ! DeepONet Decoder pt file 
    character(len=cl)    :: file_decoder     ! DeepONet Encoder pt file 
@@ -5847,9 +5844,6 @@ contains
    real(r4), pointer     :: donout(:,:,:,:)
    real(r4), pointer     :: dcdout(:,:)
 
-   !array for scattering data to chunk
-   real(r8),allocatable :: ftemp(:,:) 
- 
    nugding_tend(:) = 0.0_r8
 
    !prepare data for DeepONet input 
