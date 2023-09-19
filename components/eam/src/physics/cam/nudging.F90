@@ -5918,7 +5918,30 @@ contains
      !end if 
 
      ! convolution 2D model only predicts horizontal wind 
-     if ((trim(varname) .ne. 'U') .and. (trim(varname) .ne. 'V')) return
+     if (trim(varname).eq."U") then
+       !assign values for normalization and denormalization      
+       rawmax = 145.7995_r8
+       rawmin = -76.1484_r8
+       encmax = 8.485741_r8
+       encmin = -7.547272_r8
+       donmax = 9.087432_r8
+       donmin = -9.915943_r8
+       dcdmax = 0.0013223718_r8
+       dcdmin = -0.0010001023_r8
+     else if (trim(varname).eq."V") then
+       !assign values for normalization and denormalization      
+       rawmax = 128.33244_r8
+       rawmin = -78.22444_r8
+       encmax = 17.822948_r8
+       encmin = -19.055779_r8
+       donmax = 9.116263_r8
+       donmin = -8.079512_r8
+       dcdmax = 0.0010921889_r8
+       dcdmin = -0.0014089954_r8
+     else 
+       write(iulog,*) "DeepONet Nudging Warning: Convolution 2D model only designed for U, V nudging, return" 
+       return 
+     end if
 
      !files provided by DeepONet Machine Learning model 
      file_encoder  = trim(varname)//'_Encoder.pt'
@@ -5943,26 +5966,6 @@ contains
        call endrun('DeepONet Nudging Error: model file not exist')
      end if
      
-     if (trim(varname).eq."U") then  
-       rawmax = 145.7995_r8
-       rawmin = -76.1484_r8
-       encmax = 8.485741_r8
-       encmin = -7.547272_r8
-       donmax = 9.087432_r8
-       donmin = -9.915943_r8
-       dcdmax = 0.0013223718_r8
-       dcdmin = -0.0010001023_r8
-     else 
-       rawmax = 128.33244_r8
-       rawmin = -78.22444_r8
-       encmax = 17.822948_r8
-       encmin = -19.055779_r8
-       donmax = 9.116263_r8
-       donmin = -8.079512_r8
-       dcdmax = 0.0010921889_r8
-       dcdmin = -0.0014089954_r8
-     end if
-
      allocate (timein(1,DeepONet_Conv2d_NT))
      allocate (encinp(DeepONet_Conv2d_NX,DeepONet_Conv2d_NY,1,1))
      if(trim(varname).eq."U") then 
