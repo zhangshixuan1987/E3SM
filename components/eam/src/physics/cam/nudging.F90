@@ -1719,10 +1719,6 @@ contains
            !extract the lat/lon/weight info            
            call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat,clon_d_out=Model_rlon)
 
-           !allocate(Model_wgth(Nudge_ncol),stat=istat)
-           !call alloc_err(istat,'DeepONet NUDGING','Model_wgth',Nudge_ncol)
-           !call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat,clon_d_out=Model_rlon,wght_d_out=Model_wgth)
-
 #ifdef SPMD
            call mpibcast(Model_rlat, Nudge_ncol, mpir8,   0, mpicom)
            call mpibcast(Model_rlon, Nudge_ncol, mpir8,   0, mpicom)
@@ -1731,9 +1727,9 @@ contains
            ! Initialize DeepONet lat/lon info in local arrays
            !------------------------------------------------------
            if (DeepONet_Conv2d) then
-             if (masterproc) then
-               write(iulog,*) 'DeepONet NUDGING: 2D convolution ML model'
-             end if 
+             !if (masterproc) then
+             !  write(iulog,*) 'DeepONet NUDGING: 2D convolution ML model'
+             !end if 
              !info to construct lat-lon for limited region
              DeepONet_Conv2d_DX  = 1.0_r8
              DeepONet_Conv2d_DY  = 1.0_r8
@@ -1744,16 +1740,18 @@ contains
              val2_0 = Nudge_Hwin_lon0 + DeepONet_Conv2d_NX * DeepONet_Conv2d_DX / 2.0_r8 - 0.5_r8
              val3_0 = Nudge_Hwin_lat0 - DeepONet_Conv2d_NY * DeepONet_Conv2d_DY / 2.0_r8 + 0.5_r8
              val4_0 = Nudge_Hwin_lat0 + DeepONet_Conv2d_NY * DeepONet_Conv2d_DY / 2.0_r8 - 0.5_r8
-             if (masterproc) then
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NX=', DeepONet_Conv2d_NX
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NY=', DeepONet_Conv2d_NY
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DX=', DeepONet_Conv2d_DX
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DY=', DeepONet_Conv2d_DY
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlat=', val1_0
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlat=', val2_0
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlon=', val3_0
-               write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlon=', val4_0
-             endif
+
+             !if (masterproc) then  !Debuge output 
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NX=', DeepONet_Conv2d_NX
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NY=', DeepONet_Conv2d_NY
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DX=', DeepONet_Conv2d_DX
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DY=', DeepONet_Conv2d_DY
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlat=', val1_0
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlat=', val2_0
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlon=', val3_0
+             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlon=', val4_0
+             !endif
+
              if( DeepONet_Conv2d_NXY .ne. 4900 ) then
                 write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
                 write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
@@ -1791,6 +1789,7 @@ contains
                  DeepONet_Conv2d_lat(j) = (val3_0+(j-1)*DeepONet_Conv2d_DY)*SHR_CONST_PI/180._r8
                end do
 
+               call t_startf('deeponet_interp_init')
                !initialize the weigthing fuction to interpolate model grid to lat-lon 
                call se2latlon_interp_init(Nudge_ncol, Model_rlon, Model_rlat, & 
                                           DeepONet_Conv2d_NX, DeepONet_Conv2d_NY, & 
@@ -1802,6 +1801,9 @@ contains
                                           DeepONet_Conv2d_NX, DeepONet_Conv2d_NY, &
                                           DeepONet_Conv2d_lon, DeepONet_Conv2d_lat,  &
                                           DeepONet_latlon2se_ind, DeepONet_latlon2se_wgt) 
+
+               call t_stopf('deeponet_interp_init')
+
              end if 
 
 #ifdef SPMD
@@ -1817,6 +1819,7 @@ contains
 #endif
            else 
              write(iulog,*) 'DeepONet NUDGING: 1D convolution ML model: global area' 
+             call endrun('DeepONet NUDGING: 1D convolution ML model is not available') 
            end if       
       case default
            call endrun('nudging_init error: nudge method should &
@@ -2342,7 +2345,6 @@ contains
      !call deepONet to predict nudging tendency   
      if (Nudge_Uprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
-       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, Nudge_nlev
           arr(:,:,1) = Model_U(:,k,:) 
           arr_field(:,:,1) = 0.0_r8
@@ -2366,7 +2368,6 @@ contains
      end if
      if (Nudge_Vprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
-       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_V(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -2390,7 +2391,6 @@ contains
      end if
      if (Nudge_Tprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
-       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_T(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -2410,7 +2410,6 @@ contains
      end if
      if (Nudge_Qprof .ne. 0) then
        wrk_out(:,:) = 0.0_r8
-       !$omp parallel do private(i, j, k, m, arr, arr_field, wrk)
        do k = 1, pver
          arr(:,:,1) = Model_Q(:,k,:)
          arr_field(:,:,1) = 0.0_r8
@@ -2476,29 +2475,37 @@ contains
 
    !output Diagnostics 
    do lchnk=begchunk,endchunk
-     call outfld('U_bf_ndg',  Model_U(:ncol,:pver,lchnk), pcols,lchnk)
-     call outfld('V_bf_ndg',  Model_V(:ncol,:pver,lchnk), pcols,lchnk)
-     call outfld('T_bf_ndg',  Model_T(:ncol,:pver,lchnk), pcols,lchnk)
-     call outfld('Q_bf_ndg',  Model_Q(:ncol,:pver,lchnk), pcols,lchnk)
-     call outfld('PS_bf_ndg', Model_PS(:ncol,lchnk), pcols,lchnk)
-     call outfld('Nudge_U',   Nudge_Ustep(:ncol,:pver,lchnk),pcols,lchnk)
-     call outfld('Nudge_V',   Nudge_Vstep(:ncol,:pver,lchnk),pcols,lchnk)
-     call outfld('Nudge_T',   Nudge_Tstep(:ncol,:pver,lchnk),pcols,lchnk)
-     call outfld('Nudge_Q',   Nudge_Qstep(:ncol,:pver,lchnk),pcols,lchnk)
-     call outfld('Nudge_PS',  Nudge_PSstep(:ncol,lchnk),pcols,lchnk)
+
+     ncol=state(lchnk)%ncol
+
+     call outfld('U_bf_ndg',  Model_U(:,:,lchnk), pcols,lchnk)
+     call outfld('V_bf_ndg',  Model_V(:,:,lchnk), pcols,lchnk)
+     call outfld('T_bf_ndg',  Model_T(:,:,lchnk), pcols,lchnk)
+     call outfld('Q_bf_ndg',  Model_Q(:,:,lchnk), pcols,lchnk)
+     call outfld('PS_bf_ndg', Model_PS(:,lchnk),  pcols,lchnk)
+
+     call outfld('Nudge_U',   Nudge_Ustep(:,:,lchnk),pcols,lchnk)
+     call outfld('Nudge_V',   Nudge_Vstep(:,:,lchnk),pcols,lchnk)
+     call outfld('Nudge_T',   Nudge_Tstep(:,:,lchnk),pcols,lchnk)
+     call outfld('Nudge_Q',   Nudge_Qstep(:,:,lchnk),pcols,lchnk)
+     call outfld('Nudge_PS',  Nudge_PSstep(:,lchnk), pcols,lchnk)
 
      ftem(:ncol,:pver) = Nudge_Ustep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_U_vint',ftem2,pcols,lchnk)
+
      ftem(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_V_vint',ftem2,pcols,lchnk)
+
      ftem(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
+
      ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
+
    end do 
    ! End Routine
    !------------
@@ -2605,47 +2612,55 @@ contains
      Nudge_PSstep(:ncol,lchnk)      = 0._r8
    end if         ! update nudging tendency
 
-   call outfld('U_bf_ndg',  Model_U(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('V_bf_ndg',  Model_V(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('T_bf_ndg',  Model_T(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('Q_bf_ndg',  Model_Q(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('PS_bf_ndg', Model_PS(:ncol,lchnk),      pcols, lchnk)
+   call outfld('U_bf_ndg',  Model_U(:,:,lchnk), pcols, lchnk)
+   call outfld('V_bf_ndg',  Model_V(:,:,lchnk), pcols, lchnk)
+   call outfld('T_bf_ndg',  Model_T(:,:,lchnk), pcols, lchnk)
+   call outfld('Q_bf_ndg',  Model_Q(:,:,lchnk), pcols, lchnk)
+   call outfld('PS_bf_ndg', Model_PS(:,lchnk),  pcols, lchnk)
+
    do k = 1, pver
      ftem(:ncol,k) = zm_mod(:ncol,k) + state%phis(:ncol)*rga
    end do
    call outfld('Z3_bf_ndg', ftem,  pcols,lchnk)
 
-   call outfld('U_ref',  Target_U(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('V_ref',  Target_V(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('T_ref',  Target_T(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('Q_ref',  Target_Q(:ncol,:pver,lchnk), pcols, lchnk)
-   call outfld('PS_ref', Target_PS(:ncol,lchnk),      pcols, lchnk)
+   call outfld('U_ref',  Target_U(:,:,lchnk), pcols, lchnk)
+   call outfld('V_ref',  Target_V(:,:,lchnk), pcols, lchnk)
+   call outfld('T_ref',  Target_T(:,:,lchnk), pcols, lchnk)
+   call outfld('Q_ref',  Target_Q(:,:,lchnk), pcols, lchnk)
+   call outfld('PS_ref', Target_PS(:,lchnk),  pcols, lchnk)
+
    ftem2(:ncol) = Target_PHIS(:ncol,lchnk)
    call outfld('PHIS_ref', ftem2, pcols,lchnk)
+
    do k = 1, pver
      ftem(:ncol,k) = zm_obs(:ncol,k) + Target_PHIS(:ncol,lchnk)*rga
    end do
    call outfld('Z3_ref', ftem,  pcols,lchnk)
 
-   call outfld('Nudge_PS', Nudge_PSstep(:ncol,lchnk),      pcols, lchnk)
-   call outfld('Nudge_U',  Nudge_Ustep(:ncol,:pver,lchnk), pcols, lchnk)
+   call outfld('Nudge_PS', Nudge_PSstep(:,lchnk),  pcols, lchnk)
+   call outfld('Nudge_U',  Nudge_Ustep(:,:,lchnk), pcols, lchnk)
+   call outfld('Nudge_V',  Nudge_Vstep(:,:,lchnk), pcols, lchnk)
+
    ftem(:ncol,:pver) = Nudge_Ustep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit)
    ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
    call outfld('Nudge_U_vint',ftem2,pcols,lchnk)
-   call outfld('Nudge_V',  Nudge_Vstep(:ncol,:pver,lchnk), pcols, lchnk)
+
    ftem(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit)
    ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
    call outfld('Nudge_V_vint',ftem2,pcols,lchnk)
+
    if((Nudge_Tprof.eq.0).and.(Nudge_Uprof.ne.0)) then 
      ftem(:ncol,:pver) = ( Target_T(:ncol,:pver,lchnk)  &
                            -Model_T(:ncol,:pver,lchnk)) &
                          *Nudge_Utau(:ncol,:pver,lchnk)
-     call outfld('Nudge_T', ftem,pcols,lchnk)
+     call outfld('Nudge_T',ftem,pcols,lchnk)
+
      ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
    else 
-     call outfld('Nudge_T', Nudge_Tstep(:ncol,:pver,lchnk), pcols, lchnk)
+     call outfld('Nudge_T', Nudge_Tstep(:,:,lchnk), pcols, lchnk)
+
      ftem(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
@@ -2655,11 +2670,13 @@ contains
                            -Model_Q(:ncol,:pver,lchnk)) &
                          *Nudge_Utau(:ncol,:pver,lchnk)
      call outfld('Nudge_Q', ftem,pcols,lchnk)
+
      ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
    else
-     call outfld('Nudge_Q', Nudge_Qstep(:ncol,:pver,lchnk), pcols, lchnk)
+     call outfld('Nudge_Q', Nudge_Qstep(:,:,lchnk), pcols, lchnk)
+
      ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
@@ -2999,49 +3016,49 @@ contains
    end if
 
    !Output the diagnostics 
-   call outfld('PRECC_bf_ndg' ,precc_mod(:ncol),pcols,lchnk)
-   call outfld('PRECL_bf_ndg' ,precl_mod(:ncol),pcols,lchnk)
-   call outfld('PRECSC_bf_ndg',snowc_mod(:ncol),pcols,lchnk)
-   call outfld('PRECSL_bf_ndg',snowl_mod(:ncol),pcols,lchnk)
-   call outfld('SOLL_bf_ndg'  ,soll_mod(:ncol),pcols,lchnk)
-   call outfld('SOLS_bf_ndg'  ,sols_mod(:ncol),pcols,lchnk)
-   call outfld('SOLLD_bf_ndg' ,solld_mod(:ncol),pcols,lchnk)
-   call outfld('SOLSD_bf_ndg' ,solsd_mod(:ncol),pcols,lchnk)
-   call outfld('NETSW_bf_ndg' ,dnetsw_mod(:ncol),pcols,lchnk)
-   call outfld('FLWDS_bf_ndg' ,dflwds_mod(:ncol),pcols,lchnk)
+   call outfld('PRECC_bf_ndg' ,precc_mod(:),pcols,lchnk)
+   call outfld('PRECL_bf_ndg' ,precl_mod(:),pcols,lchnk)
+   call outfld('PRECSC_bf_ndg',snowc_mod(:),pcols,lchnk)
+   call outfld('PRECSL_bf_ndg',snowl_mod(:),pcols,lchnk)
+   call outfld('SOLL_bf_ndg'  ,soll_mod(:),pcols,lchnk)
+   call outfld('SOLS_bf_ndg'  ,sols_mod(:),pcols,lchnk)
+   call outfld('SOLLD_bf_ndg' ,solld_mod(:),pcols,lchnk)
+   call outfld('SOLSD_bf_ndg' ,solsd_mod(:),pcols,lchnk)
+   call outfld('NETSW_bf_ndg' ,dnetsw_mod(:),pcols,lchnk)
+   call outfld('FLWDS_bf_ndg' ,dflwds_mod(:),pcols,lchnk)
 
-   call outfld('PRECC_af_ndg' ,cam_out%precc(:ncol),pcols,lchnk)
-   call outfld('PRECL_af_ndg' ,cam_out%precl(:ncol),pcols,lchnk)
-   call outfld('PRECSC_af_ndg',cam_out%precsc(:ncol),pcols,lchnk)
-   call outfld('PRECSL_af_ndg',cam_out%precsl(:ncol),pcols,lchnk)
-   call outfld('SOLL_af_ndg'  ,cam_out%soll(:ncol),pcols,lchnk)
-   call outfld('SOLS_af_ndg'  ,cam_out%sols(:ncol),pcols,lchnk)
-   call outfld('SOLLD_af_ndg' ,cam_out%solld(:ncol),pcols,lchnk)
-   call outfld('SOLSD_af_ndg' ,cam_out%solsd(:ncol),pcols,lchnk)
-   call outfld('NETSW_af_ndg' ,cam_out%netsw(:ncol),pcols,lchnk)
-   call outfld('FLWDS_af_ndg' ,cam_out%flwds(:ncol),pcols,lchnk)
+   call outfld('PRECC_af_ndg' ,cam_out%precc,pcols,lchnk)
+   call outfld('PRECL_af_ndg' ,cam_out%precl,pcols,lchnk)
+   call outfld('PRECSC_af_ndg',cam_out%precsc,pcols,lchnk)
+   call outfld('PRECSL_af_ndg',cam_out%precsl,pcols,lchnk)
+   call outfld('SOLL_af_ndg'  ,cam_out%soll,pcols,lchnk)
+   call outfld('SOLS_af_ndg'  ,cam_out%sols,pcols,lchnk)
+   call outfld('SOLLD_af_ndg' ,cam_out%solld,pcols,lchnk)
+   call outfld('SOLSD_af_ndg' ,cam_out%solsd,pcols,lchnk)
+   call outfld('NETSW_af_ndg' ,cam_out%netsw,pcols,lchnk)
+   call outfld('FLWDS_af_ndg' ,cam_out%flwds,pcols,lchnk)
 
-   call outfld('PRECC_ref' ,Target_PRECC(:ncol,lchnk),pcols,lchnk)
-   call outfld('PRECL_ref' ,Target_PRECL(:ncol,lchnk),pcols,lchnk)
-   call outfld('PRECSC_ref',Target_PRECSC(:ncol,lchnk),pcols,lchnk)
-   call outfld('PRECSL_ref',Target_PRECSL(:ncol,lchnk),pcols,lchnk)
-   call outfld('NETSW_ref' ,Target_NETSW(:ncol,lchnk),pcols,lchnk)
-   call outfld('FLWDS_ref' ,Target_FLWDS(:ncol,lchnk),pcols,lchnk)
-   call outfld('SOLL_ref'  ,soll_obs(:ncol),pcols,lchnk)
-   call outfld('SOLS_ref'  ,sols_obs(:ncol),pcols,lchnk)
-   call outfld('SOLLD_ref' ,solld_obs(:ncol),pcols,lchnk)
-   call outfld('SOLSD_ref' ,solsd_obs(:ncol),pcols,lchnk)
+   call outfld('PRECC_ref' ,Target_PRECC(:,lchnk),pcols,lchnk)
+   call outfld('PRECL_ref' ,Target_PRECL(:,lchnk),pcols,lchnk)
+   call outfld('PRECSC_ref',Target_PRECSC(:,lchnk),pcols,lchnk)
+   call outfld('PRECSL_ref',Target_PRECSL(:,lchnk),pcols,lchnk)
+   call outfld('NETSW_ref' ,Target_NETSW(:,lchnk),pcols,lchnk)
+   call outfld('FLWDS_ref' ,Target_FLWDS(:,lchnk),pcols,lchnk)
+   call outfld('SOLL_ref'  ,soll_obs(:),pcols,lchnk)
+   call outfld('SOLS_ref'  ,sols_obs(:),pcols,lchnk)
+   call outfld('SOLLD_ref' ,solld_obs(:),pcols,lchnk)
+   call outfld('SOLSD_ref' ,solsd_obs(:),pcols,lchnk)
 
-   call outfld('Nudge_PRECC' ,precc_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_PRECL' ,precl_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_PRECSC',snowc_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_PRECSL',snowl_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_SOLL'  ,soll_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_SOLS'  ,sols_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_SOLLD' ,solld_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_SOLSD' ,solsd_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_NETSW' ,netsw_tend(:ncol),pcols,lchnk)
-   call outfld('Nudge_FLWDS' ,flwds_tend(:ncol),pcols,lchnk)
+   call outfld('Nudge_PRECC' ,precc_tend,pcols,lchnk)
+   call outfld('Nudge_PRECL' ,precl_tend,pcols,lchnk)
+   call outfld('Nudge_PRECSC',snowc_tend,pcols,lchnk)
+   call outfld('Nudge_PRECSL',snowl_tend,pcols,lchnk)
+   call outfld('Nudge_SOLL'  ,soll_tend,pcols,lchnk)
+   call outfld('Nudge_SOLS'  ,sols_tend,pcols,lchnk)
+   call outfld('Nudge_SOLLD' ,solld_tend,pcols,lchnk)
+   call outfld('Nudge_SOLSD' ,solsd_tend,pcols,lchnk)
+   call outfld('Nudge_NETSW' ,netsw_tend,pcols,lchnk)
+   call outfld('Nudge_FLWDS' ,flwds_tend,pcols,lchnk)
 
    return
   end subroutine  !nudging_update_land_surface 
@@ -3122,21 +3139,21 @@ contains
      cam_in%lhf(i)    = lhf_mod(i)  + lhf_tend(i)  * factor(i) * dtime
    end do
 
-   call outfld('LHFLX_bf_ndg' ,lhf_mod(:ncol),pcols,lchnk)
-   call outfld('SHFLX_bf_ndg' ,shf_mod(:ncol),pcols,lchnk)
-   call outfld('QFLX_bf_ndg'  ,qflx_mod(:ncol),pcols,lchnk)
+   call outfld('LHFLX_bf_ndg' ,lhf_mod,pcols,lchnk)
+   call outfld('SHFLX_bf_ndg' ,shf_mod,pcols,lchnk)
+   call outfld('QFLX_bf_ndg'  ,qflx_mod,pcols,lchnk)
 
-   call outfld('LHFLX_af_ndg' ,cam_in%lhf(:ncol),pcols,lchnk)
-   call outfld('SHFLX_af_ndg' ,cam_in%shf(:ncol),pcols,lchnk)
-   call outfld('QFLX_af_ndg'  ,cam_in%cflx(:ncol,1),pcols,lchnk)
+   call outfld('LHFLX_af_ndg' ,cam_in%lhf,pcols,lchnk)
+   call outfld('SHFLX_af_ndg' ,cam_in%shf,pcols,lchnk)
+   call outfld('QFLX_af_ndg'  ,cam_in%cflx(:,1),pcols,lchnk)
 
-   call outfld('LHFLX_ref' ,-Target_SHFLX(:ncol,lchnk),pcols,lchnk)
-   call outfld('SHFLX_ref' ,-Target_LHFLX(:ncol,lchnk),pcols,lchnk)
-   call outfld('QFLX_ref'  ,-Target_EVAP(:ncol,lchnk),pcols,lchnk)
+   call outfld('LHFLX_ref' ,-Target_SHFLX(:,lchnk),pcols,lchnk)
+   call outfld('SHFLX_ref' ,-Target_LHFLX(:,lchnk),pcols,lchnk)
+   call outfld('QFLX_ref'  ,-Target_EVAP(:,lchnk),pcols,lchnk)
 
-   call outfld('Nudge_LHFLX' ,lhf_mod(:ncol),pcols,lchnk)
-   call outfld('Nudge_SHFLX' ,shf_mod(:ncol),pcols,lchnk)
-   call outfld('Nudge_QFLX'  ,qflx_mod(:ncol),pcols,lchnk)
+   call outfld('Nudge_LHFLX' ,lhf_mod(:),pcols,lchnk)
+   call outfld('Nudge_SHFLX' ,shf_mod(:),pcols,lchnk)
+   call outfld('Nudge_QFLX'  ,qflx_mod(:),pcols,lchnk)
 
    return
   end subroutine  !nudging_update_srf_flux
@@ -5847,7 +5864,7 @@ contains
    nugding_tend(:) = 0.0_r8
 
    !prepare data for DeepONet input 
-   call t_startf('deeponet_interpolation')
+   call t_startf('deeponet_interp')
    if (DeepONet_Conv2d) then
      allocate (wrk_rgd(DeepONet_Conv2d_NX,DeepONet_Conv2d_NY))
      wrk_rgd(:,:) = 0.0_r8 
@@ -5877,6 +5894,7 @@ contains
      allocate(wrk_rgd(ngcols,1))
      wrk_rgd(:,1) = model_state(:)
    end if 
+   call t_stopf('deeponet_interp')
 
    !if (masterproc) then 
    !  !Debug diagnostics    
@@ -5890,6 +5908,9 @@ contains
    !end if
 
    !call DeepONet to predict nudging tendency or model state 
+
+   call t_startf('deeponet_prediction')
+
    if (DeepONet_Conv2d) then
 
      !if (masterproc) then
@@ -6061,12 +6082,11 @@ contains
      !  write(iulog,*) 'deeponet_advance: nudging tendency from DeepONet prediction'
      !  write(iulog,*) 'nugding_tend(min/max) = ',minval(nugding_tend),maxval(nugding_tend)
      !end if 
-
    else
-
      nugding_tend(:) = 0.0_r8
-
    end if 
+
+   call t_stopf('deeponet_prediction')
 
    return
   end subroutine !deeponet_advance 
@@ -6603,15 +6623,13 @@ contains
    call lininterp_finish(lat_wgt)
    
    !final sanity check 
-   if(masterproc) then 
-     if (any(close_ind == imissing)) then 
-       call endrun('latlon2se_interp_init: ERROR, interpolation index contains missing values')
-     else if (any( weight_lin == rmissing)) then
-       call endrun('latlon2se_interp_init: ERROR, interpolation weight contains missing values')
-     else
-       write(iulog,*) 'latlon2se_interp_init: interpolation initialization succeed!'
-     end if 
+   if (any(close_ind == imissing)) then 
+     call endrun('latlon2se_interp_init: ERROR, interpolation index contains missing values')
    end if 
+   if (any( weight_lin == rmissing)) then
+     call endrun('latlon2se_interp_init: ERROR, interpolation weight contains missing values')
+   end if 
+   !write(iulog,*) 'latlon2se_interp_init: interpolation initialization succeed!'
 
    return 
   end subroutine !latlon2se_interp_init
@@ -6835,7 +6853,7 @@ contains
        !corner(4,4) is the nearest point to target 
        oc   = minloc(close_dst(m,1:4),mask=(close_dst(m,1:4)==close_dst(m,5)))
        iorg = oc(1)
-       write(iulog,*) 'se2latlon_interp_init: neareast corner to center iorg,dst=', iorg,close_dst(m,iorg)
+       !write(iulog,*) 'se2latlon_interp_init: neareast corner to center iorg,dst=', iorg,close_dst(m,iorg)
        sh_corn(1:4) = cshift(close_ind(m,1:4), iorg)
        sh_rdst(1:4) = cshift(close_dst(m,1:4), iorg)
        sh_rlat(1:4) = cshift(close_lat(m,1:4), iorg)
@@ -7063,15 +7081,13 @@ contains
    deallocate(close_dst)
     
    !final sanity check 
-   if(masterproc) then 
-     if (any(close_ind == imissing)) then 
-       call endrun('se2latlon_interp_init: ERROR, interpolation index contains missing values')
-     else if (any( weight_qdl == rmissing)) then 
-       call endrun('se2latlon_interp_init: ERROR, interpolation weight contains missing values')
-     else 
-       write(iulog,*) 'se2latlon_interp_init: interpolation initialization succeed!' 
-     end if 
+   if (any(close_ind == imissing)) then 
+     call endrun('se2latlon_interp_init: ERROR, interpolation index contains missing values')
    end if 
+   if (any( weight_qdl == rmissing)) then 
+     call endrun('se2latlon_interp_init: ERROR, interpolation weight contains missing values')
+   end if 
+   !write(iulog,*) 'se2latlon_interp_init: interpolation initialization succeed!' 
 
    return 
   end subroutine !se2latlon_interp_init
