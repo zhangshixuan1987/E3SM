@@ -1546,7 +1546,17 @@ contains
 
      end do
 
-     if  (Nudge_Tau .le. 0._r8) then
+     if (DeepONet_Nudge) then
+
+       Nudge_Utau(:ncol,:pver,lchnk) = Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef
+       Nudge_Vtau(:ncol,:pver,lchnk) = Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef
+       Nudge_Ttau(:ncol,:pver,lchnk) = Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef
+       Nudge_Qtau(:ncol,:pver,lchnk) = Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef
+       Nudge_PStau(:ncol,lchnk)      = Nudge_PStau(:ncol,lchnk)      * Nudge_PScoef
+
+     else 
+
+       if  (Nudge_Tau .le. 0._r8) then
 
          Nudge_Utau(:ncol,:pver,lchnk) =                             &
          Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef/float(Nudge_Step)
@@ -1563,7 +1573,7 @@ contains
          Nudge_PStau(:ncol,lchnk)=                              &
          Nudge_PStau(:ncol,lchnk)* Nudge_PScoef/float(Nudge_Step)
 
-     else          ! use Nudge_Tau directy as relaxation timescale
+       else          ! use Nudge_Tau directy as relaxation timescale
 
          Nudge_Utau(:ncol,:pver,lchnk) =                        &
          Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef / Nudge_Tau / sec_per_hour
@@ -1580,7 +1590,9 @@ contains
          Nudge_PStau(:ncol,lchnk) =                        &
          Nudge_PStau(:ncol,lchnk) * Nudge_PScoef / Nudge_Tau / sec_per_hour 
 
-     end if
+       end if
+
+     end if 
 
      if (Nudge_PSprof .ne. 0) then
         Nudge_PS_On    = .true.
@@ -2472,6 +2484,20 @@ contains
    end if 
 
    call t_stopf('deeponet_advance')
+
+   !apply the coefficient 
+   do lchnk=begchunk,endchunk
+     Nudge_Ustep(:ncol,:pver,lchnk) = Nudge_Ustep(:ncol,:pver,lchnk) & 
+                                       * Nudge_Utau(:ncol,:pver,lchnk)
+     Nudge_Vstep(:ncol,:pver,lchnk) = Nudge_Vstep(:ncol,:pver,lchnk) & 
+                                       * Nudge_Vtau(:ncol,:pver,lchnk)
+     Nudge_Tstep(:ncol,:pver,lchnk) = Nudge_Tstep(:ncol,:pver,lchnk) & 
+                                       * Nudge_Ttau(:ncol,:pver,lchnk)
+     Nudge_Qstep(:ncol,:pver,lchnk) = Nudge_Qstep(:ncol,:pver,lchnk) & 
+                                       * Nudge_Qtau(:ncol,:pver,lchnk)
+     Nudge_PSstep(:ncol,lchnk)      = Nudge_PSstep(:ncol,lchnk) & 
+                                       * Nudge_PStau(:ncol,lchnk)
+   end do 
 
    !output Diagnostics 
    do lchnk=begchunk,endchunk
