@@ -1087,7 +1087,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
 
        end do
 
-       !call deepONet nudging prediction 
+       !call deepONet nudging prediction (skip first step)
        call deeponet_nudging(ztodt,deeponet_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
