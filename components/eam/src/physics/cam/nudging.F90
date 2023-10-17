@@ -438,7 +438,8 @@ module nudging
   private::deeponet_gather_data
   private::deeponet_gather_patch
   private::deeponet_encoder 
-  private::deeponet_forecast
+  private::deeponet_tendadv
+  private::deeponet_statadv
   private::deeponet_decoder
   private::update_nudging_tend
   private::update_nudge_prof
@@ -599,8 +600,6 @@ module nudging
   integer,  allocatable :: DeepONet_latlon2se_ind(:,:) !(Nudge_ncol,4)
   real(r8), allocatable :: DeepONet_se2latlon_wgt(:,:) !(DeepONet_Conv2d_NXY,5)
   real(r8), allocatable :: DeepONet_latlon2se_wgt(:,:) !(Nudge_ncol,4)
-  real(r8), allocatable :: wrk_state(:,:,:) !temporary work array 
-  real(r8), allocatable :: wrk_tend(:,:)  !temporary work array 
 
 !Variables for surface nudging 
   real(r8), allocatable :: Target_U10(:,:)     !(pcols,begchunk:endchunk)
@@ -5818,11 +5817,10 @@ contains
    integer  :: ncols,lchnk
    integer  :: i,j,n,m,k,ii,jj,ierr
    real(r8) :: sum_x,vmin,vmax
-
-   real(r8), allocatable :: venc(:,:,:)
-   real(r8), allocatable :: vdon(:,:)
-
    real(r8) :: wrk_tend(ngcol,nlev)
+   real(r8) :: enc_tend(DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev)
+   real(r8) :: don_tend(DeepONet_Conv2d_NX1*DeepONet_Conv2d_NY1,nlev)
+   real(r8) :: don_stat(DeepONet_Conv2d_NXY,nlev)
    real(r8) :: wrk_state(DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,nlev)
    real(r8) :: wrk_out(DeepONet_Conv2d_NXY,nlev)
 
@@ -5841,7 +5839,6 @@ contains
      end if
 
      !collect data for deepONet
-     !if (masterproc) then
      call deeponet_gather_patch(varname,nlev,ngcol,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat, & 
                                 model_state,wrk_state) !inout  
 
@@ -5857,60 +5854,46 @@ contains
        !option 0: encoder-->deepONet-->decoder approach to 
        !          predict nudging tendency from before nuding state
 
-       allocate (venc(DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev))
-       allocate (vdon(DeepONet_Conv2d_NX1*DeepONet_Conv2d_NY1,nlev))
- 
        !call encoder 
        call deeponet_encoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  & 
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,venc)
+                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_tend)
  
        !call deeponet               
-       call deeponet_forecast(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
-                              nlev,DeepONet_Conv2d_NT,venc,vdon)
+       call deeponet_tendadv(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
+                             nlev,DeepONet_Conv2d_NT,enc_tend,don_tend)
 
        !call decoder                
        call deeponet_decoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  &
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,vdon,wrk_out)
-
-
-       !Debug Diagnostics 
-       if (masterproc .and. l_print_diag) then 
-         write(iulog,*) 'deeponet_advance: run deepONet successfully'
-         write(iulog,*) 'predict variable = ',varname
-         write(iulog,*) 'shape of wrk_in  = ',shape(wrk_state)
-         write(iulog,*) 'wrk_in(min/max)  = ',minval(wrk_state),maxval(wrk_state)
-         write(iulog,*) 'shape of wrk_out = ',shape(wrk_out)
-         write(iulog,*) 'wrk_out(min/max) = ',minval(wrk_out),maxval(wrk_out)
-       end if 
-       deallocate(venc)
-       deallocate(vdon)
+                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_tend,wrk_out)
      else 
        !option 1: deepONet (before nudging state --> after nudging state) 
        !          nudging tedency = (After - Before) / 3*3600 (3hour)
-
-       !min/max values to norm/denorm input/output data
        vmin = minval(wrk_state) 
        vmax = maxval(wrk_state)
-
-       allocate (vdon(DeepONet_Conv2d_NXY,nlev))
-       call deeponet_forecast(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
-                              nlev,DeepONet_Conv2d_NT,wrk_state,vdon, &
-                              DeepONet_Conv2d_OPT,vmin,vmax)
+       call deeponet_statadv(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
+                             nlev,wrk_state,don_stat,vmin,vmax)
 
        !compute nudging tendency 
        do k = 1, nlev
          do j = 1, DeepONet_Conv2d_NLat
            do i = 1, DeepONet_Conv2d_NLon
              m = (j-1)*DeepONet_Conv2d_NLon + i 
-             !denormalize deepONet prediction
-             sum_x = 0.5_r8*(vdon(m,k)+1.0_r8)*(vmax-vmin)+vmin
              !calculate nudging tendency 
-             wrk_out(m,k) = (sum_x - wrk_state(i,j,k))/DeepONet_dtime/sec_per_hour
+             wrk_out(m,k) = (don_stat(m,k) - wrk_state(i,j,k)) / DeepONet_dtime / sec_per_hour
            end do
          end do
        end do
-       deallocate(vdon)
      end if 
+
+     !Debug Diagnostics 
+     if (masterproc .and. l_print_diag) then
+       write(iulog,*) 'deeponet_advance: run deepONet successfully'
+       write(iulog,*) 'predict variable = ',varname
+       write(iulog,*) 'shape of wrk_in  = ',shape(wrk_state)
+       write(iulog,*) 'wrk_in(min/max)  = ',minval(wrk_state),maxval(wrk_state)
+       write(iulog,*) 'shape of wrk_out = ',shape(wrk_out)
+       write(iulog,*) 'wrk_out(min/max) = ',minval(wrk_out),maxval(wrk_out)
+     end if
 
      !Conv2d needs a second regridding to convert data back to model grid
      if (.not. DeepONet_Conv2d_BILN ) then
@@ -5953,7 +5936,7 @@ contains
    return
   end subroutine !deeponet_advance 
 
-  subroutine deeponet_forecast(file_path,varname,nx,ny,nz,nt,vari,varo,option,vlb,vub)
+  subroutine deeponet_tendadv(file_path,varname,nx,ny,nz,nt,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
   !                  the DeepONet Machine Learning (ML) model,
@@ -5969,9 +5952,6 @@ contains
    real(r8),intent(in)          :: vari(nx,ny,nz)
    real(r8),intent(inout)       :: varo(nx*ny,nz)
 
-   integer,optional,intent(in)  :: option  !optional input
-   real(r8),optional,intent(in) :: vlb,vub
-
    ! Arguments
    !-----------
    type(torch_module)           :: torch_mod
@@ -5980,14 +5960,12 @@ contains
 
    ! Local values
    !----------------
-   logical, parameter    :: l_print_diag = .false.
-   integer               :: i,j,n,m,k,ii,jj
-   integer               :: iopt 
-   real(r4)              :: vmax,vmin
-   real(r4), allocatable :: x_trunk(:,:)    
-   real(r4), allocatable :: doninp(:,:,:,:)
-   real(r4), pointer     :: donop1(:,:,:,:)
-   real(r4), pointer     :: donop2(:,:)
+   logical, parameter           :: l_print_diag = .false.
+   integer                      :: i,j,n,m,k,ii,jj
+   real(r4)                     :: vmax,vmin
+   real(r4)                     :: x_trunk(1,nt)    
+   real(r4)                     :: doninp(nx*ny,nt,1,nz)
+   real(r4), pointer            :: donout(:,:,:,:)
 
    if (masterproc) then
      !check if DeepONet pt file exist 
@@ -6004,134 +5982,145 @@ contains
 
    !convolution 2D model options 
    !0: before nudging state->nudging tendency 
-   !1: before nudging state->after nudging state 
-   if (present(option)) then 
-     iopt = option
-   else 
-     iopt = 0 
-   end if 
 
-   !min/max for normalization 
-   if(present(vlb).and.present(vub))then
-     vmin = real(vlb,kind=r4)
-     vmax = real(vub,kind=r4)
-   else
-     vmin = real(minval(vari),kind=r4)
-     vmax = real(maxval(vari),kind=r4)
-   end if
-
-   !allocate the input array 
-   if (iopt > 0 ) then
-     !option 1: state->state      
-     allocate(doninp(nx,ny,1,nz))
-     !dummy input grid
-     allocate(x_trunk(2,nx*ny))
-   else 
-     !option 0: state->tendency
-     allocate(doninp(nx*ny,nt,1,nz))
-     !dummy input time
-     allocate(x_trunk(1,nt))
-   end if 
-
-   !prepare dummy input info
-   if (iopt > 0 ) then
-     !dummy input grid
-     do j = 1,ny
-       do i = 1,nx
-         n = (j-1)*ny + i
-         x_trunk(1,n) = 2.0_r4*(real(i,kind=r4)-1.0_r4)/(real(nx,kind=r4)-1.0_r4)-1.0_r4
-         x_trunk(2,n) = 2.0_r4*(real(j,kind=r4)-1.0_r4)/(real(ny,kind=r4)-1.0_r4)-1.0_r4
-       end do 
-     end do 
-   else 
-     !dummy input time
-     do n = 1,nt
-       x_trunk(1,n) = 2.0_r4*(n-1.0_r4)/(nt-1.0_r4)-1.0_r4
-     end do
-   end if 
+   !dummy input time
+   do n = 1,nt
+     x_trunk(1,n) = 2.0_r4*(n-1.0_r4)/(nt-1.0_r4)-1.0_r4
+   end do
 
    !prepare input data 
-   if (iopt > 0 ) then 
-     !option 1: state->state      
-     do i = 1,nx
-       do j = 1,ny
-         do k = 1,nz
-           do n = 1,nt 
-             m = (k-1)*nt + n
-             !normalize input data
-             doninp(i,j,1,m) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
-           end do
-         end do     
+   
+   !min/max for normalization 
+   vmin = real(minval(vari),kind=r4)
+   vmax = real(maxval(vari),kind=r4)
+
+   do k = 1,nz
+     do j = 1,ny
+       do i = 1,nx
+         m = (j-1)*nx + i
+         !normalize input data
+         doninp(m,:,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
        end do
      end do
-   else 
-     !option 0: state->tendency
-     do k = 1,nz
-       do j = 1,ny
-         do i = 1,nx
-           m = (j-1)*nx + i
-           !normalize input data
-           doninp(m,:,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
-         end do
-       end do
-     end do
-   end if 
+   end do
    call input_tensors%create
    call input_tensors%add_array(doninp)
    call input_tensors%add_array(x_trunk)
    call torch_mod%load(trim(file_path)//trim(file_deeponet))
    call torch_mod%forward(input_tensors,out_tensor,1)
-   if (iopt > 0 ) then
-     call out_tensor%to_array(donop2)
-   else 
-     call out_tensor%to_array(donop1)
-   end if 
+   call out_tensor%to_array(donout)
 
    if (masterproc.and.l_print_diag) then
      write(iulog,*) 'shape of doninp = ',shape(doninp)
      write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
-     if (iopt > 0 ) then
-       write(iulog,*) 'shape of donout = ',shape(donop2)
-       write(iulog,*) 'donout(min/max) = ',minval(donop2),maxval(donop2)       
-     else
-       write(iulog,*) 'shape of donout = ',shape(donop1)
-       write(iulog,*) 'donout(min/max) = ',minval(donop1),maxval(donop1)
-     end if 
+     write(iulog,*) 'shape of donout = ',shape(donout)
+     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
    end if
 
    !output data 
-   if (iopt > 0 ) then
-     !option 1: state->state  
-     do k = 1, nz
-       do j = 1, ny
-         do i = 1, nx
-           m = (j-1)*nx + i
-           varo(m,k) = real(donop2(m,k),kind=r8)
-         end do
+   do k = 1, nz
+     do j = 1, ny
+       do i = 1, nx
+         m = (j-1)*nx + i
+         varo(m,k) = real(donout(i,j,1,k),kind=r8)
        end do
-     end do 
-   else 
-     !option 0: state->tendency
-     do k = 1, nz
-       do j = 1, ny
-         do i = 1, nx
-           m = (j-1)*nx + i
-           varo(m,k) = real(donop1(i,j,1,k),kind=r8)
-         end do
-       end do
-     end do 
-   end if 
-
-   !deallocate the array 
-   if (allocated(doninp)) then 
-     deallocate(doninp)
-   end if 
-   if (allocated(x_trunk)) then
-     deallocate(x_trunk)
-   end if
+     end do
+   end do 
 
    return
-  end subroutine !deeponet_forecast
+  end subroutine !deeponet_tendadv
+
+  subroutine deeponet_statadv(file_path,varname,nx,ny,nz,vari,varo,vmin,vmax)
+  !===========================================================================
+  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
+  !                  the DeepONet Machine Learning (ML) model,
+  !===========================================================================
+   use cam_abortutils  , only : endrun
+   use error_messages,   only : handle_ncerr
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+
+   implicit none
+   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   character(len=*), intent(in) :: varname   !nudge variable
+   integer, intent(in)          :: nx,ny,nz
+   real(r8),intent(in)          :: vari(nx,ny,nz)
+   real(r8),intent(inout)       :: varo(nx*ny,nz)
+   real(r8),intent(in)          :: vmin,vmax
+
+   ! Arguments
+   !-----------
+   type(torch_module)           :: torch_mod
+   type(torch_tensor_wrap)      :: input_tensors
+   type(torch_tensor)           :: out_tensor
+
+   ! Local values
+   !----------------
+   logical, parameter           :: l_print_diag = .false.
+   integer                      :: i,j,n,m,k,ii,jj
+   real(r4)                     :: x_trunk(2,nx*ny)
+   real(r4)                     :: doninp(ny,nx,1,nz)
+   real(r4), pointer            :: donout(:,:)
+
+   if (masterproc) then
+     !check if DeepONet pt file exist 
+     file_deeponet = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_deeponet),exist=l_ml_deeponet)
+     if ( .not. l_ml_deeponet) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_deeponet)//" not found!"
+       call endrun('DeepONet Nudging Error: model file not exist')
+     end if
+   end if
+#ifdef SPMD
+   call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
+#endif
+
+   !convolution 2D model options
+   !before nudging state->after nudging state
+   !input trunk data 
+   do i = 1, nx
+     do j = 1, ny
+       n = (j-1)*nx + i
+       x_trunk(1,n) = 2.0_r4*(real(i,kind=r4)-1.0_r4)/(real(nx,kind=r4)-1.0_r4)-1.0_r4
+       x_trunk(2,n) = 2.0_r4*(real(j,kind=r4)-1.0_r4)/(real(ny,kind=r4)-1.0_r4)-1.0_r4
+     end do
+   end do
+
+   !prepare input data 
+   do k = 1,nz
+     do j = 1,nx
+       do i = 1,ny
+         !normalize input data
+         doninp(i,j,1,k) = 2.0_r4*(real(vari(j,i,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
+       end do
+     end do
+   end do
+   call input_tensors%create
+   call input_tensors%add_array(doninp)
+   call input_tensors%add_array(x_trunk)
+   call torch_mod%load(trim(file_path)//trim(file_deeponet))
+   call torch_mod%forward(input_tensors,out_tensor,1)
+   call out_tensor%to_array(donout)
+
+   if (masterproc.and.l_print_diag) then
+     write(iulog,*) 'shape of doninp = ',shape(doninp)
+     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
+     write(iulog,*) 'shape of donout = ',shape(donout)
+     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
+   end if
+
+   !output data (denormalize)
+   do k = 1, nz
+     do j = 1, ny
+       do i = 1, nx
+         m = (j-1)* nx + i
+         n = (i-1)* ny + j
+         varo(m,k) = 0.5_r8*(real(donout(n,k),kind=r8)+1.0_r8)*(vmax-vmin)+vmin
+       end do
+     end do
+   end do
+
+   return
+  end subroutine !deeponet_statadv
 
   subroutine deeponet_encoder(file_path,varname,nx,ny,nx1,ny1,nz,vari,varo) 
   !===========================================================================
