@@ -6077,8 +6077,8 @@ contains
    !convolution 2D model options
    !before nudging state->after nudging state
    !input trunk data 
-   do i = 1, nx
-     do j = 1, ny
+   do j = 1, ny
+     do i = 1, nx
        n = (j-1)*nx + i
        x_trunk(1,n) = 2.0_r4*(real(i,kind=r4)-1.0_r4)/(real(nx,kind=r4)-1.0_r4)-1.0_r4
        x_trunk(2,n) = 2.0_r4*(real(j,kind=r4)-1.0_r4)/(real(ny,kind=r4)-1.0_r4)-1.0_r4
@@ -6090,7 +6090,7 @@ contains
      do j = 1,nx
        do i = 1,ny
          !normalize input data
-         doninp(i,j,1,k) = 2.0_r4*(real(vari(j,i,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
+         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
        end do
      end do
    end do
@@ -6147,7 +6147,7 @@ contains
    ! Local values
    !----------------
    logical, parameter :: l_print_diag = .false.
-   integer            :: i,j,n,m,k,ii,jj
+   integer            :: i,j,n,m,k
    real(r4)           :: vmax,vmin 
    real(r4)           :: encinp(ny,nx,1,nz)
    real(r4), pointer  :: encout(:,:)
@@ -6170,11 +6170,11 @@ contains
    vmin = real(minval(vari),kind=r4)
    vmax = real(maxval(vari),kind=r4)
    do k = 1, nz
-     do j = 1, nx 
-       do i = 1, ny
+     do j = 1, ny 
+       do i = 1, nx
          !m = (i-1)*ny + j
          !normalize the data with max/min
-         encinp(i,j,1,k) = 2.0_r4*(real(vari(j,i,k),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
+         encinp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
        end do
      end do
    end do
@@ -6197,8 +6197,8 @@ contains
    do k = 1, nz
      do j = 1, ny1 
        do i = 1, nx1
-         n = (j-1)*nx1 + i
-         varo(i,j,k) = real(encout(n,k), kind = r8)
+         m = (j-1)*nx1 + i
+         varo(i,j,k) = real(encout(m,k), kind = r8)
        end do 
      end do 
    end do 
@@ -6294,8 +6294,7 @@ contains
      do j = 1, ny 
        do i = 1, nx
          m = (j-1)*nx + i
-         n = (i-1)*ny + j 
-         varo(m,k) = 0.5_r8*(real(dcdout(n,k),kind=r8)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
+         varo(m,k) = 0.5_r8*(real(dcdout(m,k),kind=r8)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
        end do
      end do
    end do
