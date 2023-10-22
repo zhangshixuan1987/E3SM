@@ -5818,14 +5818,14 @@ contains
    integer  :: i,j,n,m,k,ii,jj,ierr
    real(r8) :: sum_x,vmin,vmax
    real(r8) :: wrk_tend(ngcol,nlev)
-   real(r8) :: enc_tend(DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev)
-   real(r8) :: don_tend(DeepONet_Conv2d_NX1*DeepONet_Conv2d_NY1,nlev)
+   real(r8) :: enc_out(DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev)
+   real(r8) :: don_out(DeepONet_Conv2d_NX1*DeepONet_Conv2d_NY1,nlev)
    real(r8) :: don_stat(DeepONet_Conv2d_NXY,nlev)
    real(r8) :: wrk_state(DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,nlev)
    real(r8) :: wrk_out(DeepONet_Conv2d_NXY,nlev)
 
    !initialize tendency array 
-   wrk_tend(:,:)  = 0.0_r8
+   wrk_tend(:,:) = 0.0_r8
 
    !start to call deepONet model 
    call t_startf('deeponet_prediction')
@@ -5856,22 +5856,20 @@ contains
 
        !call encoder 
        call deeponet_encoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  & 
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_tend)
+                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_out)
  
        !call deeponet               
        call deeponet_tendadv(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
-                             nlev,DeepONet_Conv2d_NT,enc_tend,don_tend)
+                             nlev,DeepONet_Conv2d_NT,enc_out,don_out)
 
        !call decoder                
        call deeponet_decoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  &
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_tend,wrk_out)
+                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_out,wrk_out)
      else 
        !option 1: deepONet (before nudging state --> after nudging state) 
        !          nudging tedency = (After - Before) / 3*3600 (3hour)
-       vmin = minval(wrk_state) 
-       vmax = maxval(wrk_state)
        call deeponet_statadv(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
-                             nlev,wrk_state,don_stat,vmin,vmax)
+                             nlev,wrk_state,don_stat)
 
        !compute nudging tendency 
        do k = 1, nlev
@@ -5980,25 +5978,30 @@ contains
    call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
 #endif
 
+   !parameters to denormalize DeepONet prediction
+   if (trim(varname) == 'U') then
+     donmax = 9.087432_r8
+     donmin = -9.915943_r8
+   else  ! "V"
+     donmax = 9.116263_r8
+     donmin = -8.079512_r8
+   end if
+
    !convolution 2D model options 
    !0: before nudging state->nudging tendency 
-
    !dummy input time
    do n = 1,nt
-     x_trunk(1,n) = 2.0_r4*(n-1.0_r4)/(nt-1.0_r4)-1.0_r4
+     x_trunk(1,n) = 2.0_r4*(real(n,kind=r4)-1.0_r4)/(real(nt,kind=r4)-1.0_r4)-1.0_r4
    end do
 
    !prepare input data 
-   
    !min/max for normalization 
    vmin = real(minval(vari),kind=r4)
    vmax = real(maxval(vari),kind=r4)
-
    do k = 1,nz
      do j = 1,ny
        do i = 1,nx
          m = (j-1)*nx + i
-         !normalize input data
          doninp(m,:,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
        end do
      end do
@@ -6017,12 +6020,12 @@ contains
      write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
    end if
 
-   !output data 
+   !denormalize the deeponet prediction and output data
    do k = 1, nz
      do j = 1, ny
        do i = 1, nx
          m = (j-1)*nx + i
-         varo(m,k) = real(donout(i,j,1,k),kind=r8)
+         varo(m,k) = 0.5_r8*(real(donout(i,j,1,k),kind=r8)+1.0_r8)*(donmax-donmin)+donmin
        end do
      end do
    end do 
@@ -6030,7 +6033,7 @@ contains
    return
   end subroutine !deeponet_tendadv
 
-  subroutine deeponet_statadv(file_path,varname,nx,ny,nz,vari,varo,vmin,vmax)
+  subroutine deeponet_statadv(file_path,varname,nx,ny,nz,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
   !                  the DeepONet Machine Learning (ML) model,
@@ -6045,7 +6048,6 @@ contains
    integer, intent(in)          :: nx,ny,nz
    real(r8),intent(in)          :: vari(nx,ny,nz)
    real(r8),intent(inout)       :: varo(nx*ny,nz)
-   real(r8),intent(in)          :: vmin,vmax
 
    ! Arguments
    !-----------
@@ -6060,6 +6062,8 @@ contains
    real(r4)                     :: x_trunk(2,nx*ny)
    real(r4)                     :: doninp(ny,nx,1,nz)
    real(r4), pointer            :: donout(:,:)
+   real(r4)                     :: vmin1,vmax1
+   real(r8)                     :: vmin,vmax
 
    if (masterproc) then
      !check if DeepONet pt file exist 
@@ -6087,10 +6091,12 @@ contains
 
    !prepare input data 
    do k = 1,nz
-     do j = 1,nx
-       do i = 1,ny
+     vmin1 = real(minval(vari(:,:,k)),kind=r4)
+     vmax1 = real(minval(vari(:,:,k)),kind=r4)
+     do j = 1,ny
+       do i = 1,nx
          !normalize input data
-         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
+         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin1)/(vmax1-vmin1)-1.0_r4
        end do
      end do
    end do
@@ -6110,11 +6116,12 @@ contains
 
    !output data (denormalize)
    do k = 1, nz
+     vmin = minval(vari(:,:,k)
+     vmax = minval(vari(:,:,k)
      do j = 1, ny
        do i = 1, nx
          m = (j-1)* nx + i
-         n = (i-1)* ny + j
-         varo(m,k) = 0.5_r8*(real(donout(n,k),kind=r8)+1.0_r8)*(vmax-vmin)+vmin
+         varo(m,k) = 0.5_r8*(real(donout(m,k),kind=r8)+1.0_r8)*(vmax-vmin)+vmin
        end do
      end do
    end do
@@ -6172,7 +6179,6 @@ contains
    do k = 1, nz
      do j = 1, ny 
        do i = 1, nx
-         !m = (i-1)*ny + j
          !normalize the data with max/min
          encinp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
        end do
@@ -6252,28 +6258,16 @@ contains
 
    !parameters to normalize/denormalize DeepONet prediction 
    if (trim(varname) == 'U') then
-     donmax = 9.087432_r4
-     donmin = -9.915943_r4
      dcdmax = 0.0013223718_r8
      dcdmin = -0.0010001023_r8
    else  ! "V"
-     donmax = 9.116263_r4
-     donmin = -8.079512_r4
      dcdmax = 0.0010921889_r8
      dcdmin = -0.0014089954_r8
    end if
 
    !prepare input data and run decoder 
-   do k = 1, nz
-     do j = 1, ny1 
-       do i = 1, nx1
-         !denormalize data from deepONet
-         m = (j-1)*nx1 + i
-         dcdinp(m,k) = 0.5_r4*(real(vari(m,k),kind=r4)+1.0_r4)*(donmax-donmin)+donmin
-       end do
-     end do
-   end do
-
+   !need to convert to single precision 
+   dcdinp(:,:) = real(vari(:,:),kind=r4)
    !call decoder 
    call input_tensors%create
    call input_tensors%add_array(dcdinp)
@@ -6288,8 +6282,7 @@ contains
      write(iulog,*) 'dcdout(min/max) = ',minval(dcdout),maxval(dcdout)
    end if
 
-   !process to output array 
-   !note: need to transpose DeepONet(nlat,nlon,nlev) to E3SM (nlon,nlat,nlev)
+   !denormalize ouput from decoder to convert it to tendency 
    do k = 1, nz
      do j = 1, ny 
        do i = 1, nx
