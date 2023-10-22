@@ -6116,8 +6116,8 @@ contains
 
    !output data (denormalize)
    do k = 1, nz
-     vmin = minval(vari(:,:,k)
-     vmax = minval(vari(:,:,k)
+     vmin = minval(vari(:,:,k))
+     vmax = minval(vari(:,:,k))
      do j = 1, ny
        do i = 1, nx
          m = (j-1)* nx + i
