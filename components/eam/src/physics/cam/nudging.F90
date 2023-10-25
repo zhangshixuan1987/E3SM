@@ -5960,6 +5960,7 @@ contains
    !----------------
    logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
+   real(r8)                     :: donmin, donmax
    real(r4)                     :: vmax,vmin
    real(r4)                     :: x_trunk(1,nt)    
    real(r4)                     :: doninp(nx*ny,nt,1,nz)
@@ -6239,7 +6240,6 @@ contains
    logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
    real(r8)                     :: dcdmin,dcdmax
-   real(r4)                     :: donmin,donmax
    real(r4)                     :: dcdinp(nx1*ny1,nz)
    real(r4), pointer            :: dcdout(:,:)
 
