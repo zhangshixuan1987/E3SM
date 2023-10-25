@@ -6093,7 +6093,7 @@ contains
    !prepare input data 
    do k = 1,nz
      vmin1 = real(minval(vari(:,:,k)),kind=r4)
-     vmax1 = real(minval(vari(:,:,k)),kind=r4)
+     vmax1 = real(maxval(vari(:,:,k)),kind=r4)
      do j = 1,ny
        do i = 1,nx
          !normalize input data
@@ -6118,7 +6118,7 @@ contains
    !output data (denormalize)
    do k = 1, nz
      vmin = minval(vari(:,:,k))
-     vmax = minval(vari(:,:,k))
+     vmax = maxval(vari(:,:,k))
      do j = 1, ny
        do i = 1, nx
          m = (j-1)* nx + i
