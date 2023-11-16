@@ -2337,22 +2337,29 @@ contains
 
      call cnst_get_ind('Q',indw)
      do lchnk=begchunk,endchunk
+
        ncol=state(lchnk)%ncol
+
        if ( Nudge_Uprof .ne. 0 ) then
           Model_U(:ncol,:pver,lchnk)=state(lchnk)%u(:ncol,:pver)
        end if
+
        if ( Nudge_Vprof .ne. 0 ) then
           Model_V(:ncol,:pver,lchnk)=state(lchnk)%v(:ncol,:pver)
        end if
+
        if ( Nudge_Tprof .ne. 0 ) then
           Model_T(:ncol,:pver,lchnk)=state(lchnk)%t(:ncol,:pver)
        end if
+
        if ( Nudge_Qprof .ne. 0 ) then
           Model_Q(:ncol,:pver,lchnk)=state(lchnk)%q(:ncol,:pver,indw)
        end if
+
        if ( Nudge_PSprof .ne. 0 ) then
           Model_PS(:ncol,lchnk)=state(lchnk)%ps(:ncol)
        end if
+
      end do
    end if 
 
@@ -2462,21 +2469,29 @@ contains
 
    !apply the coefficient 
    do lchnk=begchunk,endchunk
+
+     ncol = state(lchnk)%ncol
+
      Nudge_Ustep(:ncol,:pver,lchnk) = Nudge_Ustep(:ncol,:pver,lchnk) &
                                        * Nudge_Utau(:ncol,:pver,lchnk)
+
      Nudge_Vstep(:ncol,:pver,lchnk) = Nudge_Vstep(:ncol,:pver,lchnk) &
                                        * Nudge_Vtau(:ncol,:pver,lchnk)
+
      Nudge_Tstep(:ncol,:pver,lchnk) = Nudge_Tstep(:ncol,:pver,lchnk) &
                                        * Nudge_Ttau(:ncol,:pver,lchnk)
+
      Nudge_Qstep(:ncol,:pver,lchnk) = Nudge_Qstep(:ncol,:pver,lchnk) &
                                        * Nudge_Qtau(:ncol,:pver,lchnk)
+
      Nudge_PSstep(:ncol,lchnk)      = Nudge_PSstep(:ncol,lchnk) &
                                        * Nudge_PStau(:ncol,lchnk)
+
    end do
 
    !output Diagnostics 
    do lchnk=begchunk,endchunk
-     ncol=state(lchnk)%ncol
+
      call outfld('U_bf_ndg',  Model_U(:,:,lchnk), pcols,lchnk)
      call outfld('V_bf_ndg',  Model_V(:,:,lchnk), pcols,lchnk)
      call outfld('T_bf_ndg',  Model_T(:,:,lchnk), pcols,lchnk)
@@ -2489,21 +2504,20 @@ contains
      call outfld('Nudge_Q',   Nudge_Qstep(:,:,lchnk),pcols,lchnk)
      call outfld('Nudge_PS',  Nudge_PSstep(:,lchnk), pcols,lchnk)
 
+     ncol=state(lchnk)%ncol
      ftem(:ncol,:pver) = Nudge_Ustep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_U_vint',ftem2,pcols,lchnk)
-
      ftem(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_V_vint',ftem2,pcols,lchnk)
-
      ftem(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
-
      ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
+
    end do 
 
    ! End Routine
@@ -6063,8 +6077,8 @@ contains
    real(r4)                     :: x_trunk(2,nx*ny)
    real(r4)                     :: doninp(ny,nx,1,nz)
    real(r4), pointer            :: donout(:,:)
-   real(r4)                     :: vmin1,vmax1
-   real(r8)                     :: vmin,vmax
+   real(r4)                     :: vmini,vmaxi
+   real(r8)                     :: vmino,vmaxo
 
    if (masterproc) then
      !check if DeepONet pt file exist 
@@ -6092,12 +6106,12 @@ contains
 
    !prepare input data 
    do k = 1,nz
-     vmin1 = real(minval(vari(:,:,k)),kind=r4)
-     vmax1 = real(maxval(vari(:,:,k)),kind=r4)
+     vmini = real(minval(vari(:,:,k)),kind=r4)
+     vmaxi = real(maxval(vari(:,:,k)),kind=r4)
      do j = 1,ny
        do i = 1,nx
          !normalize input data
-         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin1)/(vmax1-vmin1)-1.0_r4
+         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmini)/(vmaxi-vmini)-1.0_r4
        end do
      end do
    end do
@@ -6117,12 +6131,12 @@ contains
 
    !output data (denormalize)
    do k = 1, nz
-     vmin = minval(vari(:,:,k))
-     vmax = maxval(vari(:,:,k))
+     vmino = minval(vari(:,:,k))
+     vmaxo = maxval(vari(:,:,k))
      do j = 1, ny
        do i = 1, nx
          m = (j-1)* nx + i
-         varo(m,k) = 0.5_r8*(real(donout(m,k),kind=r8)+1.0_r8)*(vmax-vmin)+vmin
+         varo(m,k) = 0.5_r8*(real(donout(m,k),kind=r8)+1.0_r8)*(vmaxo-vmino)+vmino
        end do
      end do
    end do
@@ -6165,7 +6179,7 @@ contains
      file_encoder = trim(varname)//'_Encoder.pt'
      inquire(file=trim(file_path)//trim(file_encoder),exist=l_ml_encoder)
      if ( .not. l_ml_encoder) then
-       write(iulog,*) "ERROR: "//trim(file_encoder)//trim(file_encoder)//" not found!"
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_encoder)//" not found!"
        call endrun('DeepONet Nudging Error: model file not exist')
      end if
    end if
@@ -6247,8 +6261,8 @@ contains
      !check if DeepONet pt file exist 
      file_decoder = trim(varname)//'_Decoder.pt'
      inquire(file=trim(file_path)//trim(file_decoder),exist=l_ml_decoder)
-     if ( .not. l_ml_decoder) then
-       write(iulog,*) "ERROR: "//trim(file_decoder)//trim(file_decoder)//" not found!"
+     if (.not. l_ml_decoder) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_decoder)//" not found!"
        call endrun('DeepONet Nudging Error: model file not exist')
      end if
    end if
