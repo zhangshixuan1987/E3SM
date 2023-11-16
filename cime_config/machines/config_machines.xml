@@ -122,7 +122,6 @@
       <modules compiler="gnu">
         <command name="load">PrgEnv-gnu/8.3.3</command>
         <command name="load">gcc/11.2.0</command>
-        <command name="load">cray-libsci/23.02.1.1</command>
       </modules>
 
       <modules compiler="intel">
@@ -132,24 +131,23 @@
 
       <modules compiler="nvidia">
         <command name="load">PrgEnv-nvidia</command>
-        <command name="load">nvidia/22.7</command>
-        <command name="load">cray-libsci/23.02.1.1</command>
+        <command name="load">nvidia/22.5</command>
       </modules>
 
       <modules compiler="amdclang">
         <command name="load">PrgEnv-aocc</command>
         <command name="load">aocc/3.2.0</command>
-        <command name="load">cray-libsci/23.02.1.1</command>
       </modules>
 
       <modules>
         <command name="load">craype-accel-host</command>
-        <command name="load">craype/2.7.20</command>
-        <command name="load">cray-mpich/8.1.25</command>
-        <command name="load">cray-hdf5-parallel/1.12.2.3</command>
-        <command name="load">cray-netcdf-hdf5parallel/4.9.0.3</command>
-        <command name="load">cray-parallel-netcdf/1.12.3.3</command>
-        <command name="load">cmake/3.24.3</command>
+        <command name="load">cray-libsci</command>
+	<command name="load">craype</command>
+        <command name="load">cray-mpich/8.1.27</command>
+        <command name="load">cray-hdf5-parallel/1.12.2.7</command>
+        <command name="load">cray-netcdf-hdf5parallel/4.9.0.7</command>
+        <command name="load">cray-parallel-netcdf/1.12.3.7</command>
+        <command name="load">cmake/3.22.0</command>
       </modules>
     </module_system>
 
@@ -157,6 +155,14 @@
     <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
     <TEST_TPUT_TOLERANCE>0.1</TEST_TPUT_TOLERANCE>
     <TEST_MEMLEAK_TOLERANCE>0.20</TEST_MEMLEAK_TOLERANCE>
+
+    <environment_variables compiler="gnu">
+      <env name="TORCH_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch</env>
+      <env name="TORCH_FORTRAN_DIR">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran</env>
+      <env name="PYTHONPATH">/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch</env>
+      <env name="LD_LIBRARY_PATH">$ENV{LD_LIBRARY_PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/lib</env>
+      <env name="PATH">$ENV{PATH}:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/include:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/include/mod_files:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch-fortran/gnu/install/lib:/pscratch/sd/z/zhan391/DARPA_project/e3sm_model/code/deepONet/pytorch/torch/lib</env>
+    </environment_variables>
 
     <environment_variables>
       <env name="MPICH_ENV_DISPLAY">1</env>
