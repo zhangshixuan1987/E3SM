@@ -1312,6 +1312,14 @@ end subroutine diag_conv_tend_ini
        call vertinterp(ncol, pcols, pver, state%pmid, 10000._r8, state%omega, p_surf)
        call outfld('OMEGA100', p_surf, pcols, lchnk)
     end if
+    if (hist_fld_active('OMEGA050')) then
+       call vertinterp(ncol, pcols, pver, state%pmid, 5000._r8, state%omega, p_surf)
+       call outfld('OMEGA050', p_surf, pcols, lchnk)
+    end if
+    if (hist_fld_active('OMEGA010')) then
+       call vertinterp(ncol, pcols, pver, state%pmid, 1000._r8, state%omega,p_surf)
+       call outfld('OMEGA010', p_surf, pcols, lchnk)
+    end if
     if (hist_fld_active('OMEGABOT')) then
        call outfld('OMEGABOT', state%omega(:,pver), pcols, lchnk)
     end if
