@@ -281,6 +281,9 @@ subroutine diag_init()
    call addfld ('OMEGA300',horiz_only,    'A','Pa/s','Vertical velocity at 300 mbar pressure surface')
    call addfld ('OMEGA200',horiz_only,    'A','Pa/s','Vertical velocity at 200 mbar pressure surface')
    call addfld ('OMEGA100',horiz_only,    'A','Pa/s','Vertical velocity at 100 mbar pressure surface')
+   call addfld ('OMEGA050',horiz_only,    'A','Pa/s','Vertical velocity at 100 mbar pressure surface')
+   call addfld ('OMEGA010',horiz_only,    'A','Pa/s','Vertical velocity at 100 mbar pressure surface')
+
    call addfld ('OMEGABOT',horiz_only,    'A','Pa/s','Lowest model level vertical velocity')
 
    call addfld ('RH1000',horiz_only,    'A','%','Relative humidity at 1000 mbar pressure surface')
