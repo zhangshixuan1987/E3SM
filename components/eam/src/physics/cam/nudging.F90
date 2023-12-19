@@ -1806,11 +1806,20 @@ contains
              !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlon=', val4_0
              !endif
 
-             if( DeepONet_Conv2d_NXY .ne. 4900 ) then
-                write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
-                write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
-                call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
-             endif
+             if (DeepONet_Conv2d_OPT == 2 ) then 
+               if( DeepONet_Conv2d_NXY .ne. 9216 ) then
+                  write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
+                   write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
+                  call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
+               endif
+             else
+               if( DeepONet_Conv2d_NXY .ne. 4900 ) then
+                  write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
+                   write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
+                  call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
+               endif
+             end if 
+
              if((val1_0.lt.0.).or.(val2_0.ge.360.)) then
                write(iulog,*) 'DeepONet NUDGING: Conv2D Window lon range not in [0,+360]'
                write(iulog,*) 'DeepONet NUDGING: Conv2d lons,lone=',val1_0,val2_0 
@@ -5864,38 +5873,49 @@ contains
      end if
 
      !There are two options for convolution 2D model
-     if (DeepONet_Conv2d_OPT == 0) then
-       !option 0: encoder-->deepONet-->decoder approach to 
-       !          predict nudging tendency from before nuding state
+     select case (DeepONet_Conv2d_OPT)
+       case (0)      
+         !option 0: encoder-->deepONet-->decoder approach to 
+         !          predict nudging tendency from before nuding state
 
-       !call encoder 
-       call deeponet_encoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  & 
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_out)
+         !call encoder 
+         call deeponet_encoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  & 
+                               DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_out)
  
-       !call deeponet               
-       call deeponet_tendadv(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
-                             nlev,DeepONet_Conv2d_NT,enc_out,don_out)
+         !call deeponet               
+         call deeponet_tendadv(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
+                               nlev,DeepONet_Conv2d_NT,enc_out,don_out)
 
-       !call decoder                
-       call deeponet_decoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  &
-                             DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_out,wrk_out)
-     else 
-       !option 1: deepONet (before nudging state --> after nudging state) 
-       !          nudging tedency = (After - Before) / 3*3600 (3hour)
-       call deeponet_statadv(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
-                             nlev,wrk_state,don_stat)
+         !call decoder                
+         call deeponet_decoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  &
+                               DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_out,wrk_out)
 
-       !compute nudging tendency 
-       do k = 1, nlev
-         do j = 1, DeepONet_Conv2d_NLat
-           do i = 1, DeepONet_Conv2d_NLon
-             m = (j-1)*DeepONet_Conv2d_NLon + i 
-             !calculate nudging tendency 
-             wrk_out(m,k) = (don_stat(m,k) - wrk_state(i,j,k)) / DeepONet_dtime / sec_per_hour
+       case (1) 
+         !option 1: deepONet (before nudging state --> after nudging state) 
+         !          nudging tedency = (After - Before) / 3*3600 (3hour)
+         call deeponet_statadv(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
+                               nlev,wrk_state,don_stat)
+         !compute nudging tendency 
+         do k = 1, nlev
+           do j = 1, DeepONet_Conv2d_NLat
+             do i = 1, DeepONet_Conv2d_NLon
+               m = (j-1)*DeepONet_Conv2d_NLon + i 
+               !calculate nudging tendency 
+               wrk_out(m,k) = (don_stat(m,k) - wrk_state(i,j,k)) / DeepONet_dtime / sec_per_hour
+             end do
            end do
          end do
-       end do
-     end if 
+
+       case (2) 
+         !option 2: ML(state)-->ML(tendency)
+         !          predict nudging tendency from before nuding state
+         !call machine learning model 
+         call vito_tendadv(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat, &
+                           nlev,wrk_state,wrk_out)
+                        
+       case default           
+         call endrun('DeepONet Nudging Error: invalid option for DeepONet_Conv2d_OPT')
+      end select
 
      !Debug Diagnostics 
      if (masterproc .and. l_print_diag) then
@@ -5947,6 +5967,82 @@ contains
 
    return
   end subroutine !deeponet_advance 
+
+  subroutine vito_tendadv(file_path,varname,nx,ny,nz,vari,varo)
+  !===========================================================================
+  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
+  !                  the DeepONet Machine Learning (ML) model,
+  !===========================================================================
+   use cam_abortutils  , only : endrun
+   use error_messages,   only : handle_ncerr
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+
+   implicit none
+   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   character(len=*), intent(in) :: varname   !nudge variable
+   integer, intent(in)          :: nx,ny,nz
+   real(r8),intent(in)          :: vari(nx,ny,nz)
+   real(r8),intent(inout)       :: varo(nx*ny,nz)
+
+   ! Arguments
+   !-----------
+   type(torch_module)           :: torch_mod
+   type(torch_tensor_wrap)      :: input_tensors
+   type(torch_tensor)           :: out_tensor
+
+   ! Local values
+   !----------------
+   logical, parameter           :: l_print_diag = .false.
+   integer                      :: i,j,n,m,k,ii,jj
+   real(r4)                     :: doninp(nx,ny,nz,1)
+   real(r4), pointer            :: donout(:,:,:,:)
+
+   if (masterproc) then
+     !check if DeepONet pt file exist 
+     file_deeponet = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_deeponet),exist=l_ml_deeponet)
+     if ( .not. l_ml_deeponet) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_deeponet)//" not found!"
+       call endrun('DeepONet Nudging Error: model file not exist')
+     end if
+   end if
+#ifdef SPMD
+   call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
+#endif
+
+   !prepare input data 
+   do k = 1,nz
+     do j = 1,ny
+       do i = 1,nx
+         doninp(i,j,k,1) = real(vari(i,j,k),kind=r4)
+       end do
+     end do
+   end do
+   call input_tensors%create
+   call input_tensors%add_array(doninp)
+   call torch_mod%load(trim(file_path)//trim(file_deeponet))
+   call torch_mod%forward(input_tensors,out_tensor,1)
+   call out_tensor%to_array(donout)
+
+   if (masterproc.and.l_print_diag) then
+     write(iulog,*) 'shape of doninp = ',shape(doninp)
+     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
+     write(iulog,*) 'shape of donout = ',shape(donout)
+     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
+   end if
+
+   !return output data
+   do k = 1, nz
+     do j = 1, ny
+       do i = 1, nx
+         m = (j-1)*nx + i
+         varo(m,k) = real(donout(i,j,k,1),kind=r8) 
+       end do
+     end do
+   end do
+
+   return
+  end subroutine !vito_tendadv 
 
   subroutine deeponet_tendadv(file_path,varname,nx,ny,nz,nt,vari,varo)
   !===========================================================================
@@ -6129,7 +6225,7 @@ contains
      write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
    end if
 
-   !output data (denormalize)
+  !output data (denormalize)
    do k = 1, nz
      vmino = minval(vari(:,:,k))
      vmaxo = maxval(vari(:,:,k))
