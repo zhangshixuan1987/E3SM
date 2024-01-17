@@ -1083,6 +1083,16 @@
       <mask>gx3v7</mask>
     </model_grid>
 
+    <model_grid alias="ne16pg2_oQU240">
+      <grid name="atm">ne16np4.pg2</grid>
+      <grid name="lnd">ne16np4.pg2</grid>
+      <grid name="ocnice">oQU240</grid>
+      <grid name="rof">r05</grid>
+      <grid name="glc">null</grid>
+      <grid name="wav">null</grid>
+      <mask>oQU240</mask>
+    </model_grid>
+
     <model_grid alias="ne16pg2_r05_oQU240" compset="(EAM.+ELM.+MPASO)">
       <grid name="atm">ne16np4.pg2</grid>
       <grid name="lnd">r05</grid>
@@ -3955,6 +3965,11 @@
       <map name="ATM2ROF_SMAPNAME">lnd/clm2/mappingdata/maps/ne11np4/map_ne11np4_TO_r05_aave.160621.nc</map>
     </gridmap>
 
+    <gridmap atm_grid="ne16np4" rof_grid="r05">
+      <map name="ATM2ROF_FMAPNAME">lnd/clm2/mappingdata/maps/ne16np4/map_ne16np4_nomask_to_0.5x0.5_nomask_aave_da_c110922.nc</map>
+      <map name="ATM2ROF_SMAPNAME">lnd/clm2/mappingdata/maps/ne16np4/map_ne16np4_nomask_to_0.5x0.5_nomask_aave_da_c110922.nc</map>
+    </gridmap>
+
     <gridmap atm_grid="ne16np4.pg2" rof_grid="r05">
       <map name="ATM2ROF_FMAPNAME">cpl/gridmaps/ne16pg2/map_ne16pg2_to_r05_mono.200527.nc</map>
       <map name="ATM2ROF_SMAPNAME">cpl/gridmaps/ne16pg2/map_ne16pg2_to_r05_mono.200527.nc</map>
@@ -4098,6 +4113,11 @@
     <gridmap lnd_grid="ne16np4" rof_grid="r05">
       <map name="LND2ROF_FMAPNAME">lnd/clm2/mappingdata/maps/ne16np4/map_ne16np4_nomask_to_0.5x0.5_nomask_aave_da_c110922.nc</map>
       <map name="ROF2LND_FMAPNAME">lnd/clm2/mappingdata/maps/ne16np4/map_0.5x0.5_nomask_to_ne16np4_nomask_aave_da_c110922.nc</map>
+    </gridmap>
+
+    <gridmap lnd_grid="ne16np4.pg2" rof_grid="r05">
+      <map name="LND2ROF_FMAPNAME">lnd/clm2/mappingdata/maps/ne16pg2/map_ne16pg2_nomask_to_r05_nomask_aave_da_.nc</map>
+      <map name="ROF2LND_FMAPNAME">lnd/clm2/mappingdata/maps/ne16pg2/map_0.5x0.5_nomask_to_ne16pg2_nomask_aave_da_.nc</map>
     </gridmap>
 
     <gridmap lnd_grid="ne30np4" rof_grid="r05">
