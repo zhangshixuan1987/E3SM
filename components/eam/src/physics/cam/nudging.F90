@@ -397,16 +397,6 @@ module nudging
   !----------------------------------------------------------
   implicit none
   private
-  public:: DeepONet_Nudge
-  public:: DeepONet_Conv2d
-  public:: DeepONet_Conv2d_OPT
-  public:: DeepONet_Interp_Test 
-  public:: DeepONet_Conv2d_NXY
-  public:: DeepONet_Conv2d_NLon
-  public:: DeepONet_Conv2d_NLat
-  public:: DeepONet_Conv2d_DX
-  public:: DeepONet_Conv2d_DY
-  public:: DeepONet_Conv2d_BILN
   public:: Nudge_Model,Nudge_ON
   public:: Nudge_Allow_Missing_File
   public:: Nudge_Pdep_Weight_On
@@ -429,18 +419,10 @@ module nudging
   public:: nudging_update_land_surface
   public:: nudging_update_srf_flux
   public:: Nudge_Loc_PhysOut
-  public:: deeponet_timestep_init
   private::se2latlon_interp_init
   private::latlon2se_interp_init
   private::dist_latlon_2pts 
   private::coord_ind_weight
-  private::deeponet_advance
-  private::deeponet_gather_data
-  private::deeponet_gather_patch
-  private::deeponet_encoder 
-  private::deeponet_tendadv
-  private::deeponet_statadv
-  private::deeponet_decoder
   private::update_nudging_tend
   private::update_nudge_prof
   private::ps_nudging
@@ -457,12 +439,32 @@ module nudging
   private::read_and_scatter_se_2d
   private::read_and_scatter_fv
   private::open_netcdf
+
+  ! Machine Learning Bias Correction  
+  public:: mltbc_nudge
+  public:: mltbc_regional_on
+  public:: mltbc_predict_option
+  public:: mltbc_interp_test
+  public:: mltbc_patch_nxy
+  public:: mltbc_patch_nlon
+  public:: mltbc_patch_nlat
+  public:: mltbc_patch_dx
+  public:: mltbc_patch_dy
+  public:: mltbc_patch_biln
+  public:: mltbc_timestep_init
+
+  private::mltbc_advance
+  private::mltbc_gather_data
+  private::mltbc_gather_patch
+  private::mltbc_reg_tendadv
+  private::mltbc_glb_tendadv
+  private::mltbc_don_statadv
+  private::mltbc_don_encoder
+  private::mltbc_don_tendadv
+  private::mltbc_don_decoder
+
   ! Nudging Parameters
   !--------------------
-  logical::         DeepONet_Nudge       = .false.
-  logical::         DeepONet_Conv2d      = .false.
-  logical::         DeepONet_Conv2d_BILN = .false. 
-  logical::         DeepONet_Interp_Test = .false.
   logical::         Nudge_Model       =.false.
   logical::         Nudge_ON          =.false.
   logical::         Nudge_File_Present=.false.
@@ -484,13 +486,9 @@ module nudging
   logical::         Nudge_SRF_Q_On       = .false.
   logical::         Nudge_Hwin_Invert    = .false.
   logical::         Nudge_Vwin_Invert    = .false.
-  character(len=cl) DeepONet_Path 
   character(len=cl) Nudge_Path
   character(len=cl) Nudge_File,Nudge_File_Template
   character(len=cl) Nudge_SRF_File,Nudge_SRF_File_Template
-  integer           DeepONet_Conv2d_NLon, DeepONet_Conv2d_NLat
-  integer           DeepONet_Conv2d_OPT, DeepONet_Conv2d_NXY 
-  real(r8)          DeepONet_Conv2d_DX, DeepONet_Conv2d_DY
   integer           Nudge_Times_Per_Day
   integer           Model_Times_Per_Day
   real(r8)          Nudge_Ucoef,Nudge_Vcoef
@@ -533,7 +531,7 @@ module nudging
   real(r8)          Nudge_Hwin_lonWidthH
   real(r8)          Nudge_Hwin_max
   real(r8)          Nudge_Hwin_min
-  
+
   ! Nudging State Arrays
   !-----------------------
   integer Nudge_nlon,Nudge_nlat,Nudge_ncol,Nudge_nlev
@@ -589,17 +587,18 @@ module nudging
   real(r8), allocatable, dimension(:,:,:)   :: INTP_PS      ! (pcols,begchunk:endchunk,:)
   real(r8), allocatable, dimension(:,:,:)   :: INTP_PHIS    ! (pcols,begchunk:endchunk,:)
 
-!Variables for deepONet nudging 
-  real(r8), allocatable :: Model_rlat(:)               !(Nudge_ncol)
-  real(r8), allocatable :: Model_rlon(:)               !(Nudge_ncol)
-  real(r8), allocatable :: Model_wgth(:)               !(Nudge_ncol)
-  real(r8), allocatable :: Model_Var(:,:)              !(Nudge_ncol,Nudge_nlev)
-  real(r8), allocatable :: DeepONet_Conv2d_lon(:)      !(DeepONet_Conv2d_NXY)
-  real(r8), allocatable :: DeepONet_Conv2d_lat(:)      !(DeepONet_Conv2d_NXY)
-  integer,  allocatable :: DeepONet_se2latlon_ind(:,:) !(DeepONet_Conv2d_NXY,5)
-  integer,  allocatable :: DeepONet_latlon2se_ind(:,:) !(Nudge_ncol,4)
-  real(r8), allocatable :: DeepONet_se2latlon_wgt(:,:) !(DeepONet_Conv2d_NXY,5)
-  real(r8), allocatable :: DeepONet_latlon2se_wgt(:,:) !(Nudge_ncol,4)
+!Variables for machine learning bias correction 
+  real(r8), allocatable :: Model_rlat(:)            !(Nudge_ncol)
+  real(r8), allocatable :: Model_rlon(:)            !(Nudge_ncol)
+  real(r8), allocatable :: Model_wgth(:)            !(Nudge_ncol)
+  real(r8), allocatable :: Model_Var(:,:)           !(Nudge_ncol,Nudge_nlev)
+
+  real(r8), allocatable :: mltbc_patch_lon(:)      !(mltbc_patch_nxy)
+  real(r8), allocatable :: mltbc_patch_lat(:)      !(mltbc_patch_nxy)
+  integer,  allocatable :: mltbc_se2latlon_ind(:,:) !(mltbc_patch_nxy,5)
+  integer,  allocatable :: mltbc_latlon2se_ind(:,:) !(Nudge_ncol,4)
+  real(r8), allocatable :: mltbc_se2latlon_wgt(:,:) !(mltbc_patch_nxy,5)
+  real(r8), allocatable :: mltbc_latlon2se_wgt(:,:) !(Nudge_ncol,4)
 
 !Variables for surface nudging 
   real(r8), allocatable :: Target_U10(:,:)     !(pcols,begchunk:endchunk)
@@ -659,23 +658,6 @@ module nudging
   integer  :: snow_pcw_idx = 0
   integer  :: vmag_gust_idx= 0
 
-!parameters for deepONet convolution 2D model 
-  integer  :: DeepONet_Conv2d_NT  = 248! Dummy time array size  
-  integer  :: DeepONet_Conv2d_NX1 = 6  ! ML model trunk in X 6 
-  integer  :: DeepONet_Conv2d_NY1 = 6  ! ML model trunk in Y 6 
-  integer  :: DeepONet_Conv2d_NN  = 36 ! DeepONet_Conv2d_NX1 * DeepONet_Conv2d_NY1 
-  real(r8) :: DeepONet_dtime      = 3.0_r8 ! unit: hour 
-  
-  !logical variables  
-  logical  :: l_ml_encoder
-  logical  :: l_ml_decoder
-  logical  :: l_ml_deeponet
-
-  !file names for DeepONet pt files 
-  character(len=cl) :: file_encoder     ! DeepONet Decoder pt file 
-  character(len=cl) :: file_decoder     ! DeepONet Encoder pt file 
-  character(len=cl) :: file_deeponet    ! DeepONet Model   pt file 
-
   !Parameters determined with experiment 
   !From p_relax upwards, nudging is reduced linearly 
   real(r8), parameter :: p_uv_relax = 30.E2_r8  ! p_relax for u/v wind 
@@ -683,6 +665,29 @@ module nudging
   real(r8), parameter :: p_q_relax  = 100.E2_r8 ! p_relax for humidity 
   real(r8), parameter :: p_norelax  = 1.0_r8    ! from p_norelax upwards, no nudging
   real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
+
+  !Parameters for machine learning bias correction 
+  logical  :: mltbc_nudge       = .false.
+  logical  :: mltbc_regional_on = .false.
+  logical  :: mltbc_patch_biln  = .false.
+  logical  :: mltbc_interp_test = .false.
+
+  integer  :: mltbc_predict_option
+  integer  :: mltbc_patch_nlon
+  integer  :: mltbc_patch_nlat
+  integer  :: mltbc_patch_nxy
+  real(r8) :: mltbc_patch_dx
+  real(r8) :: mltbc_patch_dy
+
+  !logical variables
+  logical  :: l_mltbc_encoder
+  logical  :: l_mltbc_decoder
+  logical  :: l_mltbc_predictor
+
+  character(len=cl) :: mltbc_model_path
+  character(len=cl) :: file_encoder     ! Machine Learning Decoder pt file
+  character(len=cl) :: file_decoder     ! Machine Learning Encoder pt file
+  character(len=cl) :: file_predictor   ! Machine Learning Model   pt file
 
 contains
   !================================================================
@@ -736,9 +741,9 @@ contains
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
-                         DeepONet_Path, DeepONet_Conv2d,               & 
-                         DeepONet_Conv2d_OPT, DeepONet_Interp_Test,    & 
-                         DeepONet_Conv2d_BILN
+                         mltbc_model_path, mltbc_regional_on,          & 
+                         mltbc_predict_option, mltbc_interp_test,      & 
+                         mltbc_patch_biln
 
   
    ! Nudging is NOT initialized yet, For now
@@ -754,20 +759,9 @@ contains
    Nudge_SRF_File_Present=.false.
    Nudge_Beg_Sec=0
    Nudge_End_Sec=0
-   DeepONet_Conv2d_BILN=.false. 
-   DeepONet_Interp_Test=.false.
 
    ! Set Default Namelist values
    !-----------------------------
-   DeepONet_Nudge     =.false.
-   DeepONet_Conv2d    =.false.
-   DeepONet_Conv2d_OPT  = 0
-   DeepONet_Conv2d_NLon = 1
-   DeepONet_Conv2d_NLat = 1
-   DeepONet_Conv2d_NXY= 1 
-   DeepONet_Conv2d_DX = 1.0_r8
-   DeepONet_Conv2d_DY = 1.0_r8 
-   DeepONet_Path      = './DeepONet_PT_File/'
    Nudge_Model        =.false.
    Nudge_Allow_Missing_File = .false.
    Nudge_Pdep_Weight_On = .false.
@@ -835,6 +829,20 @@ contains
    Nudge_NO_PBL_T     = 0 
    Nudge_NO_PBL_Q     = 0
    
+   ! Set Default values for machine learing 
+   !-----------------------------
+   mltbc_patch_biln     = .false.
+   mltbc_interp_test    = .false.
+   mltbc_nudge          = .false.
+   mltbc_regional_on    = .false.
+   mltbc_predict_option = 0
+   mltbc_patch_nlon     = 1
+   mltbc_patch_nlat     = 1
+   mltbc_patch_nxy      = 1
+   mltbc_patch_dx       = 1.0_r8
+   mltbc_patch_dy       = 1.0_r8
+   mltbc_model_path     = './mltbc_PT_File/'
+
    ! Read in namelist values
    !------------------------
    if(masterproc) then
@@ -851,10 +859,10 @@ contains
      call freeunit(unitn)
    endif
 
-   if (trim(Nudge_Method).eq."DeepONet") then 
-     DeepONet_Nudge = .true. 
+   if (trim(Nudge_Method).eq."MLTBC") then 
+     mltbc_nudge = .true. 
    else
-     DeepONet_Nudge = .false.
+     mltbc_nudge = .false.
    end if 
 
    ! Set hi/lo values according to the given '_Invert' parameters
@@ -937,12 +945,6 @@ contains
    ! Broadcast namelist variables
    !------------------------------
 #ifdef SPMD
-   call mpibcast(DeepONet_Path           ,len(DeepONet_Path)      ,mpichar,0,mpicom)
-   call mpibcast(DeepONet_Nudge          , 1, mpilog, 0, mpicom)
-   call mpibcast(DeepONet_Conv2d         , 1, mpilog, 0, mpicom)
-   call mpibcast(DeepONet_Conv2d_OPT     , 1, mpiint, 0, mpicom) 
-   call mpibcast(DeepONet_Conv2d_BILN    , 1, mpilog, 0, mpicom) 
-   call mpibcast(DeepONet_Interp_Test    , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Path              ,len(Nudge_Path)         ,mpichar,0,mpicom)
    call mpibcast(Nudge_File_Template     ,len(Nudge_File_Template),mpichar,0,mpicom)
    call mpibcast(Nudge_Model             , 1, mpilog, 0, mpicom)
@@ -1018,7 +1020,12 @@ contains
    call mpibcast(Nudge_NO_PBL_UV         , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T          , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q          , 1, mpiint, 0, mpicom)
-
+   call mpibcast(mltbc_model_path,len(mltbc_model_path)      ,mpichar,0,mpicom)
+   call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_regional_on       , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_predict_option    , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_patch_biln        , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_interp_test       , 1, mpilog, 0, mpicom)
 #endif
 
    if ( Nudge_ON .and. (Nudge_File_Ntime .ne. Nudge_Times_Per_Day) .and. (Nudge_File_Ntime .ne. 1) ) then
@@ -1271,7 +1278,7 @@ contains
    call addfld('FLWDS_ref',  horiz_only, 'A','W/m2'    ,'Reference downward longwave radiation')
 
    !-----------------------------------------------------
-   ! Register output fields for DeepONet Nudging 
+   ! Register output fields for Machine Learning Nudging 
    !-----------------------------------------------------
    call addfld('DON_RGD_UERR',  (/ 'lev' /), 'A', 'm/s'   , 'DeeONet Interpolation Error for U' )
    call addfld('DON_RGD_VERR',  (/ 'lev' /), 'A', 'm/s'   , 'DeeONet Interpolation Error for V' )
@@ -1360,7 +1367,7 @@ contains
      elseif(.not.Before_End) then
        ! Nudging will never occur, so switch it off
        !--------------------------------------------
-       DeepONet_Nudge = .false.
+       mltbc_nudge = .false.
        Nudge_Model    = .false.
        Nudge_ON       = .false.
        Nudge_Land     = .false.
@@ -1422,12 +1429,6 @@ contains
      write(iulog,*) '---------------------------------------------------------'
      write(iulog,*) '  MODEL NUDGING INITIALIZED WITH THE FOLLOWING SETTINGS: '
      write(iulog,*) '---------------------------------------------------------'
-     write(iulog,*) 'NUDGING: DeepONet_Nudge=',DeepONet_Nudge
-     write(iulog,*) 'NUDGING: DeepONet_Conv2d=',DeepONet_Conv2d 
-     write(iulog,*) 'NUDGING: DeepONet_Conv2d_OPT=', DeepONet_Conv2d_OPT 
-     write(iulog,*) 'NUDGING: DeepONet_Interp_Test=',DeepONet_Interp_Test
-     write(iulog,*) 'NUDGING: DeepONet_Conv2d_BILN=', DeepONet_Conv2d_BILN
-     write(iulog,*) 'NUDGING: DeepONet_Path=', DeepONet_Path
      write(iulog,*) 'NUDGING: Nudge_Model=',Nudge_Model
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
@@ -1501,6 +1502,12 @@ contains
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_UV     =',Nudge_NO_PBL_UV
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_T      =',Nudge_NO_PBL_T
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
+     write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
+     write(iulog,*) 'NUDGING: mltbc_regional_on   =',mltbc_regional_on
+     write(iulog,*) 'NUDGING: mltbc_predict_option=',mltbc_predict_option
+     write(iulog,*) 'NUDGING: mltbc_interp_test   =',mltbc_interp_test
+     write(iulog,*) 'NUDGING: mltbc_patch_biln    =',mltbc_patch_biln
+     write(iulog,*) 'NUDGING: mltbc_model_path    =',mltbc_model_path
      write(iulog,*) ' '
      write(iulog,*) ' '
 
@@ -1519,11 +1526,6 @@ contains
    call mpibcast(Nudge_Next_Month    , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Next_Day      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Next_Sec      , 1, mpiint, 0, mpicom)
-   call mpibcast(DeepONet_Nudge      , 1, mpilog, 0, mpicom)
-   call mpibcast(DeepONet_Conv2d     , 1, mpilog, 0, mpicom)
-   call mpibcast(DeepONet_Conv2d_OPT , 1, mpiint, 0, mpicom)
-   call mpibcast(DeepONet_Conv2d_BILN, 1, mpilog, 0, mpicom) 
-   call mpibcast(DeepONet_Interp_Test, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Model         , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
@@ -1556,6 +1558,11 @@ contains
    call mpibcast(Nudge_NO_PBL_UV     , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q      , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_regional_on   , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_predict_option, 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_patch_biln    , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_interp_test   , 1, mpilog, 0, mpicom)
 !DIAG
    call mpibcast(Nudge_slat       , 1, mpiint, 0, mpicom)
 !DIAG
@@ -1586,14 +1593,12 @@ contains
 
      end do
 
-     if (DeepONet_Nudge) then
-
+     if (mltbc_nudge) then
        Nudge_Utau(:ncol,:pver,lchnk) = Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef
        Nudge_Vtau(:ncol,:pver,lchnk) = Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef
        Nudge_Ttau(:ncol,:pver,lchnk) = Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef
        Nudge_Qtau(:ncol,:pver,lchnk) = Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef
        Nudge_PStau(:ncol,lchnk)      = Nudge_PStau(:ncol,lchnk)      * Nudge_PScoef
-
      else 
 
        if  (Nudge_Tau .le. 0._r8) then
@@ -1631,7 +1636,6 @@ contains
          Nudge_PStau(:ncol,lchnk) * Nudge_PScoef / Nudge_Tau / sec_per_hour 
 
        end if
-
      end if 
 
      if (Nudge_PSprof .ne. 0) then
@@ -1760,13 +1764,13 @@ contains
               call alloc_err(istat,'nudging_init','INTP_FSDSUV',2*pcols*((endchunk-begchunk)+1))
             end if
 
-      case ('DeepONet')
+      case ('MLTBC')
            ! use Xanal directly, no interpolation is needed
            !-----------------------------------------------
            allocate(Model_rlat(Nudge_ncol),stat=istat)
-           call alloc_err(istat,'DeepONet NUDGING','Model_rlat',Nudge_ncol)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_rlat',Nudge_ncol)
            allocate(Model_rlon(Nudge_ncol),stat=istat)
-           call alloc_err(istat,'DeepONet NUDGING','Model_rlon',Nudge_ncol)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_rlon',Nudge_ncol)
            allocate(Model_Var(Nudge_ncol,Nudge_nlev),stat=istat)
            call alloc_err(istat,'nudging_init','Model_Var',Nudge_ncol*Nudge_nlev)
 
@@ -1778,115 +1782,103 @@ contains
            call mpibcast(Model_rlon, Nudge_ncol, mpir8,   0, mpicom)
           !call mpibcast(Model_wgth, Nudge_ncol, mpir8,   0, mpicom)
 #endif
-           ! Initialize DeepONet lat/lon info in local arrays
-           !------------------------------------------------------
-           if (DeepONet_Conv2d) then
-             !if (masterproc) then
-             !  write(iulog,*) 'DeepONet NUDGING: 2D convolution ML model'
-             !end if 
+          ! Initialize Machine Learning lat/lon info in local arrays
+          !------------------------------------------------------
+           if (mltbc_regional_on) then
              !info to construct lat-lon for limited region
-             DeepONet_Conv2d_DX   = 1.0_r8
-             DeepONet_Conv2d_DY   = 1.0_r8
-             DeepONet_Conv2d_NLon = int(Nudge_Hwin_lonWidth)
-             DeepONet_Conv2d_NLat = int(Nudge_Hwin_latWidth)
-             DeepONet_Conv2d_NXY  = DeepONet_Conv2d_NLon * DeepONet_Conv2d_NLat
-             val1_0 = Nudge_Hwin_lon0 - DeepONet_Conv2d_NLon * DeepONet_Conv2d_DX / 2.0_r8 + 0.5_r8
-             val2_0 = Nudge_Hwin_lon0 + DeepONet_Conv2d_NLon * DeepONet_Conv2d_DX / 2.0_r8 - 0.5_r8
-             val3_0 = Nudge_Hwin_lat0 - DeepONet_Conv2d_NLat * DeepONet_Conv2d_DY / 2.0_r8 + 0.5_r8
-             val4_0 = Nudge_Hwin_lat0 + DeepONet_Conv2d_NLat * DeepONet_Conv2d_DY / 2.0_r8 - 0.5_r8
+             mltbc_patch_dx   = 1.0_r8
+             mltbc_patch_dy   = 1.0_r8
+             mltbc_patch_nlon = int(Nudge_Hwin_lonWidth)
+             mltbc_patch_nlat = int(Nudge_Hwin_latWidth)
+             mltbc_patch_nxy  = mltbc_patch_nlon * mltbc_patch_nlat
+             val1_0 = Nudge_Hwin_lon0 - mltbc_patch_nlon * mltbc_patch_dx / 2.0_r8 + 0.5_r8
+             val2_0 = Nudge_Hwin_lon0 + mltbc_patch_nlon * mltbc_patch_dx / 2.0_r8 - 0.5_r8
+             val3_0 = Nudge_Hwin_lat0 - mltbc_patch_nlat * mltbc_patch_dy / 2.0_r8 + 0.5_r8
+             val4_0 = Nudge_Hwin_lat0 + mltbc_patch_nlat * mltbc_patch_dy / 2.0_r8 - 0.5_r8
 
-             !if (masterproc) then  !Debuge output 
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NLon=', DeepONet_Conv2d_NLon
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_NLat=', DeepONet_Conv2d_NLat
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DX=', DeepONet_Conv2d_DX
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_DY=', DeepONet_Conv2d_DY
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlat=', val1_0
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlat=', val2_0
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_minlon=', val3_0
-             !  write(iulog,*) 'DeepONet NUDGING: DeepONet_Conv2d_maxlon=', val4_0
-             !endif
-
-             if (DeepONet_Conv2d_OPT == 2 ) then 
-               if( DeepONet_Conv2d_NXY .ne. 9216 ) then
-                  write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
-                   write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
-                  call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
-               endif
-             else
-               if( DeepONet_Conv2d_NXY .ne. 4900 ) then
-                  write(iulog,*) 'DeepONet NUDGING: Current Conv2 model only works on a 70(lat)x70(lon) lat-lon grid'
-                   write(iulog,*) 'DeepONet NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth setup'
-                  call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
-               endif
+             if ( (mltbc_predict_option == 2) .and. (mltbc_patch_nxy /= 9216) ) then 
+               write(iulog,*) 'Machine Learning NUDGING: Convolution model 2 only works on 96x96 lat-lon grid'
+               write(iulog,*) 'Machine Learning NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth'
+               call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
+             end if 
+             if( (mltbc_predict_option /= 2) .and. mltbc_patch_nxy /= 4900 ) then
+               write(iulog,*) 'Machine Learning NUDGING: Convolution model 1 only works on 70x70 lat-lon grid'
+               write(iulog,*) 'Machine Learning NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth'
+               call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
              end if 
 
              if((val1_0.lt.0.).or.(val2_0.ge.360.)) then
-               write(iulog,*) 'DeepONet NUDGING: Conv2D Window lon range not in [0,+360]'
-               write(iulog,*) 'DeepONet NUDGING: Conv2d lons,lone=',val1_0,val2_0 
-               call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
+               write(iulog,*) 'Machine Learning NUDGING: Conv2d Window lon range not in [0,+360]'
+               write(iulog,*) 'Machine Learning NUDGING: Conv2d lons,lone=',val1_0,val2_0 
+               call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
              endif
              if((val3_0.lt.-90.).or.(val4_0.gt.+90.)) then
-               write(iulog,*) 'DeepONet NUDGING: Conv2D Window lat range not in [-90,+90]'
-               write(iulog,*) 'DeepONet NUDGING: Conv2d lats,late=',val3_0,val4_0
-               call endrun('DeepONet NUDGING:: ERROR in namelist for Conv2d setup')
+               write(iulog,*) 'Machine Learning NUDGING: Conv2d Window lat range not in [-90,+90]'
+               write(iulog,*) 'Machine Learning NUDGING: Conv2d lats,late=',val3_0,val4_0
+               call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
              endif
 
-             allocate(DeepONet_Conv2d_lat(DeepONet_Conv2d_NLat),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_lat',DeepONet_Conv2d_NLat)
-             allocate(DeepONet_Conv2d_lon(DeepONet_Conv2d_NLon),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_Conv2d_lon',DeepONet_Conv2d_NLon)
-             allocate(DeepONet_se2latlon_ind(DeepONet_Conv2d_NXY,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_se2latlon_ind',5*DeepONet_Conv2d_NXY)
-             allocate(DeepONet_se2latlon_wgt(DeepONet_Conv2d_NXY,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_se2latlon_wgt',5*DeepONet_Conv2d_NXY)
-             allocate(DeepONet_latlon2se_ind(Nudge_ncol,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_latlon2se_ind',5*Nudge_ncol)
-             allocate(DeepONet_latlon2se_wgt(Nudge_ncol,5),stat=istat)
-             call alloc_err(istat,'DeepONet NUDGING','DeepONet_latlon2se_wgt',5*Nudge_ncol)
+             allocate(mltbc_patch_lat(mltbc_patch_nlat),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_patch_lat',mltbc_patch_nlat)
+             allocate(mltbc_patch_lon(mltbc_patch_nlon),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_patch_lon',mltbc_patch_nlon)
+             allocate(mltbc_se2latlon_ind(mltbc_patch_nxy,5),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_se2latlon_ind',5*mltbc_patch_nxy)
+             allocate(mltbc_se2latlon_wgt(mltbc_patch_nxy,5),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_se2latlon_wgt',5*mltbc_patch_nxy)
+             allocate(mltbc_latlon2se_ind(Nudge_ncol,5),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_latlon2se_ind',5*Nudge_ncol)
+             allocate(mltbc_latlon2se_wgt(Nudge_ncol,5),stat=istat)
+             call alloc_err(istat,'Machine Learning NUDGING','mltbc_latlon2se_wgt',5*Nudge_ncol)
 
              if (masterproc) then
-               do i = 1, DeepONet_Conv2d_NLon
-                 DeepONet_Conv2d_lon(i) = (val1_0+(i-1)*DeepONet_Conv2d_DX)*SHR_CONST_PI/180._r8
+               do i = 1, mltbc_patch_nlon
+                 mltbc_patch_lon(i) = (val1_0+(i-1)*mltbc_patch_dx)*SHR_CONST_PI/180._r8
                end do
-               do j = 1, DeepONet_Conv2d_NLat
-                 DeepONet_Conv2d_lat(j) = (val3_0+(j-1)*DeepONet_Conv2d_DY)*SHR_CONST_PI/180._r8
+               do j = 1, mltbc_patch_nlat
+                 mltbc_patch_lat(j) = (val3_0+(j-1)*mltbc_patch_dy)*SHR_CONST_PI/180._r8
                end do
 
-               call t_startf('deeponet_interp_init')
+               call t_startf('mltbc_don_interp_init')
                !initialize the weigthing fuction to interpolate model grid to lat-lon 
                call se2latlon_interp_init(Nudge_ncol, Model_rlon, Model_rlat, & 
-                                          DeepONet_Conv2d_NLon, DeepONet_Conv2d_NLat, & 
-                                          DeepONet_Conv2d_lon, DeepONet_Conv2d_lat,  &
-                                          DeepONet_se2latlon_ind, DeepONet_se2latlon_wgt)  
+                                          mltbc_patch_nlon, mltbc_patch_nlat, & 
+                                          mltbc_patch_lon, mltbc_patch_lat,  &
+                                          mltbc_se2latlon_ind, mltbc_se2latlon_wgt)  
 
                !initialize the weigthing fuction to interpolate lat-lon to model grid 
                call latlon2se_interp_init(Nudge_ncol, Model_rlon, Model_rlat, &
-                                          DeepONet_Conv2d_NLon, DeepONet_Conv2d_NLat, &
-                                          DeepONet_Conv2d_lon, DeepONet_Conv2d_lat,  &
-                                          DeepONet_latlon2se_ind, DeepONet_latlon2se_wgt) 
+                                          mltbc_patch_nlon, mltbc_patch_nlat, &
+                                          mltbc_patch_lon, mltbc_patch_lat,  &
+                                          mltbc_latlon2se_ind, mltbc_latlon2se_wgt) 
 
-               call t_stopf('deeponet_interp_init')
+               call t_stopf('mltbc_don_interp_init')
 
              end if 
 
 #ifdef SPMD
-             call mpibcast(DeepONet_Conv2d_NLon,   1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_NLat,   1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_NXY,    1,                     mpiint,  0, mpicom)
-             call mpibcast(DeepONet_Conv2d_lon,    DeepONet_Conv2d_NLon,  mpir8,   0, mpicom)
-             call mpibcast(DeepONet_Conv2d_lat,    DeepONet_Conv2d_NLat,  mpir8,   0, mpicom)
-             call mpibcast(DeepONet_se2latlon_ind, 5*DeepONet_Conv2d_NXY, mpiint,  0, mpicom)
-             call mpibcast(DeepONet_se2latlon_wgt, 5*DeepONet_Conv2d_NXY, mpir8,   0, mpicom)
-             call mpibcast(DeepONet_latlon2se_ind, 5*Nudge_ncol,          mpiint,  0, mpicom)
-             call mpibcast(DeepONet_latlon2se_wgt, 5*Nudge_ncol,          mpir8,   0, mpicom)
+             call mpibcast(mltbc_patch_nlon,   1,                     mpiint,  0, mpicom)
+             call mpibcast(mltbc_patch_nlat,   1,                     mpiint,  0, mpicom)
+             call mpibcast(mltbc_patch_nxy,    1,                     mpiint,  0, mpicom)
+             call mpibcast(mltbc_patch_lon,    mltbc_patch_nlon,  mpir8,   0, mpicom)
+             call mpibcast(mltbc_patch_lat,    mltbc_patch_nlat,  mpir8,   0, mpicom)
+             call mpibcast(mltbc_se2latlon_ind, 5*mltbc_patch_nxy, mpiint,  0, mpicom)
+             call mpibcast(mltbc_se2latlon_wgt, 5*mltbc_patch_nxy, mpir8,   0, mpicom)
+             call mpibcast(mltbc_latlon2se_ind, 5*Nudge_ncol,          mpiint,  0, mpicom)
+             call mpibcast(mltbc_latlon2se_wgt, 5*Nudge_ncol,          mpir8,   0, mpicom)
 #endif
-           else 
-             write(iulog,*) 'DeepONet NUDGING: 1D convolution ML model: global area' 
-             call endrun('DeepONet NUDGING: 1D convolution ML model is not available') 
            end if       
+
+           if (masterproc) then
+             if (mltbc_regional_on) then
+               write(iulog,*) 'Machine Learning NUDGING: regional ML model'
+             else 
+               write(iulog,*) 'Machine Learning NUDGING: global   ML model'
+             end if   
+           end if 
       case default
            call endrun('nudging_init error: nudge method should &
-                       &be either Step, Linear , IMT or DeepONet...')
+                       &be either Step, Linear , IMT or MLTBC...')
    end select        
 
    ! End Routine
@@ -1926,7 +1918,7 @@ contains
    integer lchnk,ncol,indw, k 
    character(len=2000) err_str
 
-   if (DeepONet_Nudge) return
+   if (mltbc_nudge) return
 
    ! Check if Nudging is initialized
    !---------------------------------
@@ -2238,7 +2230,7 @@ contains
   !================================================================
 
   !================================================================
-  subroutine deeponet_timestep_init(state,dtime)
+  subroutine mltbc_timestep_init(state,dtime)
    !
    ! DEEPONET_TIMESTEP_INIT:
    !                 Check the current time and update Model/Nudging
@@ -2286,7 +2278,7 @@ contains
    ! Check if Nudging is initialized
    !---------------------------------
    if(.not.Nudge_Initialized) then
-     call endrun('deeponet_timestep_init:: Nudging NOT Initialized')
+     call endrun('mltbc_timestep_init:: Nudging NOT Initialized')
    endif
 
    ! Get Current time
@@ -2389,11 +2381,11 @@ contains
      if(Nudge_Land) then
        Nudge_SRF_On=.true.
      end if
-     DeepONet_Nudge=.true.
+     mltbc_nudge=.true.
    else
      Nudge_ON=.false.
      Nudge_SRF_On=.false.
-     DeepONet_Nudge=.false.
+     mltbc_nudge=.false.
    end if
 
    Nudge_Ustep(:,:,:) = 0._r8
@@ -2411,40 +2403,40 @@ contains
          ncol = state(lchnk)%ncol
          arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
        end do 
-       call deeponet_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call deeponet_advance(DeepONet_Path,'U',pver,Nudge_ncol,Model_Var,Nudge_Ustep) 
+       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+       call mltbc_advance(mltbc_model_path,'U',pver,Nudge_ncol,Model_Var,Nudge_Ustep) 
      end if
      if (Nudge_Vprof .ne. 0) then
        do lchnk=begchunk,endchunk
          ncol = state(lchnk)%ncol
          arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
        end do
-       call deeponet_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call deeponet_advance(DeepONet_Path,'V',pver,Nudge_ncol,Model_Var,Nudge_Vstep) 
+       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+       call mltbc_advance(mltbc_model_path,'V',pver,Nudge_ncol,Model_Var,Nudge_Vstep) 
      end if
      if (Nudge_Tprof .ne. 0) then
        do lchnk=begchunk,endchunk
          ncol = state(lchnk)%ncol
          arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
        end do
-       call deeponet_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call deeponet_advance(DeepONet_Path,'T',pver,Nudge_ncol,Model_Var,Nudge_Tstep) 
+       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+       call mltbc_advance(mltbc_model_path,'T',pver,Nudge_ncol,Model_Var,Nudge_Tstep) 
      end if
      if (Nudge_Qprof .ne. 0) then
        do lchnk=begchunk,endchunk
          ncol = state(lchnk)%ncol
          arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
        end do
-       call deeponet_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call deeponet_advance(DeepONet_Path,'Q',Nudge_nlev,Nudge_ncol,Model_Var,Nudge_Qstep) 
+       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+       call mltbc_advance(mltbc_model_path,'Q',Nudge_nlev,Nudge_ncol,Model_Var,Nudge_Qstep) 
      end if
      if (Nudge_PSprof .ne. 0) then
        do lchnk=begchunk,endchunk
          ncol = state(lchnk)%ncol
          arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
        end do
-       call deeponet_gather_data(arr,1,Nudge_ncol,Model_Var(:,1))
-       call deeponet_advance(DeepONet_Path,'PS',1,Nudge_ncol,Model_Var(:,1),tmp_tend)
+       call mltbc_gather_data(arr,1,Nudge_ncol,Model_Var(:,1))
+       call mltbc_advance(mltbc_model_path,'PS',1,Nudge_ncol,Model_Var(:,1),tmp_tend)
        Nudge_PSstep(:,:) = tmp_tend(:,1,:)
      end if
    end if 
@@ -2532,7 +2524,7 @@ contains
    ! End Routine
    !------------
    return
-  end subroutine ! deeponet_timestep_init
+  end subroutine ! mltbc_timestep_init
 
   !===========================================================================
   ! JS - 11/05/2019: Based on Shixuan Zhang's suggestion, the calculation of 
@@ -2576,7 +2568,7 @@ contains
 
    real(r8), pointer :: PBLH(:)                ! Planetary boundary layer height
 
-   if (DeepONet_Nudge) return
+   if (mltbc_nudge) return
 
    lchnk = state%lchnk
    ncol  = state%ncol
@@ -3338,9 +3330,9 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
 #endif
-   if (trim(Nudge_Method).eq. "DeepONet") then
+   if (trim(Nudge_Method).eq. "MLTBC") then
      if(masterproc) then
-        write(iulog,*) 'Warning: using DeepONet Machine Learning model to predict nudging tendency'
+        write(iulog,*) 'Warning: using Machine Learning model to predict nudging tendency'
         write(iulog,*) 'Warning: No need to read reference data, return'
      end if
      return
@@ -3690,9 +3682,9 @@ contains
 
            end if     ! single vs. multiple time slices per file
 
-      case ('DeepONet')
-          write(iulog,*) 'ERROR: when DeepONet method is called, code should not attempt to read reference data'
-          call endrun('nudging_update_analyses_se: error in DeepONet nudging')
+      case ('MLTBC')
+          write(iulog,*) 'ERROR: when machine learning method is called, code should not attempt to read reference data'
+          call endrun('nudging_update_analyses_se: error in machine learning nudging')
       case default
           write(iulog,*) 'ERROR: Unknown Input Nudge Method'
           call endrun('nudging_update_analyses_se: bad input nudge method')
@@ -4481,9 +4473,9 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
 #endif
-   if (trim(Nudge_Method).eq. "DeepONet") then
+   if (trim(Nudge_Method).eq. "MLTBC") then
      if(masterproc) then 
-        write(iulog,*) 'Warning: using DeepONet Machine Learning model to predict nudging tendency'  
+        write(iulog,*) 'Warning: using Machine Learning model to predict nudging tendency'  
         write(iulog,*) 'Warning: No need to read reference data, return'
      end if 
      return       
@@ -5809,10 +5801,10 @@ contains
   return
   end subroutine !update_nudging_tend
 
-  subroutine deeponet_advance(file_path,varname,nlev,ngcol,model_state,nudging_tend) 
+  subroutine mltbc_advance(file_path,varname,nlev,ngcol,model_state,nudging_tend) 
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to read and calculate the nudging
-  !                  tendency using the DeepONet Machine Learning (ML) model,
+  !                  tendency using the Machine Learning (ML) model,
   !                  the subroutine works on a specific model state variable
   ! SZ - 06/21/2023: Merge the DeepOnet model developed by Brown University 
   !===========================================================================
@@ -5823,7 +5815,7 @@ contains
 
    implicit none
    logical, parameter           :: l_print_diag = .false.
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   character(len=*), intent(in) :: file_path !Path to Machine Learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
    integer,intent(in)           :: nlev,ngcol 
    real(r8),intent(in)          :: model_state(ngcol,nlev)
@@ -5835,36 +5827,55 @@ contains
    type(torch_tensor_wrap)      :: input_tensors
    type(torch_tensor)           :: out_tensor
 
-   ! Local values
+   ! Local variables 
    !----------------
    integer  :: ncols,lchnk
    integer  :: i,j,n,m,k,ii,jj,ierr
-   real(r8) :: sum_x,vmin,vmax
+   real(r8) :: vmin,vmax
+   real(r8) :: sum_x(nlev)
    real(r8) :: wrk_tend(ngcol,nlev)
-   real(r8) :: enc_out(DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev)
-   real(r8) :: don_out(DeepONet_Conv2d_NX1*DeepONet_Conv2d_NY1,nlev)
-   real(r8) :: don_stat(DeepONet_Conv2d_NXY,nlev)
-   real(r8) :: wrk_state(DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,nlev)
-   real(r8) :: wrk_out(DeepONet_Conv2d_NXY,nlev)
+
+   !DeepONet convolution 2d model (regional)
+   integer,  parameter :: don_conv2d_nx = 6      ! ML model trunk in X 6
+   integer,  parameter :: don_conv2d_ny = 6      ! ML model trunk in Y 6
+   real(r8), parameter :: don_tend_dtime = 3.0_r8 ! unit: hour
+
+   !DeepONet global model 
+   integer,  parameter :: don_glb_nt = 1      ! Dummy time array size
+   integer,  parameter :: don_glb_ncol = 2700   ! ML model trunk in X 6
+   integer,  parameter :: don_glb_nlev = 64     ! ML model trunk in Y 6
+
+   !Temporary work array 
+   real(r8), allocatable :: wrk_state(:,:,:)
+   real(r8), allocatable :: enc_out(:,:,:)
+   real(r8), allocatable :: don_out(:,:,:)
+   real(r8), allocatable :: dcd_out(:,:,:)
+   real(r8), allocatable :: wrk_out(:,:)
+   real(r8), allocatable :: don_stat(:,:)
 
    !initialize tendency array 
    wrk_tend(:,:) = 0.0_r8
 
+   !Currently the machine learning model was only trained for U, V only 
+   !Return if other variables are passed to this subroutine
+   if ((trim(varname) /= 'U') .and. (trim(varname) /= 'V')) then
+     write(iulog,*) "Machine Learning Nudging Warning: working variable ", trim(varname)
+     write(iulog,*) "Machine Learning Nudging Warning: Convolution 2D model  & 
+                     only designed for U, V nudging, return"
+     return
+   end if
+
    !start to call deepONet model 
-   call t_startf('deeponet_prediction')
-   if (DeepONet_Conv2d) then
-     !DeepONet_Conv2d only trained for U, V nudging 
-     if ((trim(varname) /= 'U') .and. (trim(varname) /= 'V')) then
-       write(iulog,*) "DeepONet Nudging Warning: working variable ", trim(varname)
-       write(iulog,*) "DeepONet Nudging Warning: Convolution 2D model  & 
-                       only designed for U, V nudging, return"
-       return
-     end if
+   call t_startf('mltbc_don_prediction')
+
+   if (mltbc_regional_on) then
+
+     allocate (wrk_out(mltbc_patch_nlon*mltbc_patch_nlat,nlev))
+     allocate (wrk_state(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
 
      !collect data for deepONet
-     call deeponet_gather_patch(varname,nlev,ngcol,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat, & 
+     call mltbc_gather_patch(varname,nlev,ngcol,mltbc_patch_nlon,mltbc_patch_nlat, & 
                                 model_state,wrk_state) !inout  
-
      if (masterproc .and. l_print_diag ) then
        write(iulog,*) 'shape of model_state = ', shape(model_state)
        write(iulog,*) 'model_state(min/max) = ', minval(model_state),maxval(model_state)
@@ -5873,53 +5884,71 @@ contains
      end if
 
      !There are two options for convolution 2D model
-     select case (DeepONet_Conv2d_OPT)
+     select case (mltbc_predict_option)
        case (0)      
          !option 0: encoder-->deepONet-->decoder approach to 
          !          predict nudging tendency from before nuding state
+         allocate (enc_out(don_conv2d_nx,don_conv2d_ny,nlev))
+         allocate (don_out(don_conv2d_nx,don_conv2d_ny,nlev))
+         allocate (dcd_out(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
 
          !call encoder 
-         call deeponet_encoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  & 
-                               DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,wrk_state,enc_out)
+         call mltbc_don_encoder(mltbc_regional_on,file_path,varname, & 
+                                mltbc_patch_nlon,mltbc_patch_nlat,nlev, & 
+                                don_conv2d_nx,don_conv2d_ny,nlev, & 
+                                wrk_state,enc_out)
  
          !call deeponet               
-         call deeponet_tendadv(file_path,varname,DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1, & 
-                               nlev,DeepONet_Conv2d_NT,enc_out,don_out)
+         call mltbc_don_tendadv(mltbc_regional_on,file_path,varname, &
+                                don_conv2d_nx,don_conv2d_ny,nlev, & 
+                                enc_out,don_out)
 
          !call decoder                
-         call deeponet_decoder(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat,  &
-                               DeepONet_Conv2d_NX1,DeepONet_Conv2d_NY1,nlev,don_out,wrk_out)
+         call mltbc_don_decoder(mltbc_regional_on,file_path,varname, & 
+                                mltbc_patch_nlon,mltbc_patch_nlat,nlev, &
+                                don_conv2d_nx,don_conv2d_ny,nlev, &
+                                don_out,dcd_out)
 
-       case (1) 
-         !option 1: deepONet (before nudging state --> after nudging state) 
-         !          nudging tedency = (After - Before) / 3*3600 (3hour)
-         call deeponet_statadv(file_path,varname,DeepONet_Conv2d_Nlon,DeepONet_Conv2d_Nlat, &
-                               nlev,wrk_state,don_stat)
-         !compute nudging tendency 
-         do k = 1, nlev
-           do j = 1, DeepONet_Conv2d_NLat
-             do i = 1, DeepONet_Conv2d_NLon
-               m = (j-1)*DeepONet_Conv2d_NLon + i 
-               !calculate nudging tendency 
-               wrk_out(m,k) = (don_stat(m,k) - wrk_state(i,j,k)) / DeepONet_dtime / sec_per_hour
-             end do
+         !prepare for final regrid 
+         do j = 1, mltbc_patch_nlat
+           do i = 1, mltbc_patch_nlon
+             m = (j-1)*mltbc_patch_nlon + i
+             wrk_out(m,:) = dcd_out(i,j,:) 
            end do
          end do
+         deallocate(enc_out)
+         deallocate(don_out)
+         deallocate(dcd_out)
+
+       case (1) 
+         allocate (don_stat(mltbc_patch_nlon*mltbc_patch_nlat,nlev))
+         !option 1: deepONet (before nudging state --> after nudging state) 
+         !          nudging tedency = (After - Before) / 3*3600 (3hour)
+         call mltbc_don_statadv(file_path,varname,mltbc_patch_nlon,mltbc_patch_nlat, &
+                                nlev,wrk_state,don_stat)
+         !compute nudging tendency 
+         do j = 1, mltbc_patch_nlat
+           do i = 1, mltbc_patch_nlon
+             m = (j-1)*mltbc_patch_nlon + i 
+             !calculate nudging tendency 
+             wrk_out(m,:) = (don_stat(m,:) - wrk_state(i,j,:)) / don_tend_dtime / sec_per_hour
+           end do
+         end do
+         deallocate(don_stat)
 
        case (2) 
          !option 2: ML(state)-->ML(tendency)
          !          predict nudging tendency from before nuding state
          !call machine learning model 
-         call vito_tendadv(file_path,varname,DeepONet_Conv2d_NLon,DeepONet_Conv2d_NLat, &
-                           nlev,wrk_state,wrk_out)
-                        
-       case default           
-         call endrun('DeepONet Nudging Error: invalid option for DeepONet_Conv2d_OPT')
-      end select
+         call mltbc_reg_tendadv(file_path,varname,mltbc_patch_nlon,mltbc_patch_nlat, &
+                                nlev,wrk_state,wrk_out)
+       case default
+         call endrun('Machine Learning Nudging Error: invalid option for regional model option')
+     end select
 
      !Debug Diagnostics 
      if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'deeponet_advance: run deepONet successfully'
+       write(iulog,*) 'mltbc_advance: run deepONet successfully'
        write(iulog,*) 'predict variable = ',varname
        write(iulog,*) 'shape of wrk_in  = ',shape(wrk_state)
        write(iulog,*) 'wrk_in(min/max)  = ',minval(wrk_state),maxval(wrk_state)
@@ -5927,58 +5956,179 @@ contains
        write(iulog,*) 'wrk_out(min/max) = ',minval(wrk_out),maxval(wrk_out)
      end if
 
-     !Conv2d needs a second regridding to convert data back to model grid
-     if (.not. DeepONet_Conv2d_BILN ) then
+     !convert data back to model grid
+     if ( .not. mltbc_patch_biln ) then
        !method 1: nearest to destination grid 
-       do k = 1, nlev
-         do j = 1, DeepONet_Conv2d_NLat
-           do i = 1, DeepONet_Conv2d_NLon
-             m = (j-1)*DeepONet_Conv2d_NLon + i
-             n = DeepONet_se2latlon_ind(m,5)
-             wrk_tend(n,k) = wrk_out(m,k) 
-           end do 
-         end do
+       do j = 1, mltbc_patch_nlat
+         do i = 1, mltbc_patch_nlon
+           m = (j-1)*mltbc_patch_nlon + i
+           n = mltbc_se2latlon_ind(m,5)
+           wrk_tend(n,:) = wrk_out(m,:) 
+         end do 
        end do
      else 
        !method 2: linear interpolation to destination grid 
-       do k = 1, nlev
-         do n = 1, Nudge_ncol
-           j = 0 
-           sum_x = 0.0_r8
-           do i = 1, 4 
-             if (DeepONet_latlon2se_wgt(n,i) == 0.0_r8) j = j + 1
-             m = DeepONet_latlon2se_ind(n,i) 
-             sum_x = sum_x + DeepONet_latlon2se_wgt(n,i) * wrk_out(m,k) 
-           end do
-           if (j /= 4) then
-             wrk_tend(n,k) = sum_x
-           end if 
-         end do  
+       do n = 1, Nudge_ncol
+         j = 0 
+         sum_x(:) = 0.0_r8
+         do i = 1, 4 
+           if (mltbc_latlon2se_wgt(n,i) == 0.0_r8) j = j + 1
+           m = mltbc_latlon2se_ind(n,i) 
+           sum_x(:) = sum_x(:) + mltbc_latlon2se_wgt(n,i) * wrk_out(m,:) 
+         end do
+         if (j /= 4) then
+           wrk_tend(n,:) = sum_x(:)
+         end if 
        end do   
-     end if 
-   else ! convolution 1D model 
-     wrk_tend(:,:) = 0.0_r8
-     call endrun('DeepONet Nudging Error: convolution 1D model not implemented yet!')
+     end if
+
+     !release array space   
+     deallocate(wrk_out)
+     deallocate(wrk_state)
+
+   else ! global model 
+
+     !There are two options for gobal model 
+     select case (mltbc_predict_option)
+       !option : ML(state)-->ML(tendency)
+       !         predict nudging tendency from before nuding state
+       !call machine learning model 
+       case (0)
+         !option 0 w/ ViTO,Unet,M&M: ML(X)-> X_tend approach
+         call mltbc_glb_tendadv(file_path,varname,ngcol,nlev,model_state,wrk_tend)
+       case (1)
+         !option 1 w/ DeepONet: encoder(X)-->Y-->deepONet(Y)-->Z-->decoder(Z)--> approach 
+         allocate (enc_out(don_glb_ncol,don_glb_nlev,don_glb_nt))
+         allocate (don_out(don_glb_ncol,don_glb_nlev,don_glb_nt))
+         allocate (dcd_out(ngcol,nlev,don_glb_nt))
+         allocate (wrk_state(ngcol,nlev,don_glb_nt))
+         wrk_state(1:ngcol,1:nlev,1) = model_state(1:ngcol,1:nlev)
+
+         !call encoder 
+         call mltbc_don_encoder(mltbc_regional_on,file_path,varname, & 
+                                ngcol,nlev,don_glb_nt, &
+                                don_glb_ncol,don_glb_nlev,don_glb_nt, & 
+                                wrk_state,enc_out)
+         !call deeponet               
+         call mltbc_don_tendadv(mltbc_regional_on,file_path,varname, & 
+                                don_glb_ncol,don_glb_nlev,don_glb_nt, & 
+                                enc_out,don_out)
+         !call decoder                
+         call mltbc_don_decoder(mltbc_regional_on,file_path,varname, & 
+                                ngcol,nlev,don_glb_nt, &
+                                don_glb_ncol,don_glb_nlev,don_glb_nt, &
+                                don_out,dcd_out)
+
+         wrk_tend(1:ngcol,1:nlev) = dcd_out(1:ngcol,1:nlev,1) 
+         deallocate(wrk_state)
+         deallocate(enc_out)
+         deallocate(don_out)
+         deallocate(dcd_out)
+       case default
+         call endrun('Machine Learning Nudging Error: invalid option for global model option')
+     end select
+
    end if
-   call t_stopf('deeponet_prediction')
+   call t_stopf('mltbc_don_prediction')
 
    !scatter filed to chunk (from wrk_tend to nudging_tend) 
    call scatter_field_to_chunk(1,nlev,1,Nudge_ncol,wrk_tend,nudging_tend)
 
    return
-  end subroutine !deeponet_advance 
+  end subroutine !mltbc_advance 
 
-  subroutine vito_tendadv(file_path,varname,nx,ny,nz,vari,varo)
+  subroutine mltbc_glb_tendadv(file_path,varname,ncol,nz,vari,varo)
   !===========================================================================
-  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
-  !                  the DeepONet Machine Learning (ML) model,
+  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for
+  !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
-   use error_messages,   only : handle_ncerr
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   character(len=*), intent(in) :: file_path !Path to machine learning model files
+   character(len=*), intent(in) :: varname   !nudge variable
+   integer, intent(in)          :: ncol,nz
+   real(r8),intent(in)          :: vari(ncol,nz)
+   real(r8),intent(inout)       :: varo(ncol,nz)
+
+   ! Arguments
+   !-----------
+   type(torch_module)           :: torch_mod
+   type(torch_tensor_wrap)      :: input_tensors
+   type(torch_tensor)           :: out_tensor
+
+   ! Local values
+   !----------------
+   logical, parameter           :: l_print_diag = .false.
+   integer                      :: i,j,n,m,k,ii,jj
+   real(r4)                     :: doninp(ncol,nz,1)
+   real(r4), pointer            :: donout(:,:,:)
+
+   if (masterproc) then
+     !check if machine learning pt file exist 
+     file_predictor = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
+     if ( .not. l_mltbc_predictor) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
+       call endrun('Machine Learning Nudging Error: model file not exist')
+     end if
+   end if
+#ifdef SPMD
+   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
+#endif
+
+   call t_startf ('mltbc_input_reorg')
+   !prepare input data
+   !note: if use do loops, always remember to put lev as the innerest loop 
+   doninp(:,:,1) = real(vari(:,:),kind=r4) ! single precision: float 32, 64 
+   call t_stopf ('mltbc_input_reorg')
+
+   call t_startf ('mltbc_create_array')
+   call input_tensors%create
+   call t_stopf ('mltbc_create_array')
+
+   call t_startf ('mltbc_add_array')
+   call input_tensors%add_array(doninp)
+   call t_stopf ('mltbc_add_array')
+
+   call t_startf ('mltbc_load_mlpt')
+   call torch_mod%load(trim(file_path)//trim(file_predictor))
+   call t_stopf ('mltbc_load_mlpt')
+
+   call t_startf ('mltbc_forward_model')
+   call torch_mod%forward(input_tensors,out_tensor,1)
+   call t_stopf ('mltbc_forward_model')
+
+   call t_startf ('mltbc_output_array')
+   call out_tensor%to_array(donout)
+   call t_stopf ('mltbc_output_array')
+
+   if (masterproc.and.l_print_diag) then
+     write(iulog,*) 'shape of doninp = ',shape(doninp)
+     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
+     write(iulog,*) 'shape of donout = ',shape(donout)
+     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
+   end if
+
+   call t_startf ('mltbc_output_reorg')
+   !return output data
+   varo(:,:) = real(donout(:,:,1),kind=r8)
+   call t_stopf ('mltbc_output_reorg')
+
+   return
+  end subroutine !mltbc_glb_tendadv
+
+  subroutine mltbc_reg_tendadv(file_path,varname,nx,ny,nz,vari,varo)
+  !===========================================================================
+  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
+  !                  the Machine Learning (ML) model,
+  !===========================================================================
+   use cam_abortutils  , only : endrun
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+
+   implicit none
+   character(len=*), intent(in) :: file_path !Path to machine learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
    integer, intent(in)          :: nx,ny,nz
    real(r8),intent(in)          :: vari(nx,ny,nz)
@@ -5998,31 +6148,51 @@ contains
    real(r4), pointer            :: donout(:,:,:,:)
 
    if (masterproc) then
-     !check if DeepONet pt file exist 
-     file_deeponet = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_deeponet),exist=l_ml_deeponet)
-     if ( .not. l_ml_deeponet) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_deeponet)//" not found!"
-       call endrun('DeepONet Nudging Error: model file not exist')
+     !check if machine learning pt file exist 
+     file_predictor = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
+     if ( .not. l_mltbc_predictor) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
+       call endrun('Machine Learning Nudging Error: model file not exist')
      end if
    end if
 #ifdef SPMD
-   call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
+   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
 #endif
 
+   call t_startf ('mltbc_input_reorg')
    !prepare input data 
-   do k = 1,nz
-     do j = 1,ny
-       do i = 1,nx
-         doninp(i,j,k,1) = real(vari(i,j,k),kind=r4)
-       end do
-     end do
-   end do
+   !do k = 1,nz
+   !  do j = 1,ny
+   !    do i = 1,nx
+   !      doninp(i,j,k,1) = real(vari(i,j,k),kind=r4)
+   !    end do
+   !  end do
+   !end do
+   !avoide do loops to obtain computational gain 
+   doninp(:,:,:,1) = real(vari(:,:,:),kind=r4)
+
+   call t_stopf ('mltbc_input_reorg')
+
+   call t_startf ('mltbc_create_array')
    call input_tensors%create
+   call t_stopf ('mltbc_create_array')
+
+   call t_startf ('mltbc_add_array')
    call input_tensors%add_array(doninp)
-   call torch_mod%load(trim(file_path)//trim(file_deeponet))
+   call t_stopf ('mltbc_add_array')
+
+   call t_startf ('mltbc_load_pt')
+   call torch_mod%load(trim(file_path)//trim(file_predictor))
+   call t_stopf ('mltbc_load_pt')
+
+   call t_startf ('mltbc_forward_model')
    call torch_mod%forward(input_tensors,out_tensor,1)
+   call t_stopf ('mltbc_forward_model')
+
+   call t_startf ('mltbc_ouput_array')
    call out_tensor%to_array(donout)
+   call t_stopf ('mltbc_output_array')
 
    if (masterproc.and.l_print_diag) then
      write(iulog,*) 'shape of doninp = ',shape(doninp)
@@ -6031,34 +6201,34 @@ contains
      write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
    end if
 
+   call t_startf ('mltbc_output_reorg')
    !return output data
-   do k = 1, nz
-     do j = 1, ny
-       do i = 1, nx
-         m = (j-1)*nx + i
-         varo(m,k) = real(donout(i,j,k,1),kind=r8) 
-       end do
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)*nx + i
+       varo(m,:) = real(donout(i,j,:,1),kind=r8) 
      end do
    end do
+   call t_stopf ('mltbc_output_reorg')
 
    return
-  end subroutine !vito_tendadv 
+  end subroutine !mltbc_reg_tendadv
 
-  subroutine deeponet_tendadv(file_path,varname,nx,ny,nz,nt,vari,varo)
+  subroutine mltbc_don_tendadv(l_conv2d,file_path,varname,nx,ny,nz,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
-  !                  the DeepONet Machine Learning (ML) model,
+  !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
-   use error_messages,   only : handle_ncerr
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   logical, intent(in)          :: l_conv2d
+   character(len=*), intent(in) :: file_path !Path to machine learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx,ny,nz,nt
+   integer, intent(in)          :: nx,ny,nz
    real(r8),intent(in)          :: vari(nx,ny,nz)
-   real(r8),intent(inout)       :: varo(nx*ny,nz)
+   real(r8),intent(inout)       :: varo(nx,ny,nz)
 
    ! Arguments
    !-----------
@@ -6070,91 +6240,117 @@ contains
    !----------------
    logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
+
+   ! convolution 2d (regional)  
+   integer, parameter           :: dumy_nt = 248 ! Dummy time array size
    real(r8)                     :: donmin, donmax
    real(r4)                     :: vmax,vmin
-   real(r4)                     :: x_trunk(1,nt)    
-   real(r4)                     :: doninp(nx*ny,nt,1,nz)
-   real(r4), pointer            :: donout(:,:,:,:)
+   real(r4)                     :: x_trunk(1,dumy_nt)    
+   real(r4)                     :: donin4d(nx*ny,dumy_nt,1,nz)
+   real(r4), pointer            :: donout4d(:,:,:,:)
+
+   ! global model  
+   real(r4)                     :: donin3d(nx,ny,nz)
+   real(r4), pointer            :: donout3d(:,:,:)
 
    if (masterproc) then
-     !check if DeepONet pt file exist 
-     file_deeponet = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_deeponet),exist=l_ml_deeponet)
-     if ( .not. l_ml_deeponet) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_deeponet)//" not found!"
-       call endrun('DeepONet Nudging Error: model file not exist')
+     !check if machine learning pt file exist 
+     file_predictor = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
+     if ( .not. l_mltbc_predictor) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
+       call endrun('Machine Learning Nudging Error: model file not exist')
      end if
    end if
 #ifdef SPMD
-   call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
+   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
 #endif
 
-   !parameters to denormalize DeepONet prediction
-   if (trim(varname) == 'U') then
-     donmax = 9.087432_r8
-     donmin = -9.915943_r8
-   else  ! "V"
-     donmax = 9.116263_r8
-     donmin = -8.079512_r8
-   end if
+   if ( l_conv2d ) then 
 
-   !convolution 2D model options 
-   !0: before nudging state->nudging tendency 
-   !dummy input time
-   do n = 1,nt
-     x_trunk(1,n) = 2.0_r4*(real(n,kind=r4)-1.0_r4)/(real(nt,kind=r4)-1.0_r4)-1.0_r4
-   end do
+     !parameters to denormalize DeepONet prediction
+     if (trim(varname) == 'U') then
+       donmax = 9.087432_r8
+       donmin = -9.915943_r8
+     else  ! "V"
+       donmax = 9.116263_r8
+       donmin = -8.079512_r8
+     end if
 
-   !prepare input data 
-   !min/max for normalization 
-   vmin = real(minval(vari),kind=r4)
-   vmax = real(maxval(vari),kind=r4)
-   do k = 1,nz
+     !prepare input data with normalization using min/max 
+     vmin = real(minval(vari),kind=r4)
+     vmax = real(maxval(vari),kind=r4)
      do j = 1,ny
        do i = 1,nx
          m = (j-1)*nx + i
-         doninp(m,:,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
+         donin4d(m,1,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
        end do
      end do
-   end do
-   call input_tensors%create
-   call input_tensors%add_array(doninp)
-   call input_tensors%add_array(x_trunk)
-   call torch_mod%load(trim(file_path)//trim(file_deeponet))
-   call torch_mod%forward(input_tensors,out_tensor,1)
-   call out_tensor%to_array(donout)
 
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of doninp = ',shape(doninp)
-     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
-     write(iulog,*) 'shape of donout = ',shape(donout)
-     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
-   end if
+     !convolution 2D model options 
+     !0: before nudging state->nudging tendency 
+     !dummy input time
+     do n = 1,dumy_nt
+       x_trunk(1,n) = 2.0_r4*(real(n,kind=r4)-1.0_r4)/(real(dumy_nt,kind=r4)-1.0_r4)-1.0_r4
+       if ( n > 1 ) then 
+         donin4d(:,n,1,:) = donin4d(:,1,1,:)
+       end if 
+     end do
 
-   !denormalize the deeponet prediction and output data
-   do k = 1, nz
+     call input_tensors%create
+     call input_tensors%add_array(donin4d)
+     call input_tensors%add_array(x_trunk)
+     call torch_mod%load(trim(file_path)//trim(file_predictor))
+     call torch_mod%forward(input_tensors,out_tensor,1)
+     call out_tensor%to_array(donout4d)
+
+     if (masterproc.and.l_print_diag) then
+       write(iulog,*) 'shape of donin  = ',shape(donin4d)
+       write(iulog,*) 'donin(min/max)  = ',minval(donin4d),maxval(donin4d)
+       write(iulog,*) 'shape of donout = ',shape(donout4d)
+       write(iulog,*) 'donout(min/max) = ',minval(donout4d),maxval(donout4d)
+     end if
+
+     !denormalize the deeponet prediction and output data
      do j = 1, ny
        do i = 1, nx
          m = (j-1)*nx + i
-         varo(m,k) = 0.5_r8*(real(donout(i,j,1,k),kind=r8)+1.0_r8)*(donmax-donmin)+donmin
+         varo(i,j,:) = 0.5_r8*(real(donout4d(i,j,1,:),kind=r8)+1.0_r8)*(donmax-donmin)+donmin
        end do
      end do
-   end do 
+   else 
+     !prepare input data 
+     donin3d(1:nx,1:ny,1:nz) = real(vari(1:nx,1:ny,1:nz),kind=r4)
+     ! call deepOnet 
+     call input_tensors%create
+     call input_tensors%add_array(donin3d)
+     call torch_mod%load(trim(file_path)//trim(file_predictor))
+     call torch_mod%forward(input_tensors,out_tensor,1)
+     call out_tensor%to_array(donout3d)
+
+     if (masterproc.and.l_print_diag) then
+       write(iulog,*) 'shape of donin  = ',shape(donin3d)
+       write(iulog,*) 'donin(min/max)  = ',minval(donin3d),maxval(donin3d)
+       write(iulog,*) 'shape of donout = ',shape(donout3d)
+       write(iulog,*) 'donout(min/max) = ',minval(donout3d),maxval(donout3d)
+     end if
+     !output data 
+     varo(1:nx,1:ny,1:nz) = real(donout3d(1:nx,1:ny,1:nz),kind=r8)
+   end if 
 
    return
-  end subroutine !deeponet_tendadv
+  end subroutine !mltbc_don_tendadv
 
-  subroutine deeponet_statadv(file_path,varname,nx,ny,nz,vari,varo)
+  subroutine mltbc_don_statadv(file_path,varname,nx,ny,nz,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
-  !                  the DeepONet Machine Learning (ML) model,
+  !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
-   use error_messages,   only : handle_ncerr
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   character(len=*), intent(in) :: file_path !Path to machine learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
    integer, intent(in)          :: nx,ny,nz
    real(r8),intent(in)          :: vari(nx,ny,nz)
@@ -6177,16 +6373,16 @@ contains
    real(r8)                     :: vmino,vmaxo
 
    if (masterproc) then
-     !check if DeepONet pt file exist 
-     file_deeponet = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_deeponet),exist=l_ml_deeponet)
-     if ( .not. l_ml_deeponet) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_deeponet)//" not found!"
-       call endrun('DeepONet Nudging Error: model file not exist')
+     !check if machine learning pt file exist 
+     file_predictor = trim(varname)//'_DeepONet.pt'
+     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
+     if ( .not. l_mltbc_predictor) then
+       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
+       call endrun('Machine Learning Nudging Error: model file not exist')
      end if
    end if
 #ifdef SPMD
-   call mpibcast(file_deeponet,len(file_deeponet),mpichar,0,mpicom)
+   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
 #endif
 
    !convolution 2D model options
@@ -6201,20 +6397,18 @@ contains
    end do
 
    !prepare input data 
-   do k = 1,nz
-     vmini = real(minval(vari(:,:,k)),kind=r4)
-     vmaxi = real(maxval(vari(:,:,k)),kind=r4)
-     do j = 1,ny
-       do i = 1,nx
-         !normalize input data
-         doninp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmini)/(vmaxi-vmini)-1.0_r4
-       end do
+   vmini = real(minval(vari(:,:,:)),kind=r4)
+   vmaxi = real(maxval(vari(:,:,:)),kind=r4)
+   do j = 1,ny
+     do i = 1,nx
+       !normalize input data
+       doninp(i,j,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmini)/(vmaxi-vmini)-1.0_r4
      end do
    end do
    call input_tensors%create
    call input_tensors%add_array(doninp)
    call input_tensors%add_array(x_trunk)
-   call torch_mod%load(trim(file_path)//trim(file_deeponet))
+   call torch_mod%load(trim(file_path)//trim(file_predictor))
    call torch_mod%forward(input_tensors,out_tensor,1)
    call out_tensor%to_array(donout)
 
@@ -6226,35 +6420,33 @@ contains
    end if
 
   !output data (denormalize)
-   do k = 1, nz
-     vmino = minval(vari(:,:,k))
-     vmaxo = maxval(vari(:,:,k))
-     do j = 1, ny
-       do i = 1, nx
-         m = (j-1)* nx + i
-         varo(m,k) = 0.5_r8*(real(donout(m,k),kind=r8)+1.0_r8)*(vmaxo-vmino)+vmino
-       end do
+   vmino = minval(vari(:,:,:))
+   vmaxo = maxval(vari(:,:,:))
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)* nx + i
+       varo(m,:) = 0.5_r8*(real(donout(m,:),kind=r8)+1.0_r8)*(vmaxo-vmino)+vmino
      end do
    end do
 
    return
-  end subroutine !deeponet_statadv
+  end subroutine !mltbc_don_statadv
 
-  subroutine deeponet_encoder(file_path,varname,nx,ny,nx1,ny1,nz,vari,varo) 
+  subroutine mltbc_don_encoder(l_conv2d,file_path,varname,nx,ny,nz,nx1,ny1,nz1,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call auto encoder for 
-  !                  the DeepONet Machine Learning (ML) model,
+  !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
-   use error_messages,   only : handle_ncerr
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   logical, intent(in)          :: l_conv2d
+   character(len=*), intent(in) :: file_path !Path to machine learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx,ny,nx1,ny1,nz
+   integer, intent(in)          :: nx,ny,nz,nx1,ny1,nz1
    real(r8),intent(in)          :: vari(nx,ny,nz) 
-   real(r8),intent(inout)       :: varo(nx1,ny1,nz)
+   real(r8),intent(inout)       :: varo(nx1,ny1,nz1)
 
    ! Arguments
    !-----------
@@ -6267,77 +6459,100 @@ contains
    logical, parameter :: l_print_diag = .false.
    integer            :: i,j,n,m,k
    real(r4)           :: vmax,vmin 
-   real(r4)           :: encinp(ny,nx,1,nz)
-   real(r4), pointer  :: encout(:,:)
+   real(r4)           :: encin3d(nx,ny,nz)   ! input array to encoder 
+   real(r4)           :: encin4d(nx,ny,1,nz) ! input array to encoder 
+   real(r4), pointer  :: encout2d(:,:)       ! output array from encoder 
+   real(r4), pointer  :: encout3d(:,:,:)     ! output array from encoder  
 
    if (masterproc) then
-     !check if DeepONet pt file exist 
+     !check if machine learning pt file exist 
      file_encoder = trim(varname)//'_Encoder.pt'
-     inquire(file=trim(file_path)//trim(file_encoder),exist=l_ml_encoder)
-     if ( .not. l_ml_encoder) then
+     inquire(file=trim(file_path)//trim(file_encoder),exist=l_mltbc_encoder)
+     if ( .not. l_mltbc_encoder) then
        write(iulog,*) "ERROR: "//trim(file_path)//trim(file_encoder)//" not found!"
-       call endrun('DeepONet Nudging Error: model file not exist')
+       call endrun('Machine Learning Nudging Error: model file not exist')
      end if
    end if
 #ifdef SPMD
    call mpibcast(file_encoder,len(file_encoder),mpichar,0,mpicom)
 #endif
 
-  !prepare data and run decoder 
-  !note: transponse of E3SM(lon,lat,lev)->DeepONet(lat,lon,1,lev) 
-   vmin = real(minval(vari),kind=r4)
-   vmax = real(maxval(vari),kind=r4)
-   do k = 1, nz
+   if ( l_conv2d ) then 
+     !prepare data and run encoder for convolution 2d model 
+     !note: transponse of E3SM(lon,lat,lev)->DeepONet(lat,lon,1,lev) 
+     vmin = real(minval(vari),kind=r4)
+     vmax = real(maxval(vari),kind=r4)
      do j = 1, ny 
        do i = 1, nx
          !normalize the data with max/min
-         encinp(i,j,1,k) = 2.0_r4*(real(vari(i,j,k),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
+         encin4d(i,j,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
        end do
      end do
-   end do
 
-   !call deepOnet 
-   call input_tensors%create
-   call input_tensors%add_array(encinp)
-   call torch_mod%load(trim(file_path)//trim(file_encoder))
-   call torch_mod%forward(input_tensors,out_tensor)
-   call out_tensor%to_array(encout)  !size (nx1*ny1,nz)
+     !call deepOnet Encoder  
+     call input_tensors%create
+     call input_tensors%add_array(encin4d)
+     call torch_mod%load(trim(file_path)//trim(file_encoder))
+     call torch_mod%forward(input_tensors,out_tensor)
+     call out_tensor%to_array(encout2d)  
 
-   if (masterproc .and. l_print_diag) then
-     write(iulog,*) 'shape of encinp = ',shape(encinp)
-     write(iulog,*) 'encinp(min/max) = ',minval(encinp),maxval(encinp)
-     write(iulog,*) 'shape of encout = ',shape(encout)
-     write(iulog,*) 'encout(min/max) = ',minval(encout),maxval(encout)
-   end if
+     if (masterproc .and. l_print_diag) then
+       write(iulog,*) 'shape of encin  = ',shape(encin4d)
+       write(iulog,*) 'encin(min/max)  = ',minval(encin4d),maxval(encin4d)
+       write(iulog,*) 'shape of encout = ',shape(encout2d)
+       write(iulog,*) 'encout(min/max) = ',minval(encout2d),maxval(encout2d)
+     end if
 
-   !process to output array 
-   do k = 1, nz
+     !process to output array 
      do j = 1, ny1 
        do i = 1, nx1
          m = (j-1)*nx1 + i
-         varo(i,j,k) = real(encout(m,k), kind = r8)
+         varo(i,j,1:nz1) = real(encout2d(m,1:nz1), kind = r8)
        end do 
      end do 
-   end do 
+
+   else 
+
+     !prepare data and run encoder for global model 
+     encin3d(1:nx,1:ny,1:nz) = real(vari(1:nx,1:ny,1:nz),kind=r4) 
+
+     !call deepOnet Encoder  
+     call input_tensors%create
+     call input_tensors%add_array(encin3d)
+     call torch_mod%load(trim(file_path)//trim(file_encoder))
+     call torch_mod%forward(input_tensors,out_tensor)
+     call out_tensor%to_array(encout3d)  
+     if (masterproc .and. l_print_diag) then
+       write(iulog,*) 'shape of encin  = ',shape(encin3d)
+       write(iulog,*) 'encin(min/max)  = ',minval(encin3d),maxval(encin3d)
+       write(iulog,*) 'shape of encout = ',shape(encout3d)
+       write(iulog,*) 'encout(min/max) = ',minval(encout3d),maxval(encout3d)
+     end if
+
+     !output array 
+     varo(1:nx1,1:ny1,1:nz1) = real(encout3d(1:nx1,1:ny1,1:nz1), kind = r8)
+
+   end if 
 
    return 
-  end subroutine !deeponet_encoder 
+  end subroutine !mltbc_don_encoder 
 
-  subroutine deeponet_decoder(file_path,varname,nx,ny,nx1,ny1,nz,vari,varo)
+  subroutine mltbc_don_decoder(l_conv2d,file_path,varname,nx,ny,nz,nx1,ny1,nz1,vari,varo)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call auto decoder for 
-  !                  the DeepONet Machine Learning (ML) model,
+  !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
-   use error_messages,   only : handle_ncerr
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to DeepONet ML files 
+   logical, intent(in)          :: l_conv2d
+   character(len=*), intent(in) :: file_path !Path to machine learning model files 
    character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx1,ny1,nx,ny,nz
-   real(r8),intent(in)          :: vari(nx1*ny1,nz)
-   real(r8),intent(inout)       :: varo(nx*ny,nz)
+   integer, intent(in)          :: nx,ny,nz
+   integer, intent(in)          :: nx1,ny1,nz1
+   real(r8),intent(in)          :: vari(nx1,ny1,nz1)
+   real(r8),intent(inout)       :: varo(nx,ny,nz)
 
    ! Arguments
    !-----------
@@ -6350,62 +6565,83 @@ contains
    logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
    real(r8)                     :: dcdmin,dcdmax
-   real(r4)                     :: dcdinp(nx1*ny1,nz)
-   real(r4), pointer            :: dcdout(:,:)
+   real(r4)                     :: dcdin2d(nx1*ny1,nz1)
+   real(r4), pointer            :: dcdout2d(:,:)
+   real(r4)                     :: dcdin3d(nx1,ny1,nz1)
+   real(r4), pointer            :: dcdout3d(:,:,:)
 
    if (masterproc) then
-     !check if DeepONet pt file exist 
+     !check if machine learning pt file exist 
      file_decoder = trim(varname)//'_Decoder.pt'
-     inquire(file=trim(file_path)//trim(file_decoder),exist=l_ml_decoder)
-     if (.not. l_ml_decoder) then
+     inquire(file=trim(file_path)//trim(file_decoder),exist=l_mltbc_decoder)
+     if (.not. l_mltbc_decoder) then
        write(iulog,*) "ERROR: "//trim(file_path)//trim(file_decoder)//" not found!"
-       call endrun('DeepONet Nudging Error: model file not exist')
+       call endrun('Machine Learning Nudging Error: model file not exist')
      end if
    end if
 #ifdef SPMD
    call mpibcast(file_decoder,len(file_decoder),mpichar,0,mpicom)
 #endif
 
-   !parameters to normalize/denormalize DeepONet prediction 
-   if (trim(varname) == 'U') then
-     dcdmax = 0.0013223718_r8
-     dcdmin = -0.0010001023_r8
-   else  ! "V"
-     dcdmax = 0.0010921889_r8
-     dcdmin = -0.0014089954_r8
-   end if
-
-   !prepare input data and run decoder 
-   !need to convert to single precision 
-   dcdinp(:,:) = real(vari(:,:),kind=r4)
-   !call decoder 
-   call input_tensors%create
-   call input_tensors%add_array(dcdinp)
-   call torch_mod%load(trim(file_path)//trim(file_decoder))
-   call torch_mod%forward(input_tensors, out_tensor)
-   call out_tensor%to_array(dcdout)
-
-   if (masterproc .and. l_print_diag) then
-     write(iulog,*) 'shape of dcdinp = ',shape(dcdinp)
-     write(iulog,*) 'dcdinp(min/max) = ',minval(dcdinp),maxval(dcdinp)
-     write(iulog,*) 'shape of dcdout = ',shape(dcdout)
-     write(iulog,*) 'dcdout(min/max) = ',minval(dcdout),maxval(dcdout)
-   end if
-
-   !denormalize ouput from decoder to convert it to tendency 
-   do k = 1, nz
+   if (l_conv2d) then 
+     !parameters to normalize/denormalize DeepONet prediction 
+     if (trim(varname) == 'U') then
+       dcdmax = 0.0013223718_r8
+       dcdmin = -0.0010001023_r8
+     else  ! "V"
+       dcdmax = 0.0010921889_r8
+       dcdmin = -0.0014089954_r8
+     end if
+     !prepare input data and run decoder 
+     !need to convert to single precision 
+     do j = 1, ny1
+       do i = 1, nx1
+         m = (j-1)*nx1 + i
+         dcdin2d(m,1:nz1) = real(vari(i,j,1:nz1),kind=r4)
+       end do 
+     end do 
+     !call decoder 
+     call input_tensors%create
+     call input_tensors%add_array(dcdin2d)
+     call torch_mod%load(trim(file_path)//trim(file_decoder))
+     call torch_mod%forward(input_tensors, out_tensor)
+     call out_tensor%to_array(dcdout2d)
+     if (masterproc .and. l_print_diag) then
+       write(iulog,*) 'shape of dcdin  = ',shape(dcdin2d)
+       write(iulog,*) 'dcdin(min/max)  = ',minval(dcdin2d),maxval(dcdin2d)
+       write(iulog,*) 'shape of dcdout = ',shape(dcdout2d)
+       write(iulog,*) 'dcdout(min/max) = ',minval(dcdout2d),maxval(dcdout2d)
+     end if
+     !denormalize ouput from decoder to convert it to tendency 
      do j = 1, ny 
        do i = 1, nx
          m = (j-1)*nx + i
-         varo(m,k) = 0.5_r8*(real(dcdout(m,k),kind=r8)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
+         varo(i,j,1:nz) = 0.5_r8*(real(dcdout2d(m,1:nz),kind=r8)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
        end do
      end do
-   end do
+   else 
+     !input data 
+     dcdin3d(1:nx1,1:ny1,1:nz1) = real(vari(1:nx1,1:ny1,1:nz1),kind=r4)
+     !call decoder 
+     call input_tensors%create
+     call input_tensors%add_array(dcdin3d)
+     call torch_mod%load(trim(file_path)//trim(file_decoder))
+     call torch_mod%forward(input_tensors, out_tensor)
+     call out_tensor%to_array(dcdout3d)
+     if (masterproc .and. l_print_diag) then
+       write(iulog,*) 'shape of dcdin  = ',shape(dcdin3d)
+       write(iulog,*) 'dcdin(min/max)  = ',minval(dcdin3d),maxval(dcdin3d)
+       write(iulog,*) 'shape of dcdout = ',shape(dcdout3d)
+       write(iulog,*) 'dcdout(min/max) = ',minval(dcdout3d),maxval(dcdout3d)
+     end if
+     !output data 
+     varo(1:nx,1:ny,1:nz) = real(dcdout3d(1:nx,1:ny,1:nz),kind=r8)
+   end if 
 
    return 
-  end subroutine !deeponet_decoder
+  end subroutine !mltbc_don_decoder
 
-  subroutine deeponet_gather_data(arr,nflds,ngcols,arro) !out
+  subroutine mltbc_gather_data(arr,nflds,ngcols,arro) !out
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to collect the data at all chunks 
   !                  and convert to a sigle array
@@ -6436,17 +6672,15 @@ contains
 
    ngtot = hdim1*hdim2
    if ( ngtot /= ngcols ) then 
-     write(iulog,*) 'DeepONet Nudging Error: in/out size mismatch ngcols(in),ngcols(out) = ',ngtot,ngcols 
-     call endrun ('DeepONet Nudging Error: deeponet_gather_data failed')
+     write(iulog,*) 'Machine Learning Nudging Error: in/out size mismatch ngcols(in),ngcols(out) = ',ngtot,ngcols 
+     call endrun ('Machine Learning Nudging Error: mltbc_gather_data failed')
    end if 
 
    !combine lat-lon array to ncol array
-   do ifld = 1, nflds
-     do j = 1, hdim2
-       do i = 1, hdim1
-         n = (j-1)*hdim1 + i
-         arro(n,ifld) = arr_field(i,j,ifld) 
-       end do 
+   do j = 1, hdim2
+     do i = 1, hdim1
+       n = (j-1)*hdim1 + i
+       arro(n,:) = arr_field(i,j,:) 
      end do 
    end do 
  
@@ -6460,12 +6694,12 @@ contains
    deallocate(arr_field)
 
    return
-  end subroutine !deeponet_gather_data
+  end subroutine !mltbc_gather_data
 
-  subroutine deeponet_gather_patch(vname,nlev,ngcol,nlon,nlat,model_state,out_state) !out
+  subroutine mltbc_gather_patch(vname,nlev,ngcol,nlon,nlat,model_state,out_state) !out
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   !!Following subroutine is used to gather global data and process it to      !!
-  !!Model space input to DeepONet Machine Learning model                      !! 
+  !!Model space input to Machine Learning model                      !! 
   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                            !! 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
@@ -6485,8 +6719,8 @@ contains
    !----------------
    integer  :: lchnk,ncol
    integer  :: i,j,k,ii,jj,m,n 
-   real(r8) :: sum_x
-   real(r8), allocatable :: test_rgd(:)
+   real(r8) :: sum_x(nlev)
+   real(r8), allocatable :: test_rgd(:,:)
    real(r8), allocatable :: test_dif(:,:)
    real(r8), allocatable :: ftem(:,:,:)
    real(r8), allocatable :: ftem2(:,:)
@@ -6495,38 +6729,32 @@ contains
    out_state(:,:,:) = fillvalue
 
    !Interpolate to regional data 
-   if (DeepONet_Conv2d_BILN) then
+   if (mltbc_patch_biln) then
      !bilinear interpolation      
-     do k = 1, nlev
-       do j = 1, nlat
-         do i = 1, nlon
-           sum_x = 0.0_r8
-           ii = 0
-           m = (j-1)*nlon + i
-           do jj = 1, 4
-             n = DeepONet_se2latlon_ind(m,jj)
-             if (DeepONet_se2latlon_wgt(m,jj) == 0.0_r8) ii = ii + 1
-             sum_x = sum_x + model_state(n,k) * DeepONet_se2latlon_wgt(m,jj)
-           end do
-           if (ii /= 4) then
-             out_state(i,j,k) = sum_x
-           end if
+     do j = 1, nlat
+       do i = 1, nlon
+         sum_x(:) = 0.0_r8
+         ii = 0
+         m = (j-1)*nlon + i
+         do jj = 1, 4
+           n = mltbc_se2latlon_ind(m,jj)
+           if (mltbc_se2latlon_wgt(m,jj) == 0.0_r8) ii = ii + 1
+           sum_x(:) = sum_x(:) + model_state(n,:) * mltbc_se2latlon_wgt(m,jj)
          end do
+         if (ii /= 4) then
+           out_state(i,j,:) = sum_x
+         end if
        end do
      end do
-
    else 
      !neareast to destination 
-     do k = 1, nlev 
-       do j = 1, nlat
-         do i = 1, nlon
-           m = (j-1)*nlon + i
-           n = DeepONet_se2latlon_ind(m,5)
-           out_state(i,j,k) = model_state(n,k) 
-         end do
-       end do 
+     do j = 1, nlat
+       do i = 1, nlon
+         m = (j-1)*nlon + i
+         n = mltbc_se2latlon_ind(m,5)
+         out_state(i,j,:) = model_state(n,:) 
+       end do
      end do 
-
    end if 
 
    if (masterproc.and.l_print_diag) then
@@ -6539,42 +6767,39 @@ contains
    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
    !!Begin diagnose interpolation!! 
    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   if (DeepONet_Interp_Test) then 
+   if (mltbc_interp_test) then 
      allocate (test_dif(ngcol,nlev))
-     allocate (test_rgd(nlon*nlat))
+     allocate (test_rgd(nlon*nlat,nlev))
      test_dif(:,:) = 0.0_r8
      !interpolated back to model grid and check  
-     if (DeepONet_Conv2d_BILN) then
+     if (mltbc_patch_biln) then
        !method 1: linear interpolation to destination grid
-       do k = 1, nlev
-         do j = 1, nlat
-           do i = 1, nlon
-             m = (j-1)*nlon+i
-             test_rgd(m) = out_state(i,j,k)
-           end do
-         end do 
-         do n = 1, ngcol
-           sum_x = 0.0_r8
-           ii = 0
-           do jj = 1, 4
-             m = DeepONet_latlon2se_ind(n,jj)
-             if(DeepONet_latlon2se_wgt(n,jj) == 0.0_r8) ii = ii + 1
-             sum_x = sum_x + DeepONet_latlon2se_wgt(n,jj)*test_rgd(m)
-           end do
-           if( ii /= 4 ) then
-             test_dif(n,k) = model_state(n,k) - sum_x
-           end if
-         end do   
+       do j = 1, nlat
+         do i = 1, nlon
+           m = (j-1)*nlon+i
+           test_rgd(m,:) = out_state(i,j,:)
+         end do
+       end do 
+       do n = 1, ngcol
+         sum_x(:) = 0.0_r8
+         ii = 0
+         do jj = 1, 4
+           m = mltbc_latlon2se_ind(n,jj)
+           if(mltbc_latlon2se_wgt(n,jj) == 0.0_r8) ii = ii + 1
+           sum_x(:) = sum_x(:) + mltbc_latlon2se_wgt(n,jj)*test_rgd(m,:)
+         end do
+         if( ii /= 4 ) then
+           test_dif(n,:) = model_state(n,:) - sum_x(:)
+         end if
+       end do   
        end do
      else 
        !method 2: nearest to destination grid
-       do k = 1, nlev
-         do j = 1, nlat
-           do i = 1, nlon
-             m = (j-1)*nlon + i
-             n = DeepONet_se2latlon_ind(m,5)
-             test_dif(n,k) = (model_state(n,k) - out_state(i,j,k))
-           end do
+       do j = 1, nlat
+         do i = 1, nlon
+           m = (j-1)*nlon + i
+           n = mltbc_se2latlon_ind(m,5)
+           test_dif(n,:) = (model_state(n,:) - out_state(i,j,:))
          end do
        end do
      end if
@@ -6618,25 +6843,12 @@ contains
    !!End diagnose interpolation  !! 
    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-   !Sanity check 
-   n = 0
-   do k = 1, nlev
-     do j = 1, nlat
-       do i = 1, nlon
-         if (out_state(i,j,k) == fillvalue ) then
-           n = n + 1
-           write(iulog,*) 'DeepONet Nudging Error: missing value appears: '
-           write(iulog,*) 'i,j,k,state(i,j,k) = ',i,j,k,out_state(i,j,k) 
-         end if
-       end do
-     end do
-   end do 
-   if (n > 0 ) then
-     write(iulog,*) 'DeepONet Nudging Error: number of missing points ntot = ',n
-     call endrun('DeepONet Nudging Error: working data contains missing values')
-   end if
-   return 
-  end subroutine !deeponet_gather_patch
+   !Sanity check
+   if (any(out_state(:,:,:) == fillvalue)) then 
+      write(iulog,*) 'Machine Learning Nudging Error: missing value appears'
+      call endrun('Machine Learning Nudging Error: working data contains missing values')
+   end if 
+  end subroutine !mltbc_gather_patch
 
   subroutine update_land_nudging_tend(ncol, umod, vmod, tvmod, qmod,    & ! In 
                                       ubobs, vbobs, tbobs, tdbobs,      & ! In  
@@ -7207,7 +7419,7 @@ contains
      end do
    end do
 
-   !find the cell-center grid point closest to DeepONet lat-lon grid
+   !find the cell-center grid point closest to machine learning lat-lon grid
    do n = 1, ngcols
      !use a temporary array olat/olon so that we can modify values 
      allocate(olat(nrecg))
@@ -7472,7 +7684,7 @@ contains
    close_ind(:,:)  = imissing 
    weight_qdl(:,:) = rmissing
 
-   !find the cell-center grid point closest to DeepONet lat-lon grid
+   !find the cell-center grid point closest to machine learning lat-lon grid
    do j = 1, nrlat
      do i = 1, nrlon
        !use a temporary array olat/olon so that we can modify values 

@@ -978,7 +978,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
     type(cam_out_t),                    dimension(begchunk:endchunk) :: cam_out
     
     !save state variable for deepnet nudging prediction
-    type(physics_state), dimension(begchunk:endchunk) :: deeponet_state
+    type(physics_state), dimension(begchunk:endchunk) :: mltbc_state
 
     !-----------------------------------------------------------------------
     !
@@ -1035,7 +1035,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        !-----------------------------------------------------------------------
 
        call t_startf('phys_timestep_init')
-       call phys_timestep_init( phys_state, cam_out, pbuf2d, deeponet_state )
+       call phys_timestep_init( phys_state, cam_out, pbuf2d, mltbc_state )
        call t_stopf('phys_timestep_init')
 
        call t_stopf ('physpkg_st1')
@@ -1078,7 +1078,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
 
           call tphysbc (ztodt, fsns(1,c), fsnt(1,c), flns(1,c), flnt(1,c), phys_state(c),        &
                        phys_tend(c), phys_buffer_chunk,  fsds(1,c),                       &
-                       sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c), deeponet_state(c))
+                       sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c), mltbc_state(c))
 
           call system_clock(count=end_chnk_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
           if ( end_chnk_cnt < beg_chnk_cnt ) end_chnk_cnt = end_chnk_cnt + sysclock_max
@@ -1088,7 +1088,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        end do
 
        !call deepONet nudging prediction (skip first step)
-       call deeponet_nudging(ztodt,deeponet_state)
+       call mltbc_nudging(ztodt,mltbc_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
        if ( end_proc_cnt < beg_proc_cnt ) end_proc_cnt = end_proc_cnt + sysclock_max
@@ -1985,7 +1985,7 @@ subroutine tphysbc (ztodt,               &
     use nudging,         only: Nudge_Model,Nudge_Loc_PhysOut, &
                                Nudge_Land, nudging_calc_tend, &
                                nudging_update_land_surface, & 
-                               DeepONet_Nudge
+                               mltbc_nudge
     use lnd_infodata,    only: precip_downscaling_method
 
     implicit none
@@ -2734,7 +2734,7 @@ end if
     !===================================
     if (Nudge_Model .and. Nudge_Loc_PhysOut) then
        call nudging_calc_tend(state, pbuf, ztodt)
-       if (DeepONet_Nudge) then 
+       if (mltbc_nudge) then 
          call physics_state_copy(state,state1)
        end if   
     endif
@@ -2808,7 +2808,7 @@ end if ! l_rad
 
 end subroutine tphysbc
 
-subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, deeponet_state)
+subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place for parameterizations to call per timestep initializations.
@@ -2841,7 +2841,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, deeponet_state)
   use aerodep_flx,         only: aerodep_flx_adv
   use aircraft_emit,       only: aircraft_emit_adv
   use prescribed_volcaero, only: prescribed_volcaero_adv
-  use nudging,             only: Nudge_Model,DeepONet_Nudge,nudging_timestep_init
+  use nudging,             only: Nudge_Model,mltbc_nudge,nudging_timestep_init
 
   use seasalt_model,       only: advance_ocean_data, has_mam_mom
 
@@ -2850,7 +2850,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, deeponet_state)
   type(physics_state), intent(inout), dimension(begchunk:endchunk) :: phys_state
   type(cam_out_t),     intent(inout), dimension(begchunk:endchunk) :: cam_out
 
-  type(physics_state), optional, intent(inout), dimension(begchunk:endchunk) :: deeponet_state
+  type(physics_state), optional, intent(inout), dimension(begchunk:endchunk) :: mltbc_state
   
   type(physics_buffer_desc), pointer                 :: pbuf2d(:,:)
 
@@ -2925,10 +2925,10 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, deeponet_state)
   !----------------------------------
   if (Nudge_Model) then 
     call nudging_timestep_init(phys_state)
-    if (DeepONet_Nudge) then 
+    if (mltbc_nudge) then 
       !copy the state to the array for deeponet machine learning prediction 
       do lchnk = begchunk, endchunk
-        call physics_state_copy(phys_state(lchnk), deeponet_state(lchnk))
+        call physics_state_copy(phys_state(lchnk), mltbc_state(lchnk))
       end do
     end if         
   end if 
@@ -2972,7 +2972,7 @@ subroutine add_fld_default_calls()
 
 end subroutine add_fld_default_calls
 
-subroutine deeponet_nudging(dtime,phys_state)
+subroutine mltbc_nudging(dtime,phys_state)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place to call deepOnet machine learning model to predict nudging 
@@ -2983,7 +2983,7 @@ subroutine deeponet_nudging(dtime,phys_state)
 !-----------------------------------------------------------------------------------
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use physics_types,       only: physics_state
-  use nudging,             only: Nudge_Model,DeepONet_Nudge,deeponet_timestep_init
+  use nudging,             only: Nudge_Model,mltbc_nudge,mltbc_timestep_init
 
   implicit none
 
@@ -2993,10 +2993,10 @@ subroutine deeponet_nudging(dtime,phys_state)
   !===================================
   ! Update Nudging tendency if needed
   !===================================
-  if (Nudge_Model .and. DeepONet_Nudge) then
-     call deeponet_timestep_init(phys_state, dtime)
+  if (Nudge_Model .and. mltbc_nudge) then
+     call mltbc_timestep_init(phys_state, dtime)
   endif
 
-end subroutine deeponet_nudging
+end subroutine mltbc_nudging
 
 end module physpkg
