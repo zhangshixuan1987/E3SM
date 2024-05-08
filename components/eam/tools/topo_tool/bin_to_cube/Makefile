@@ -26,6 +26,15 @@ ifeq ($(INC_NETCDF),$(null))
 INC_NETCDF := /usr/local/include
 endif
 
+# Set default compile and link flags
+ifeq ($(FC),gfortran)
+    FFLAGS  = -L$(LIB_NETCDF) -I$(INC_NETCDF) -w -fallow-argument-mismatch -O2
+else
+    FFLAGS  = -L$(LIB_NETCDF) -I$(INC_NETCDF)
+endif
+#LDFLAGS = -L$(LIB_NETCDF) -lnetcdf -lnetcdff -lcurl -lhdf5 -lhdf5_hl -mcmodel=medium
+LDFLAGS = -L$(LIB_NETCDF) -lnetcdf -lnetcdff -lcurl
+
 # Determine platform 
 UNAMES := $(shell uname -s)
 UNAMEM := $(findstring CRAY,$(shell uname -m))

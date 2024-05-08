@@ -1,8 +1,8 @@
 &input
-srfFileName =  '1x1d.nc'
-atmFileName = 'ne30np4_pentagons.091226.nc'
-landFileName = 'regrid_vegetation.nc' 
-soilwFileName = 'clim_soilw.nc'
-srf2atmFmapname = 'map_1x1_to_ne30np4_aave.nc'
-outputFileName = 'atmsrf_ne30np4_101206.nc'
+srfFileName = '/pscratch/sd/z/zhan391/DARPA_project/gen_rrm_domain/input/1x1d.nc'
+landFileName = '/global/cfs/cdirs/e3sm/inputdata/atm/cam/chem/trop_mozart/dvel/regrid_vegetation.nc'
+soilwFileName = '/global/cfs/cdirs/e3sm/inputdata/atm/cam/chem/trop_mozart/dvel/clim_soilw.nc'
+atmFileName = '/pscratch/sd/z/zhan391/WW3/new_mesh_1/meshes/ne32x4_ATLpg2_scrip.nc'
+srf2atmFmapname = '/pscratch/sd/z/zhan391/WW3/new_mesh_1/meshes/map_1x1_to_ne32x4_ATLpg2_mono.nc'
+outputFileName = '/pscratch/sd/z/zhan391/WW3/new_mesh_1/meshes/atmsrf_ne32x4_ATLpg2_20240411_n4.nc'
 /

@@ -9,17 +9,28 @@ RM = rm
 .SUFFIXES: .F90 .o
 
 
-FC = lf95
+ifeq ($(FC),$(null))
+  FC = lf95
+endif
+DEBUG = FALSE
 
-# Check for the NetCDF library and include directories 
- ifeq ($(LIB_NETCDF),$(null))
- LIB_NETCDF := /usr/local/lib
- endif
-#
- ifeq ($(INC_NETCDF),$(null))
- INC_NETCDF := /usr/local/include
- endif
+# Check for the NetCDF library and include directories
+ifeq ($(LIB_NETCDF),$(null))
+    LIB_NETCDF := /usr/local/lib
+endif
 
+ifeq ($(INC_NETCDF),$(null))
+    INC_NETCDF := /usr/local/include
+endif
+
+# Set default compile and link flags
+ifeq ($(FC),gfortran)
+    FFLAGS  = -L$(LIB_NETCDF) -I$(INC_NETCDF) -w -fallow-argument-mismatch -O2
+else
+    FFLAGS  = -L$(LIB_NETCDF) -I$(INC_NETCDF)
+endif
+#LDFLAGS = -L$(LIB_NETCDF) -lnetcdf -lnetcdff -lcurl -lhdf5 -lhdf5_hl -mcmodel=medium
+LDFLAGS = -L$(LIB_NETCDF) -lnetcdf -lnetcdff -lcurl
 
 #------------------------------------------------------------------------
 # AIX
