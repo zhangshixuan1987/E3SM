@@ -442,6 +442,7 @@ module nudging
 
   ! Machine Learning Bias Correction  
   public:: mltbc_nudge
+  public:: mltbc_nstep 
   public:: mltbc_regional_on
   public:: mltbc_predict_option
   public:: mltbc_interp_test
@@ -658,6 +659,13 @@ module nudging
   integer  :: snow_pcw_idx = 0
   integer  :: vmag_gust_idx= 0
 
+  ! For ML nudging 
+  integer nudge_u_idx
+  integer nudge_v_idx
+  integer nudge_t_idx
+  integer nudge_q_idx
+  integer nudge_ps_idx
+
   !Parameters determined with experiment 
   !From p_relax upwards, nudging is reduced linearly 
   real(r8), parameter :: p_uv_relax = 30.E2_r8  ! p_relax for u/v wind 
@@ -671,7 +679,7 @@ module nudging
   logical  :: mltbc_regional_on = .false.
   logical  :: mltbc_patch_biln  = .false.
   logical  :: mltbc_interp_test = .false.
-
+  integer  :: mltbc_nstep
   integer  :: mltbc_predict_option
   integer  :: mltbc_patch_nlon
   integer  :: mltbc_patch_nlat
@@ -743,7 +751,7 @@ contains
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
                          mltbc_model_path, mltbc_regional_on,          & 
                          mltbc_predict_option, mltbc_interp_test,      & 
-                         mltbc_patch_biln
+                         mltbc_patch_biln, mltbc_nstep          
 
   
    ! Nudging is NOT initialized yet, For now
@@ -835,6 +843,7 @@ contains
    mltbc_interp_test    = .false.
    mltbc_nudge          = .false.
    mltbc_regional_on    = .false.
+   mltbc_nstep          = 1 
    mltbc_predict_option = 0
    mltbc_patch_nlon     = 1
    mltbc_patch_nlat     = 1
@@ -1023,6 +1032,7 @@ contains
    call mpibcast(mltbc_model_path,len(mltbc_model_path)      ,mpichar,0,mpicom)
    call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_regional_on       , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_predict_option    , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_biln        , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_interp_test       , 1, mpilog, 0, mpicom)
@@ -1061,7 +1071,7 @@ contains
                             get_rlat_all_p,get_rlon_all_p,get_lon_all_p,get_lat_all_p           
    use cam_history   ,only: addfld, horiz_only
    use shr_const_mod ,only: SHR_CONST_PI
-   use constituents  ,only: pcnst
+   use constituents  ,only: pcnst, cnst_get_ind
 
    ! Local values
    !----------------
@@ -1078,6 +1088,13 @@ contains
    real(r8) :: Val1_0,Val2_0,Val3_0,Val4_0
    real(r8) :: Val1_n,Val2_n,Val3_n,Val4_n
    integer  :: i,j,m,n
+
+   ! Define physics buffers indexes
+   call cnst_get_ind('NUDGE_U',nudge_u_idx)
+   call cnst_get_ind('NUDGE_V',nudge_v_idx)
+   call cnst_get_ind('NUDGE_T',nudge_t_idx)
+   call cnst_get_ind('NUDGE_Q',nudge_q_idx)
+   call cnst_get_ind('NUDGE_PS',nudge_ps_idx)
 
    ! Allocate Space for Nudging data arrays
    !-----------------------------------------
@@ -1504,6 +1521,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
      write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
      write(iulog,*) 'NUDGING: mltbc_regional_on   =',mltbc_regional_on
+     write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
      write(iulog,*) 'NUDGING: mltbc_predict_option=',mltbc_predict_option
      write(iulog,*) 'NUDGING: mltbc_interp_test   =',mltbc_interp_test
      write(iulog,*) 'NUDGING: mltbc_patch_biln    =',mltbc_patch_biln
@@ -1560,6 +1578,7 @@ contains
    call mpibcast(Nudge_NO_PBL_Q      , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_regional_on   , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_predict_option, 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_biln    , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_interp_test   , 1, mpilog, 0, mpicom)
@@ -1594,11 +1613,13 @@ contains
      end do
 
      if (mltbc_nudge) then
+
        Nudge_Utau(:ncol,:pver,lchnk) = Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef
        Nudge_Vtau(:ncol,:pver,lchnk) = Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef
        Nudge_Ttau(:ncol,:pver,lchnk) = Nudge_Ttau(:ncol,:pver,lchnk) * Nudge_Tcoef
        Nudge_Qtau(:ncol,:pver,lchnk) = Nudge_Qtau(:ncol,:pver,lchnk) * Nudge_Qcoef
        Nudge_PStau(:ncol,lchnk)      = Nudge_PStau(:ncol,lchnk)      * Nudge_PScoef
+
      else 
 
        if  (Nudge_Tau .le. 0._r8) then
@@ -2238,6 +2259,8 @@ contains
    !                 when the time is withing the nudging window.
    !===============================================================
    use physics_types,only: physics_state
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             pbuf_set_field, physics_buffer_desc, pbuf_get_chunk
    use constituents, only: cnst_get_ind
    use dycore,       only: dycore_is
    use ppgrid,       only: pver,pverp,pcols,begchunk,endchunk 
@@ -2246,7 +2269,7 @@ contains
    use dyn_grid,     only: get_dyn_grid_parm,get_horiz_grid_dim_d, &
                            get_horiz_grid_d, get_dyn_grid_parm_real1d
    use filenames,    only: interpret_filename_spec
-   use time_manager, only: get_nstep
+   use time_manager, only: get_nstep,is_first_step 
    use cam_history,  only: outfld
    use physconst,    only: cpair, gravit, rga
    use phys_grid,    only: get_rlat_all_p, get_rlon_all_p
@@ -2257,6 +2280,9 @@ contains
    type(physics_state),  intent(in) :: state(begchunk:endchunk)
    real(r8),             intent(in) :: dtime
 
+   type(physics_buffer_desc), pointer :: pbuf(:)
+   type(physics_buffer_desc), pointer :: pbuf2d(:,:)
+
    ! Local values
    !----------------
    integer Year,Month,Day,Sec
@@ -2266,6 +2292,15 @@ contains
    integer lchnk,ncol,i,j,k,n,m,indw
    integer nstep ! current timestep number
    character(len=2000) err_str
+  
+   ! For machine learning call   
+   logical Update_MLTBC
+   integer itim_old
+   real(r8), pointer, dimension(:,:) :: Nudge_Uwat  ! Nudging tendency old u 
+   real(r8), pointer, dimension(:,:) :: Nudge_Vwat  ! Nudging tendency old v
+   real(r8), pointer, dimension(:,:) :: Nudge_Twat  ! Nudging tendency old t
+   real(r8), pointer, dimension(:,:) :: Nudge_Qwat  ! Nudging tendency old q
+   real(r8), pointer, dimension(:)   :: Nudge_PSwat ! Nudging tendency old ps
 
    !temporary working arrays 
    real(r8):: ftem(pcols,pver)
@@ -2396,48 +2431,120 @@ contains
    Model_Var(:,:)     = fillvalue
    tmp_tend(:,1,:)    = 0._r8
 
+   !determine frequency of the ML call
+   if ( mod(nstep,mltbc_nstep) == 0 ) then 
+     Update_MLTBC = .true.
+   else 
+     Update_MLTBC = .false.
+   end if 
+
    if ((nstep > 0).and.(Before_End).and.((Update_Nudge).or.(Update_Model))) then
      !call deepONet to predict nudging tendency 
      if (Nudge_Uprof .ne. 0) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
-       end do 
-       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call mltbc_advance(mltbc_model_path,'U',pver,Nudge_ncol,Model_Var,Nudge_Ustep) 
+       if (Update_MLTBC) then 
+         do lchnk=begchunk,endchunk
+           ncol = state(lchnk)%ncol
+           arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
+         end do 
+         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+         call mltbc_advance(mltbc_model_path,'U',pver,Nudge_ncol,Model_Var,Nudge_Ustep) 
+         !update pbuf
+         do lchnk = begchunk, endchunk
+           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_u_idx,Nudge_Ustep(:,:,lchnk))
+         end do
+       else 
+         itim_old = pbuf_old_tim_idx()
+         do lchnk = begchunk, endchunk
+           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_u_idx,Nudge_Uwat, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Ustep(1:ncol,1:pver,lchnk) = Nudge_Uwat(1:ncol,1:pver)
+         end do
+       end if 
      end if
      if (Nudge_Vprof .ne. 0) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
-       end do
-       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call mltbc_advance(mltbc_model_path,'V',pver,Nudge_ncol,Model_Var,Nudge_Vstep) 
+       if (Update_MLTBC) then
+         do lchnk=begchunk,endchunk
+           ncol = state(lchnk)%ncol
+           arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
+         end do
+         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+         call mltbc_advance(mltbc_model_path,'V',pver,Nudge_ncol,Model_Var,Nudge_Vstep)
+         !update pbuf
+         do lchnk = begchunk, endchunk
+           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_v_idx,Nudge_Vstep(:,:,lchnk))
+         end do
+       else
+         itim_old = pbuf_old_tim_idx()
+         do lchnk = begchunk, endchunk
+           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_v_idx,Nudge_Vwat, & 
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Vstep(1:ncol,1:pver,lchnk) = Nudge_Vwat(1:ncol,1:pver)
+         end do
+       end if
      end if
      if (Nudge_Tprof .ne. 0) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
-       end do
-       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call mltbc_advance(mltbc_model_path,'T',pver,Nudge_ncol,Model_Var,Nudge_Tstep) 
+       if (Update_MLTBC) then
+         do lchnk=begchunk,endchunk
+           ncol = state(lchnk)%ncol
+           arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
+         end do
+         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+         call mltbc_advance(mltbc_model_path,'T',pver,Nudge_ncol,Model_Var,Nudge_Tstep) 
+         !update pbuf
+         do lchnk = begchunk, endchunk
+           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_t_idx,Nudge_Tstep(:,:,lchnk))
+         end do
+       else
+         itim_old = pbuf_old_tim_idx()
+         do lchnk = begchunk, endchunk
+           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_t_idx,Nudge_Twat, & 
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Tstep(1:ncol,1:pver,lchnk) = Nudge_Twat(1:ncol,1:pver)
+         end do
+       end if
      end if
      if (Nudge_Qprof .ne. 0) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
-       end do
-       call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-       call mltbc_advance(mltbc_model_path,'Q',Nudge_nlev,Nudge_ncol,Model_Var,Nudge_Qstep) 
+       if (Update_MLTBC) then
+         do lchnk=begchunk,endchunk
+           ncol = state(lchnk)%ncol
+           arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
+         end do
+         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
+         call mltbc_advance(mltbc_model_path,'Q',Nudge_nlev,Nudge_ncol,Model_Var,Nudge_Qstep) 
+         !update pbuf
+         do lchnk = begchunk, endchunk
+           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_q_idx,Nudge_Qstep(:,:,lchnk))
+         end do 
+       else
+         itim_old = pbuf_old_tim_idx()
+         do lchnk = begchunk, endchunk
+           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_q_idx,Nudge_Qwat, & 
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Qstep(1:ncol,1:pver,lchnk) = Nudge_Qwat(1:ncol,1:pver)
+         end do
+       end if
      end if
-     if (Nudge_PSprof .ne. 0) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
-       end do
-       call mltbc_gather_data(arr,1,Nudge_ncol,Model_Var(:,1))
-       call mltbc_advance(mltbc_model_path,'PS',1,Nudge_ncol,Model_Var(:,1),tmp_tend)
-       Nudge_PSstep(:,:) = tmp_tend(:,1,:)
+     if (Nudge_PSprof .ne. 0 .and. Update_MLTBC) then
+       if (Update_MLTBC) then
+         do lchnk=begchunk,endchunk
+           ncol = state(lchnk)%ncol
+           arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
+         end do
+         call mltbc_gather_data(arr,1,Nudge_ncol,Model_Var(:,1))
+         call mltbc_advance(mltbc_model_path,'PS',1,Nudge_ncol,Model_Var(:,1),tmp_tend)
+         Nudge_PSstep(:,:) = tmp_tend(:,1,:)
+         !update pbuf
+         do lchnk = begchunk, endchunk
+           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_ps_idx,Nudge_PSstep(:,lchnk))
+         end do
+       else
+         itim_old = pbuf_old_tim_idx()
+         do lchnk = begchunk, endchunk
+           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_ps_idx,Nudge_PSwat, & 
+                               start=(/1,itim_old/),kount=(/pcols,1/))
+           Nudge_PSstep(1:ncol,lchnk) = Nudge_PSwat(1:ncol)
+         end do
+       end if
      end if
    end if 
 
@@ -6792,7 +6899,6 @@ contains
            test_dif(n,:) = model_state(n,:) - sum_x(:)
          end if
        end do   
-       end do
      else 
        !method 2: nearest to destination grid
        do j = 1, nlat

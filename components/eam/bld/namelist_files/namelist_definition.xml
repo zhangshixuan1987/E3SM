@@ -508,7 +508,13 @@
        Turn ON/OFF bilinear interpolation for Machine Learning 2D Convolution model ON/OFF.
        Default: FALSE
        </entry>
-       
+
+<entry id="mltbc_nstep" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to select freqency of ML prediction: 1 for updating at every time step. 
+       Default: 1
+       </entry>
+
 <entry id="mltbc_predict_option" type="integer" category="nudging"
        group="nudging_nl" valid_values="" >
        Option to select type of convolution 2D model: 0 predict nudging tendency, 1 predict model state.  

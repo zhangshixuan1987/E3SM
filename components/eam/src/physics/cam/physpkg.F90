@@ -72,6 +72,13 @@ module physpkg
   integer ::  snow_sh_idx        = 0
   integer :: species_class(pcnst)  = -1 !BSINGH: Moved from modal_aero_data.F90 as it is being used in second call to zm deep convection scheme (convect_deep_tend_2)
 
+  ! for ml nudging (save nudging tendency)
+  integer ::  nudge_u_idx        = 0 
+  integer ::  nudge_v_idx        = 0
+  integer ::  nudge_t_idx        = 0
+  integer ::  nudge_q_idx        = 0
+  integer ::  nudge_ps_idx       = 0
+
   save
 
   ! Public methods
@@ -112,7 +119,7 @@ subroutine phys_register
     ! 
     !-----------------------------------------------------------------------
     use physics_buffer,     only: pbuf_init_time
-    use physics_buffer,     only: pbuf_add_field, dtype_r8, pbuf_register_subcol
+    use physics_buffer,     only: pbuf_add_field,dyn_time_lvls, dtype_r8, pbuf_register_subcol
     use shr_kind_mod,       only: r8 => shr_kind_r8
     use spmd_utils,         only: masterproc
     use constituents,       only: pcnst, cnst_add, cnst_chk_dim, cnst_name
@@ -164,6 +171,7 @@ subroutine phys_register
     !-----------------------------------------------------------------------
 
     integer :: nmodes
+    character(len=10) :: nudge_method
 
     call phys_getopts(shallow_scheme_out       = shallow_scheme, &
                       macrop_scheme_out        = macrop_scheme,   &
@@ -241,6 +249,15 @@ subroutine phys_register
          call pbuf_register_subcol('PREC_SED', 'phys_register', prec_sed_idx)
          call pbuf_register_subcol('SNOW_SED', 'phys_register', snow_sed_idx)
        end if
+
+       ! Register ML Nudging here 
+       !if (trim(nudge_method).eq."MLTBC") then
+          call pbuf_add_field('NUDGE_U',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_u_idx)
+          call pbuf_add_field('NUDGE_V',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_v_idx)
+          call pbuf_add_field('NUDGE_T',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_t_idx)
+          call pbuf_add_field('NUDGE_Q',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_q_idx)
+          call pbuf_add_field('NUDGE_PS', 'global',dtype_r8,(/pcols,dyn_time_lvls/),nudge_ps_idx)
+       !end if 
 
     ! Who should add FRACIS? 
     ! -- It does not seem that aero_intr should add it since FRACIS is used in convection
