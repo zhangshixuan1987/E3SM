@@ -659,13 +659,6 @@ module nudging
   integer  :: snow_pcw_idx = 0
   integer  :: vmag_gust_idx= 0
 
-  ! For ML nudging 
-  integer nudge_u_idx
-  integer nudge_v_idx
-  integer nudge_t_idx
-  integer nudge_q_idx
-  integer nudge_ps_idx
-
   !Parameters determined with experiment 
   !From p_relax upwards, nudging is reduced linearly 
   real(r8), parameter :: p_uv_relax = 30.E2_r8  ! p_relax for u/v wind 
@@ -1059,7 +1052,7 @@ contains
 
 
   !================================================================
-  subroutine nudging_init()
+  subroutine nudging_init(pbuf2d)
    !
    ! NUDGING_INIT: Allocate space and initialize Nudging values
    !===============================================================
@@ -1071,7 +1064,12 @@ contains
                             get_rlat_all_p,get_rlon_all_p,get_lon_all_p,get_lat_all_p           
    use cam_history   ,only: addfld, horiz_only
    use shr_const_mod ,only: SHR_CONST_PI
-   use constituents  ,only: pcnst, cnst_get_ind
+   use constituents  ,only: pcnst
+   use physics_buffer,only: pbuf_get_index,pbuf_set_field,physics_buffer_desc, &
+                            dyn_time_lvls, dtype_r8
+   use time_manager  ,only: is_first_step
+
+   type(physics_buffer_desc), pointer :: pbuf2d(:,:)
 
    ! Local values
    !----------------
@@ -1088,13 +1086,25 @@ contains
    real(r8) :: Val1_0,Val2_0,Val3_0,Val4_0
    real(r8) :: Val1_n,Val2_n,Val3_n,Val4_n
    integer  :: i,j,m,n
+   integer  :: nudge_u_idx
+   integer  :: nudge_v_idx
+   integer  :: nudge_t_idx
+   integer  :: nudge_q_idx
+   integer  :: nudge_ps_idx
 
-   ! Define physics buffers indexes
-   call cnst_get_ind('NUDGE_U',nudge_u_idx)
-   call cnst_get_ind('NUDGE_V',nudge_v_idx)
-   call cnst_get_ind('NUDGE_T',nudge_t_idx)
-   call cnst_get_ind('NUDGE_Q',nudge_q_idx)
-   call cnst_get_ind('NUDGE_PS',nudge_ps_idx)
+   !Initialize tendency to zero at the first time 
+   nudge_u_idx  = pbuf_get_index('NUDGE_U')
+   nudge_v_idx  = pbuf_get_index('NUDGE_V')
+   nudge_t_idx  = pbuf_get_index('NUDGE_T')
+   nudge_q_idx  = pbuf_get_index('NUDGE_Q')
+   nudge_ps_idx = pbuf_get_index('NUDGE_PS')
+   if (is_first_step()) then
+     call pbuf_set_field(pbuf2d, nudge_u_idx,  0.0_r8) 
+     call pbuf_set_field(pbuf2d, nudge_v_idx,  0.0_r8)
+     call pbuf_set_field(pbuf2d, nudge_t_idx,  0.0_r8)
+     call pbuf_set_field(pbuf2d, nudge_q_idx,  0.0_r8)
+     call pbuf_set_field(pbuf2d, nudge_ps_idx, 0.0_r8)
+   end if
 
    ! Allocate Space for Nudging data arrays
    !-----------------------------------------
@@ -2251,7 +2261,7 @@ contains
   !================================================================
 
   !================================================================
-  subroutine mltbc_timestep_init(state,dtime)
+  subroutine mltbc_timestep_init(state,pbuf2d,dtime)
    !
    ! DEEPONET_TIMESTEP_INIT:
    !                 Check the current time and update Model/Nudging
@@ -2260,7 +2270,7 @@ contains
    !===============================================================
    use physics_types,only: physics_state
    use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
-                             pbuf_set_field, physics_buffer_desc, pbuf_get_chunk
+                             physics_buffer_desc, pbuf_get_chunk
    use constituents, only: cnst_get_ind
    use dycore,       only: dycore_is
    use ppgrid,       only: pver,pverp,pcols,begchunk,endchunk 
@@ -2269,7 +2279,7 @@ contains
    use dyn_grid,     only: get_dyn_grid_parm,get_horiz_grid_dim_d, &
                            get_horiz_grid_d, get_dyn_grid_parm_real1d
    use filenames,    only: interpret_filename_spec
-   use time_manager, only: get_nstep,is_first_step 
+   use time_manager, only: get_nstep
    use cam_history,  only: outfld
    use physconst,    only: cpair, gravit, rga
    use phys_grid,    only: get_rlat_all_p, get_rlon_all_p
@@ -2280,9 +2290,8 @@ contains
    type(physics_state),  intent(in) :: state(begchunk:endchunk)
    real(r8),             intent(in) :: dtime
 
-   type(physics_buffer_desc), pointer :: pbuf(:)
-   type(physics_buffer_desc), pointer :: pbuf2d(:,:)
-
+   type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
+   
    ! Local values
    !----------------
    integer Year,Month,Day,Sec
@@ -2295,18 +2304,11 @@ contains
   
    ! For machine learning call   
    logical Update_MLTBC
-   integer itim_old
-   real(r8), pointer, dimension(:,:) :: Nudge_Uwat  ! Nudging tendency old u 
-   real(r8), pointer, dimension(:,:) :: Nudge_Vwat  ! Nudging tendency old v
-   real(r8), pointer, dimension(:,:) :: Nudge_Twat  ! Nudging tendency old t
-   real(r8), pointer, dimension(:,:) :: Nudge_Qwat  ! Nudging tendency old q
-   real(r8), pointer, dimension(:)   :: Nudge_PSwat ! Nudging tendency old ps
 
    !temporary working arrays 
    real(r8):: ftem(pcols,pver)
    real(r8):: ftem2(pcols) ! temporary workspace
-   real(r8):: arr(pcols,begchunk:endchunk,pver)
-   real(r8):: tmp_tend(pcols,1,begchunk:endchunk)
+   real(r8):: tmp_tend(pcols,pver,begchunk:endchunk)
 
    nstep = get_nstep()
 
@@ -2428,8 +2430,9 @@ contains
    Nudge_Tstep(:,:,:) = 0._r8
    Nudge_Qstep(:,:,:) = 0._r8
    Nudge_PSstep(:,:)  = 0._r8
+
+   tmp_tend(:,:,:)    = 0._r8
    Model_Var(:,:)     = fillvalue
-   tmp_tend(:,1,:)    = 0._r8
 
    !determine frequency of the ML call
    if ( mod(nstep,mltbc_nstep) == 0 ) then 
@@ -2439,112 +2442,22 @@ contains
    end if 
 
    if ((nstep > 0).and.(Before_End).and.((Update_Nudge).or.(Update_Model))) then
-     !call deepONet to predict nudging tendency 
+     !call machine learning model to predict correction tendency 
      if (Nudge_Uprof .ne. 0) then
-       if (Update_MLTBC) then 
-         do lchnk=begchunk,endchunk
-           ncol = state(lchnk)%ncol
-           arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
-         end do 
-         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-         call mltbc_advance(mltbc_model_path,'U',pver,Nudge_ncol,Model_Var,Nudge_Ustep) 
-         !update pbuf
-         do lchnk = begchunk, endchunk
-           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_u_idx,Nudge_Ustep(:,:,lchnk))
-         end do
-       else 
-         itim_old = pbuf_old_tim_idx()
-         do lchnk = begchunk, endchunk
-           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_u_idx,Nudge_Uwat, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Ustep(1:ncol,1:pver,lchnk) = Nudge_Uwat(1:ncol,1:pver)
-         end do
-       end if 
-     end if
+       call mltbc_calc_tend(pbuf2d,state,'U',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Ustep) 
+     end if 
      if (Nudge_Vprof .ne. 0) then
-       if (Update_MLTBC) then
-         do lchnk=begchunk,endchunk
-           ncol = state(lchnk)%ncol
-           arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
-         end do
-         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-         call mltbc_advance(mltbc_model_path,'V',pver,Nudge_ncol,Model_Var,Nudge_Vstep)
-         !update pbuf
-         do lchnk = begchunk, endchunk
-           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_v_idx,Nudge_Vstep(:,:,lchnk))
-         end do
-       else
-         itim_old = pbuf_old_tim_idx()
-         do lchnk = begchunk, endchunk
-           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_v_idx,Nudge_Vwat, & 
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Vstep(1:ncol,1:pver,lchnk) = Nudge_Vwat(1:ncol,1:pver)
-         end do
-       end if
+       call mltbc_calc_tend(pbuf2d,state,'V',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Vstep)
      end if
      if (Nudge_Tprof .ne. 0) then
-       if (Update_MLTBC) then
-         do lchnk=begchunk,endchunk
-           ncol = state(lchnk)%ncol
-           arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
-         end do
-         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-         call mltbc_advance(mltbc_model_path,'T',pver,Nudge_ncol,Model_Var,Nudge_Tstep) 
-         !update pbuf
-         do lchnk = begchunk, endchunk
-           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_t_idx,Nudge_Tstep(:,:,lchnk))
-         end do
-       else
-         itim_old = pbuf_old_tim_idx()
-         do lchnk = begchunk, endchunk
-           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_t_idx,Nudge_Twat, & 
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Tstep(1:ncol,1:pver,lchnk) = Nudge_Twat(1:ncol,1:pver)
-         end do
-       end if
+       call mltbc_calc_tend(pbuf2d,state,'T',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Tstep)
      end if
      if (Nudge_Qprof .ne. 0) then
-       if (Update_MLTBC) then
-         do lchnk=begchunk,endchunk
-           ncol = state(lchnk)%ncol
-           arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
-         end do
-         call mltbc_gather_data(arr,pver,Nudge_ncol,Model_Var)
-         call mltbc_advance(mltbc_model_path,'Q',Nudge_nlev,Nudge_ncol,Model_Var,Nudge_Qstep) 
-         !update pbuf
-         do lchnk = begchunk, endchunk
-           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_q_idx,Nudge_Qstep(:,:,lchnk))
-         end do 
-       else
-         itim_old = pbuf_old_tim_idx()
-         do lchnk = begchunk, endchunk
-           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_q_idx,Nudge_Qwat, & 
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Qstep(1:ncol,1:pver,lchnk) = Nudge_Qwat(1:ncol,1:pver)
-         end do
-       end if
+       call mltbc_calc_tend(pbuf2d,state,'Q',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Qstep)
      end if
-     if (Nudge_PSprof .ne. 0 .and. Update_MLTBC) then
-       if (Update_MLTBC) then
-         do lchnk=begchunk,endchunk
-           ncol = state(lchnk)%ncol
-           arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
-         end do
-         call mltbc_gather_data(arr,1,Nudge_ncol,Model_Var(:,1))
-         call mltbc_advance(mltbc_model_path,'PS',1,Nudge_ncol,Model_Var(:,1),tmp_tend)
-         Nudge_PSstep(:,:) = tmp_tend(:,1,:)
-         !update pbuf
-         do lchnk = begchunk, endchunk
-           call pbuf_set_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_ps_idx,Nudge_PSstep(:,lchnk))
-         end do
-       else
-         itim_old = pbuf_old_tim_idx()
-         do lchnk = begchunk, endchunk
-           call pbuf_get_field(pbuf_get_chunk(pbuf2d,lchnk),nudge_ps_idx,Nudge_PSwat, & 
-                               start=(/1,itim_old/),kount=(/pcols,1/))
-           Nudge_PSstep(1:ncol,lchnk) = Nudge_PSwat(1:ncol)
-         end do
-       end if
+     if (Nudge_PSprof .ne. 0 ) then
+       call mltbc_calc_tend(pbuf2d,state,'PS',Nudge_ncol,Update_MLTBC,Model_Var,tmp_tend)
+       Nudge_PSstep(:,:) = tmp_tend(:,1,:)
      end if
    end if 
 
@@ -2634,6 +2547,145 @@ contains
   end subroutine ! mltbc_timestep_init
 
   !===========================================================================
+  ! SZ - 05/10/2024: The main subrutine to call machine learning model for 
+  !                  and predict the bia correction tendency 
+  !===========================================================================
+  subroutine mltbc_calc_tend(pbuf2d,state,varname,ngcols,l_predict,nudge_state,nudge_tend)
+   use physics_types , only: physics_state
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             physics_buffer_desc, pbuf_get_chunk
+   use constituents  , only: cnst_get_ind,pcnst
+   use ppgrid        , only: pver,pverp,pcols,begchunk,endchunk
+
+   ! Arguments
+   !-----------
+   type(physics_state),  intent(in) :: state(begchunk:endchunk)
+
+   type(physics_buffer_desc), pointer :: pbuf2d(:,:)
+   type(physics_buffer_desc), pointer :: pbuf_chnk(:)
+
+   character(len=*), intent(in) :: varname   !nudge variable
+
+   logical,   intent(in)    :: l_predict 
+   integer,   intent(in)    :: ngcols
+   real(r8),  intent(inout) :: nudge_state(ngcols,pver)
+   real(r8),  intent(inout) :: nudge_tend(pcols,pver,begchunk:endchunk)
+
+   ! local variable 
+   integer itim_old
+   integer ncol,lchnk,indw 
+   integer nudge_u_idx
+   integer nudge_v_idx
+   integer nudge_t_idx
+   integer nudge_q_idx
+   integer nudge_ps_idx
+
+   real(r8), pointer, dimension(:,:) :: nudge_v2d  ! Nudging tendency(old) 2d 
+   real(r8), pointer, dimension(:)   :: nudge_v1d  ! Nudging tendency(old) 1d 
+
+   !temporary working arrays 
+   real(r8) :: arr(pcols,begchunk:endchunk,pver)
+
+   ! Load values at Current into the Model arrays
+   !-----------------------------------------------
+   call cnst_get_ind('Q',indw)
+
+   !Initialize tendency to zero at the first time 
+   nudge_u_idx  = pbuf_get_index('NUDGE_U')
+   nudge_v_idx  = pbuf_get_index('NUDGE_V')
+   nudge_t_idx  = pbuf_get_index('NUDGE_T')
+   nudge_q_idx  = pbuf_get_index('NUDGE_Q')
+   nudge_ps_idx = pbuf_get_index('NUDGE_PS')
+   itim_old     = pbuf_old_tim_idx()
+  
+   if (l_predict) then
+     do lchnk=begchunk,endchunk
+       ncol = state(lchnk)%ncol
+       if (trim(varname) == 'U') then
+         arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
+       end if 
+       if (trim(varname) == 'V') then
+         arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
+       end if
+       if (trim(varname) == 'T') then
+         arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
+       end if
+       if (trim(varname) == 'Q') then
+         arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
+       end if
+       if (trim(varname) == 'PS') then
+         arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
+       end if
+     end do
+
+     if (trim(varname) == 'PS') then 
+       call mltbc_gather_data(arr,1,ngcols,nudge_state(:,1))
+       call mltbc_advance(mltbc_model_path,trim(varname),1,ngcols,nudge_state(:,1),nudge_tend(:,1,:))
+     else 
+       call mltbc_gather_data(arr,pver,ngcols,nudge_state)
+       call mltbc_advance(mltbc_model_path,trim(varname),pver,ngcols,nudge_state(:,:),nudge_tend(:,:,:))
+     end if 
+
+     !update pbuf
+     do lchnk = begchunk, endchunk
+       ncol = state(lchnk)%ncol
+       pbuf_chnk => pbuf_get_chunk(pbuf2d, lchnk)
+       if (trim(varname) == 'PS') then
+         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_v1d)
+         nudge_v1d(1:ncol) = nudge_tend(1:ncol,1,lchnk)
+       else
+         if (trim(varname) == 'U') then
+           call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_v2d)
+         end if
+         if (trim(varname) == 'V') then
+           call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_v2d)
+         end if
+         if (trim(varname) == 'T') then
+           call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_v2d)
+         end if
+         if (trim(varname) == 'Q') then
+           call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_v2d)
+         end if
+         nudge_v2d(1:ncol,1:pver) = nudge_tend(1:ncol,1:pver,lchnk)
+       end if
+     end do
+   else
+     ! use previous nudging tendency       
+     do lchnk = begchunk, endchunk
+       ncol = state(lchnk)%ncol
+       pbuf_chnk => pbuf_get_chunk(pbuf2d, lchnk)
+       if (trim(varname) == 'PS') then
+         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_v1d, &
+                             start=(/1,itim_old/),kount=(/pcols,1/))
+         nudge_tend(1:ncol,1,lchnk) = nudge_v1d(1:ncol)            
+       else 
+         if (trim(varname) == 'U') then
+           call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_v2d, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         end if
+         if (trim(varname) == 'V') then
+           call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_v2d, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         end if
+         if (trim(varname) == 'T') then
+           call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_v2d, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         end if
+         if (trim(varname) == 'Q') then
+           call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_v2d, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         end if
+         nudge_tend(1:ncol,1:pver,lchnk) = nudge_v2d(1:ncol,1:pver)
+       end if         
+     end do
+   end if
+
+   ! End Routine
+   !------------
+   return
+  end subroutine ! mltbc_calc_tend
+
+  !===========================================================================
   ! JS - 11/05/2019: Based on Shixuan Zhang's suggestion, the calculation of 
   !                  nudging tendency can be done at the same location where 
   !                  the model state variables are written out.
@@ -2646,7 +2698,7 @@ contains
    use cam_history  ,only: outfld
    use physconst    ,only: cpair, gravit, rga
    use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
-                             pbuf_set_field, physics_buffer_desc
+                             physics_buffer_desc
    use phys_grid     , only: get_rlat_all_p, get_rlon_all_p
 
    ! Arguments
@@ -2814,7 +2866,7 @@ contains
    use cam_history  ,  only: outfld
    use physconst    ,  only: cpair, gravit, rair, rga, stebol, zvir
    use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
-                             pbuf_set_field, physics_buffer_desc
+                             physics_buffer_desc
    use geopotential,   only: geopotential_t
    use comsrf,         only: prcsnw
    use time_manager,   only: get_nstep
@@ -3192,7 +3244,7 @@ contains
    use cam_history  ,  only: outfld
    use physconst    ,  only: cpair, gravit, rair, rga, stebol, zvir
    use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
-                             pbuf_set_field, physics_buffer_desc
+                             physics_buffer_desc
    use comsrf,         only: prcsnw
 
 

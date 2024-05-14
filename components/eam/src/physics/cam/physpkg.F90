@@ -119,7 +119,8 @@ subroutine phys_register
     ! 
     !-----------------------------------------------------------------------
     use physics_buffer,     only: pbuf_init_time
-    use physics_buffer,     only: pbuf_add_field,dyn_time_lvls, dtype_r8, pbuf_register_subcol
+    use physics_buffer,     only: pbuf_add_field,pbuf_get_index,pbuf_set_field,physics_buffer_desc, & 
+                                  dyn_time_lvls, dtype_r8, pbuf_register_subcol
     use shr_kind_mod,       only: r8 => shr_kind_r8
     use spmd_utils,         only: masterproc
     use constituents,       only: pcnst, cnst_add, cnst_chk_dim, cnst_name
@@ -171,7 +172,6 @@ subroutine phys_register
     !-----------------------------------------------------------------------
 
     integer :: nmodes
-    character(len=10) :: nudge_method
 
     call phys_getopts(shallow_scheme_out       = shallow_scheme, &
                       macrop_scheme_out        = macrop_scheme,   &
@@ -251,13 +251,11 @@ subroutine phys_register
        end if
 
        ! Register ML Nudging here 
-       !if (trim(nudge_method).eq."MLTBC") then
-          call pbuf_add_field('NUDGE_U',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_u_idx)
-          call pbuf_add_field('NUDGE_V',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_v_idx)
-          call pbuf_add_field('NUDGE_T',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_t_idx)
-          call pbuf_add_field('NUDGE_Q',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_q_idx)
-          call pbuf_add_field('NUDGE_PS', 'global',dtype_r8,(/pcols,dyn_time_lvls/),nudge_ps_idx)
-       !end if 
+       call pbuf_add_field('NUDGE_U',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_u_idx)
+       call pbuf_add_field('NUDGE_V',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_v_idx)
+       call pbuf_add_field('NUDGE_T',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_t_idx)
+       call pbuf_add_field('NUDGE_Q',  'global',dtype_r8,(/pcols,pver,dyn_time_lvls/),nudge_q_idx)
+       call pbuf_add_field('NUDGE_PS', 'global',dtype_r8,(/pcols,dyn_time_lvls/),nudge_ps_idx)
 
     ! Who should add FRACIS? 
     ! -- It does not seem that aero_intr should add it since FRACIS is used in convection
@@ -947,7 +945,7 @@ subroutine phys_init( phys_state, phys_tend, pbuf2d, cam_out )
 
     ! Initialize Nudging Parameters
     !--------------------------------
-    if(Nudge_Model) call nudging_init
+    if(Nudge_Model) call nudging_init(pbuf2d)
 
     
    !BSINGH -  addfld and adddefault calls for perturb growth testing    
@@ -1105,7 +1103,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        end do
 
        !call deepONet nudging prediction (skip first step)
-       call mltbc_nudging(ztodt,mltbc_state)
+       call mltbc_nudging(ztodt,pbuf2d,mltbc_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
        if ( end_proc_cnt < beg_proc_cnt ) end_proc_cnt = end_proc_cnt + sysclock_max
@@ -2989,7 +2987,7 @@ subroutine add_fld_default_calls()
 
 end subroutine add_fld_default_calls
 
-subroutine mltbc_nudging(dtime,phys_state)
+subroutine mltbc_nudging(dtime,pbuf2d,phys_state)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place to call deepOnet machine learning model to predict nudging 
@@ -3001,17 +2999,20 @@ subroutine mltbc_nudging(dtime,phys_state)
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use physics_types,       only: physics_state
   use nudging,             only: Nudge_Model,mltbc_nudge,mltbc_timestep_init
+  use physics_buffer,      only: physics_buffer_desc, pbuf_get_chunk, pbuf_allocate
 
   implicit none
 
   type(physics_state), intent(in), dimension(begchunk:endchunk) :: phys_state
   real(r8), intent(in) :: dtime ! model time step sizes 
 
+  type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
+  
   !===================================
   ! Update Nudging tendency if needed
   !===================================
   if (Nudge_Model .and. mltbc_nudge) then
-     call mltbc_timestep_init(phys_state, dtime)
+     call mltbc_timestep_init(phys_state,pbuf2d,dtime)
   endif
 
 end subroutine mltbc_nudging
