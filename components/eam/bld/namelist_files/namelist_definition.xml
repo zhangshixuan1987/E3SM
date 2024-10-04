@@ -497,13 +497,13 @@
        Default: 0
        </entry>
 
-<entry id="mltbc_regional_on" type="logical" category="nudging"
+<entry id="mltbc_patch_model" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
-       Toggle Model Nudging with Machine Learning 2D Convolution model ON/OFF.
+       Turn On/Off with machine learning bias correction model trained for selected patch. 
        Default: FALSE
        </entry>
 
-<entry id="mltbc_patch_biln" type="logical" category="nudging"
+<entry id="mltbc_patch_bilerp" type="logical" category="nudging"
        group="nudging_nl" valid_values="" > 
        Turn ON/OFF bilinear interpolation for Machine Learning 2D Convolution model ON/OFF.
        Default: FALSE
@@ -515,9 +515,9 @@
        Default: 1
        </entry>
 
-<entry id="mltbc_predict_option" type="integer" category="nudging"
+<entry id="mltbc_option" type="integer" category="nudging"
        group="nudging_nl" valid_values="" >
-       Option to select type of convolution 2D model: 0 predict nudging tendency, 1 predict model state.  
+       Option to select type of machine learning bias correction model.
        Default: 0 
        </entry>
 

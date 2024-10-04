@@ -443,26 +443,26 @@ module nudging
   ! Machine Learning Bias Correction  
   public:: mltbc_nudge
   public:: mltbc_nstep 
-  public:: mltbc_regional_on
-  public:: mltbc_predict_option
-  public:: mltbc_interp_test
+  public:: mltbc_option
   public:: mltbc_patch_nxy
   public:: mltbc_patch_nlon
   public:: mltbc_patch_nlat
   public:: mltbc_patch_dx
   public:: mltbc_patch_dy
-  public:: mltbc_patch_biln
+  public:: mltbc_patch_model
+  public:: mltbc_patch_bilerp
+  public:: mltbc_bilerp_test
   public:: mltbc_timestep_init
 
-  private::mltbc_advance
-  private::mltbc_gather_data
-  private::mltbc_gather_patch
-  private::mltbc_reg_tendadv
-  private::mltbc_glb_tendadv
-  private::mltbc_don_statadv
-  private::mltbc_don_encoder
-  private::mltbc_don_tendadv
-  private::mltbc_don_decoder
+  private:: mltbc_advance_patch
+  private:: mltbc_advance_global
+  private:: mltbc_gather_data
+  private:: mltbc_single_model
+  private:: mltbc_unified_model
+  private:: mltbc_aec_deeponet
+  private:: mltbc_state_deeponet 
+  private:: mltbc_deeponet_encoder
+  private:: mltbc_deeponet_decoder
 
   ! Nudging Parameters
   !--------------------
@@ -589,10 +589,13 @@ module nudging
   real(r8), allocatable, dimension(:,:,:)   :: INTP_PHIS    ! (pcols,begchunk:endchunk,:)
 
 !Variables for machine learning bias correction 
-  real(r8), allocatable :: Model_rlat(:)            !(Nudge_ncol)
-  real(r8), allocatable :: Model_rlon(:)            !(Nudge_ncol)
-  real(r8), allocatable :: Model_wgth(:)            !(Nudge_ncol)
-  real(r8), allocatable :: Model_Var(:,:)           !(Nudge_ncol,Nudge_nlev)
+  real(r8), allocatable :: Model_rlat(:)       !(Nudge_ncol)
+  real(r8), allocatable :: Model_rlon(:)       !(Nudge_ncol)
+  real(r8), allocatable :: Model_UML(:,:,:)     !(Nudge_ncol,1,Nudge_nlev)
+  real(r8), allocatable :: Model_VML(:,:,:)     !(Nudge_ncol,1,Nudge_nlev)
+  real(r8), allocatable :: Model_TML(:,:,:)     !(Nudge_ncol,1,Nudge_nlev)
+  real(r8), allocatable :: Model_QML(:,:,:)     !(Nudge_ncol,1,Nudge_nlev)
+  real(r8), allocatable :: Model_PSML(:,:,:)    !(Nudge_ncol,1,Nudge_nlev)
 
   real(r8), allocatable :: mltbc_patch_lon(:)      !(mltbc_patch_nxy)
   real(r8), allocatable :: mltbc_patch_lat(:)      !(mltbc_patch_nxy)
@@ -668,27 +671,36 @@ module nudging
   real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
 
   !Parameters for machine learning bias correction 
-  logical  :: mltbc_nudge       = .false.
-  logical  :: mltbc_regional_on = .false.
-  logical  :: mltbc_patch_biln  = .false.
-  logical  :: mltbc_interp_test = .false.
+  logical  :: mltbc_nudge        = .false.
+  logical  :: mltbc_patch_model  = .false.
+  logical  :: mltbc_patch_bilerp = .false.
+  logical  :: mltbc_bilerp_test  = .false.
   integer  :: mltbc_nstep
-  integer  :: mltbc_predict_option
+  integer  :: mltbc_option
   integer  :: mltbc_patch_nlon
   integer  :: mltbc_patch_nlat
   integer  :: mltbc_patch_nxy
   real(r8) :: mltbc_patch_dx
   real(r8) :: mltbc_patch_dy
 
-  !logical variables
-  logical  :: l_mltbc_encoder
-  logical  :: l_mltbc_decoder
-  logical  :: l_mltbc_predictor
-
   character(len=cl) :: mltbc_model_path
-  character(len=cl) :: file_encoder     ! Machine Learning Decoder pt file
-  character(len=cl) :: file_decoder     ! Machine Learning Encoder pt file
-  character(len=cl) :: file_predictor   ! Machine Learning Model   pt file
+  character(len=cl) :: mltbc_model_uwnd
+  character(len=cl) :: mltbc_model_vwnd
+  character(len=cl) :: mltbc_model_temp
+  character(len=cl) :: mltbc_model_humd
+  character(len=cl) :: mltbc_encoder_uwnd
+  character(len=cl) :: mltbc_encoder_vwnd
+  character(len=cl) :: mltbc_decoder_uwnd
+  character(len=cl) :: mltbc_decoder_vwnd
+  character(len=cl) :: mltbc_deeponet_uwnd
+  character(len=cl) :: mltbc_deeponet_vwnd
+
+  !For machine learning nudging 
+  integer  :: nudge_u_idx  = 0
+  integer  :: nudge_v_idx  = 0 
+  integer  :: nudge_t_idx  = 0
+  integer  :: nudge_q_idx  = 0
+  integer  :: nudge_ps_idx = 0
 
 contains
   !================================================================
@@ -742,9 +754,9 @@ contains
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
-                         mltbc_model_path, mltbc_regional_on,          & 
-                         mltbc_predict_option, mltbc_interp_test,      & 
-                         mltbc_patch_biln, mltbc_nstep          
+                         mltbc_model_path, mltbc_patch_model,          & 
+                         mltbc_option, mltbc_bilerp_test,      & 
+                         mltbc_patch_bilerp, mltbc_nstep          
 
   
    ! Nudging is NOT initialized yet, For now
@@ -832,12 +844,12 @@ contains
    
    ! Set Default values for machine learing 
    !-----------------------------
-   mltbc_patch_biln     = .false.
-   mltbc_interp_test    = .false.
    mltbc_nudge          = .false.
-   mltbc_regional_on    = .false.
+   mltbc_patch_bilerp   = .false.
+   mltbc_bilerp_test    = .false.
+   mltbc_patch_model    = .false.
    mltbc_nstep          = 1 
-   mltbc_predict_option = 0
+   mltbc_option         = 0
    mltbc_patch_nlon     = 1
    mltbc_patch_nlat     = 1
    mltbc_patch_nxy      = 1
@@ -861,7 +873,7 @@ contains
      call freeunit(unitn)
    endif
 
-   if (trim(Nudge_Method).eq."MLTBC") then 
+   if (trim(Nudge_Method) .eq. "MLTBC") then 
      mltbc_nudge = .true. 
    else
      mltbc_nudge = .false.
@@ -1022,13 +1034,13 @@ contains
    call mpibcast(Nudge_NO_PBL_UV         , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T          , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q          , 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_model_path,len(mltbc_model_path)      ,mpichar,0,mpicom)
+   call mpibcast(mltbc_model_path        ,len(mltbc_model_path)    ,mpichar,0,mpicom)
    call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
-   call mpibcast(mltbc_regional_on       , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_patch_model       , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_predict_option    , 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_patch_biln        , 1, mpilog, 0, mpicom)
-   call mpibcast(mltbc_interp_test       , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_bilerp_test       , 1, mpilog, 0, mpicom)
 #endif
 
    if ( Nudge_ON .and. (Nudge_File_Ntime .ne. Nudge_Times_Per_Day) .and. (Nudge_File_Ntime .ne. 1) ) then
@@ -1086,11 +1098,6 @@ contains
    real(r8) :: Val1_0,Val2_0,Val3_0,Val4_0
    real(r8) :: Val1_n,Val2_n,Val3_n,Val4_n
    integer  :: i,j,m,n
-   integer  :: nudge_u_idx
-   integer  :: nudge_v_idx
-   integer  :: nudge_t_idx
-   integer  :: nudge_q_idx
-   integer  :: nudge_ps_idx
 
    !Initialize tendency to zero at the first time 
    nudge_u_idx  = pbuf_get_index('NUDGE_U')
@@ -1098,6 +1105,7 @@ contains
    nudge_t_idx  = pbuf_get_index('NUDGE_T')
    nudge_q_idx  = pbuf_get_index('NUDGE_Q')
    nudge_ps_idx = pbuf_get_index('NUDGE_PS')
+
    if (is_first_step()) then
      call pbuf_set_field(pbuf2d, nudge_u_idx,  0.0_r8) 
      call pbuf_set_field(pbuf2d, nudge_v_idx,  0.0_r8)
@@ -1307,11 +1315,8 @@ contains
    !-----------------------------------------------------
    ! Register output fields for Machine Learning Nudging 
    !-----------------------------------------------------
-   call addfld('DON_RGD_UERR',  (/ 'lev' /), 'A', 'm/s'   , 'DeeONet Interpolation Error for U' )
-   call addfld('DON_RGD_VERR',  (/ 'lev' /), 'A', 'm/s'   , 'DeeONet Interpolation Error for V' )
-   call addfld('DON_RGD_TERR',  (/ 'lev' /), 'A', 'K'     , 'DeeONet Interpolation Error for T' )
-   call addfld('DON_RGD_QERR',  (/ 'lev' /), 'A', 'kg/kg' , 'DeeONet Interpolation Error for Q' )
-   call addfld('DON_RGD_PSERR',  horiz_only, 'A', 'Pa'    , 'DeeONet Interpolation Error for PS' )
+   call addfld('UPATCH_RGD_ERR',  (/ 'lev' /), 'A', 'm/s'   , 'Lat-Lon Interpolation Error for U' )
+   call addfld('VPATCH_RGD_ERR',  (/ 'lev' /), 'A', 'm/s'   , 'Lat-Lon Interpolation Error for V' )
 
    !-----------------------------------------
    ! Values initialized only by masterproc
@@ -1530,12 +1535,22 @@ contains
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_T      =',Nudge_NO_PBL_T
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
      write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
-     write(iulog,*) 'NUDGING: mltbc_regional_on   =',mltbc_regional_on
+     write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
-     write(iulog,*) 'NUDGING: mltbc_predict_option=',mltbc_predict_option
-     write(iulog,*) 'NUDGING: mltbc_interp_test   =',mltbc_interp_test
-     write(iulog,*) 'NUDGING: mltbc_patch_biln    =',mltbc_patch_biln
+     write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
+     write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
+     write(iulog,*) 'NUDGING: mltbc_patch_bilerp  =',mltbc_patch_bilerp
      write(iulog,*) 'NUDGING: mltbc_model_path    =',mltbc_model_path
+     write(iulog,*) 'NUDGING: mltbc_model_uwnd    =',mltbc_model_uwnd
+     write(iulog,*) 'NUDGING: mltbc_model_vwnd    =',mltbc_model_vwnd
+     write(iulog,*) 'NUDGING: mltbc_model_temp    =',mltbc_model_temp
+     write(iulog,*) 'NUDGING: mltbc_model_humd    =',mltbc_model_humd
+     write(iulog,*) 'NUDGING: mltbc_encoder_uwnd  =',mltbc_encoder_uwnd
+     write(iulog,*) 'NUDGING: mltbc_encoder_vwnd  =',mltbc_encoder_vwnd
+     write(iulog,*) 'NUDGING: mltbc_decoder_uwnd  =',mltbc_decoder_uwnd
+     write(iulog,*) 'NUDGING: mltbc_decoder_vwnd  =',mltbc_decoder_vwnd
+     write(iulog,*) 'NUDGING: mltbc_deeponet_uwnd =',mltbc_deeponet_uwnd
+     write(iulog,*) 'NUDGING: mltbc_deeponet_vwnd =',mltbc_deeponet_vwnd
      write(iulog,*) ' '
      write(iulog,*) ' '
 
@@ -1587,11 +1602,11 @@ contains
    call mpibcast(Nudge_NO_PBL_T      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q      , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
-   call mpibcast(mltbc_regional_on   , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_patch_model   , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_predict_option, 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_patch_biln    , 1, mpilog, 0, mpicom)
-   call mpibcast(mltbc_interp_test   , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_bilerp_test   , 1, mpilog, 0, mpicom)
 !DIAG
    call mpibcast(Nudge_slat       , 1, mpiint, 0, mpicom)
 !DIAG
@@ -1802,8 +1817,16 @@ contains
            call alloc_err(istat,'Machine Learning NUDGING','Model_rlat',Nudge_ncol)
            allocate(Model_rlon(Nudge_ncol),stat=istat)
            call alloc_err(istat,'Machine Learning NUDGING','Model_rlon',Nudge_ncol)
-           allocate(Model_Var(Nudge_ncol,Nudge_nlev),stat=istat)
-           call alloc_err(istat,'nudging_init','Model_Var',Nudge_ncol*Nudge_nlev)
+           allocate(Model_UML(Nudge_ncol,1,Nudge_nlev),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_UML',Nudge_ncol*Nudge_nlev)
+           allocate(Model_VML(Nudge_ncol,1,Nudge_nlev),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_VML',Nudge_ncol*Nudge_nlev)
+           allocate(Model_TML(Nudge_ncol,1,Nudge_nlev),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_TML',Nudge_ncol*Nudge_nlev)
+           allocate(Model_QML(Nudge_ncol,1,Nudge_nlev),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_QML',Nudge_ncol*Nudge_nlev)
+           allocate(Model_PSML(Nudge_ncol,1,1),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_PSML',Nudge_ncol)
 
            !extract the lat/lon/weight info            
            call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat,clon_d_out=Model_rlon)
@@ -1811,11 +1834,10 @@ contains
 #ifdef SPMD
            call mpibcast(Model_rlat, Nudge_ncol, mpir8,   0, mpicom)
            call mpibcast(Model_rlon, Nudge_ncol, mpir8,   0, mpicom)
-          !call mpibcast(Model_wgth, Nudge_ncol, mpir8,   0, mpicom)
 #endif
           ! Initialize Machine Learning lat/lon info in local arrays
           !------------------------------------------------------
-           if (mltbc_regional_on) then
+           if (mltbc_patch_model) then
              !info to construct lat-lon for limited region
              mltbc_patch_dx   = 1.0_r8
              mltbc_patch_dy   = 1.0_r8
@@ -1827,12 +1849,12 @@ contains
              val3_0 = Nudge_Hwin_lat0 - mltbc_patch_nlat * mltbc_patch_dy / 2.0_r8 + 0.5_r8
              val4_0 = Nudge_Hwin_lat0 + mltbc_patch_nlat * mltbc_patch_dy / 2.0_r8 - 0.5_r8
 
-             if ( (mltbc_predict_option == 2) .and. (mltbc_patch_nxy /= 9216) ) then 
+             if ( (mltbc_option == 2) .and. (mltbc_patch_nxy /= 9216) ) then 
                write(iulog,*) 'Machine Learning NUDGING: Convolution model 2 only works on 96x96 lat-lon grid'
                write(iulog,*) 'Machine Learning NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth'
                call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
              end if 
-             if( (mltbc_predict_option /= 2) .and. mltbc_patch_nxy /= 4900 ) then
+             if( (mltbc_option /= 2) .and. mltbc_patch_nxy /= 4900 ) then
                write(iulog,*) 'Machine Learning NUDGING: Convolution model 1 only works on 70x70 lat-lon grid'
                write(iulog,*) 'Machine Learning NUDGING: Invalid Nudge_Hwin_latWidth and/or Nudge_Hwin_lonWidth'
                call endrun('Machine Learning NUDGING:: ERROR in namelist for Conv2d setup')
@@ -1869,7 +1891,6 @@ contains
                do j = 1, mltbc_patch_nlat
                  mltbc_patch_lat(j) = (val3_0+(j-1)*mltbc_patch_dy)*SHR_CONST_PI/180._r8
                end do
-
                call t_startf('mltbc_don_interp_init')
                !initialize the weigthing fuction to interpolate model grid to lat-lon 
                call se2latlon_interp_init(Nudge_ncol, Model_rlon, Model_rlat, & 
@@ -1884,29 +1905,103 @@ contains
                                           mltbc_latlon2se_ind, mltbc_latlon2se_wgt) 
 
                call t_stopf('mltbc_don_interp_init')
-
              end if 
 
 #ifdef SPMD
              call mpibcast(mltbc_patch_nlon,   1,                     mpiint,  0, mpicom)
              call mpibcast(mltbc_patch_nlat,   1,                     mpiint,  0, mpicom)
              call mpibcast(mltbc_patch_nxy,    1,                     mpiint,  0, mpicom)
-             call mpibcast(mltbc_patch_lon,    mltbc_patch_nlon,  mpir8,   0, mpicom)
-             call mpibcast(mltbc_patch_lat,    mltbc_patch_nlat,  mpir8,   0, mpicom)
-             call mpibcast(mltbc_se2latlon_ind, 5*mltbc_patch_nxy, mpiint,  0, mpicom)
-             call mpibcast(mltbc_se2latlon_wgt, 5*mltbc_patch_nxy, mpir8,   0, mpicom)
-             call mpibcast(mltbc_latlon2se_ind, 5*Nudge_ncol,          mpiint,  0, mpicom)
-             call mpibcast(mltbc_latlon2se_wgt, 5*Nudge_ncol,          mpir8,   0, mpicom)
+             call mpibcast(mltbc_patch_lon,    mltbc_patch_nlon,      mpir8,   0, mpicom)
+             call mpibcast(mltbc_patch_lat,    mltbc_patch_nlat,      mpir8,   0, mpicom)
+             call mpibcast(mltbc_se2latlon_ind, 5*mltbc_patch_nxy,    mpiint,  0, mpicom)
+             call mpibcast(mltbc_se2latlon_wgt, 5*mltbc_patch_nxy,    mpir8,   0, mpicom)
+             call mpibcast(mltbc_latlon2se_ind, 5*Nudge_ncol,         mpiint,  0, mpicom)
+             call mpibcast(mltbc_latlon2se_wgt, 5*Nudge_ncol,         mpir8,   0, mpicom)
 #endif
+             !prepare the machine learning model files  
+             if ( mltbc_option == 0 ) then
+               mltbc_encoder_uwnd  = trim(mltbc_model_path)//"U_Encoder.pt"
+               mltbc_encoder_vwnd  = trim(mltbc_model_path)//"V_Encoder.pt"
+               mltbc_decoder_uwnd  = trim(mltbc_model_path)//"U_Decoder.pt"
+               mltbc_decoder_vwnd  = trim(mltbc_model_path)//"V_Decoder.pt"
+               mltbc_deeponet_uwnd = trim(mltbc_model_path)//"U_DeepONet.pt"
+               mltbc_deeponet_vwnd = trim(mltbc_model_path)//"V_DeepONet.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_encoder_uwnd,  len(mltbc_encoder_uwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_encoder_vwnd,  len(mltbc_encoder_vwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_decoder_uwnd,  len(mltbc_decoder_uwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_decoder_vwnd,  len(mltbc_decoder_vwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_uwnd, len(mltbc_deeponet_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_vwnd, len(mltbc_deeponet_vwnd), mpichar, 0, mpicom)
+#endif
+             else if ( mltbc_option == 1 ) then
+               mltbc_deeponet_uwnd = trim(mltbc_model_path)//"U_DeepONet.pt"
+               mltbc_deeponet_vwnd = trim(mltbc_model_path)//"V_DeepONet.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_deeponet_uwnd, len(mltbc_deeponet_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_vwnd, len(mltbc_deeponet_vwnd), mpichar, 0, mpicom)
+#endif
+             else if ( mltbc_option == 2 ) then
+               mltbc_model_uwnd = trim(mltbc_model_path)//"U_MLTBC.pt"
+               mltbc_model_vwnd = trim(mltbc_model_path)//"V_MLTBC.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_model_uwnd, len(mltbc_model_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_model_vwnd, len(mltbc_model_vwnd), mpichar, 0, mpicom)
+#endif
+             else
+               call endrun('nudging_init error: invalid option for MLTBC model') 
+             end if
+
+             if (masterproc) then
+               write(iulog,*) 'Machine Learning NUDGING: regional ML model'
+             end if 
+
+           else  ! global model 
+
+             !prepare the machine learning model files  
+             if ( mltbc_option == 0 ) then
+               mltbc_encoder_uwnd  = trim(mltbc_model_path)//"U_Encoder.pt"
+               mltbc_encoder_vwnd  = trim(mltbc_model_path)//"V_Encoder.pt"
+               mltbc_decoder_uwnd  = trim(mltbc_model_path)//"U_Decoder.pt"
+               mltbc_decoder_vwnd  = trim(mltbc_model_path)//"V_Decoder.pt"
+               mltbc_deeponet_uwnd = trim(mltbc_model_path)//"U_DeepONet.pt"
+               mltbc_deeponet_vwnd = trim(mltbc_model_path)//"V_DeepONet.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_encoder_uwnd,  len(mltbc_encoder_uwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_encoder_vwnd,  len(mltbc_encoder_vwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_decoder_uwnd,  len(mltbc_decoder_uwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_decoder_vwnd,  len(mltbc_decoder_vwnd),  mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_uwnd, len(mltbc_deeponet_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_vwnd, len(mltbc_deeponet_vwnd), mpichar, 0, mpicom)
+#endif
+             else if ( mltbc_option == 1 ) then
+               mltbc_deeponet_uwnd = trim(mltbc_model_path)//"U_DeepONet.pt"
+               mltbc_deeponet_vwnd = trim(mltbc_model_path)//"V_DeepONet.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_deeponet_uwnd, len(mltbc_deeponet_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_deeponet_vwnd, len(mltbc_deeponet_vwnd), mpichar, 0, mpicom)
+#endif
+             else if ( mltbc_option == 2 ) then
+               mltbc_model_uwnd = trim(mltbc_model_path)//"U_MLTBC.pt"
+               mltbc_model_vwnd = trim(mltbc_model_path)//"V_MLTBC.pt"
+               mltbc_model_temp = trim(mltbc_model_path)//"T_MLTBC.pt"
+               mltbc_model_humd = trim(mltbc_model_path)//"Q_MLTBC.pt"
+#ifdef SPMD
+               call mpibcast(mltbc_model_uwnd, len(mltbc_model_uwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_model_vwnd, len(mltbc_model_vwnd), mpichar, 0, mpicom)
+               call mpibcast(mltbc_model_temp, len(mltbc_model_temp), mpichar, 0, mpicom)
+               call mpibcast(mltbc_model_humd, len(mltbc_model_humd), mpichar, 0, mpicom)
+#endif
+             else
+               call endrun('nudging_init error: invalid option for MLTBC model')
+             end if
+
+             if (masterproc) then
+               write(iulog,*) 'Machine Learning NUDGING: global ML model'
+             end if
+
            end if       
 
-           if (masterproc) then
-             if (mltbc_regional_on) then
-               write(iulog,*) 'Machine Learning NUDGING: regional ML model'
-             else 
-               write(iulog,*) 'Machine Learning NUDGING: global   ML model'
-             end if   
-           end if 
       case default
            call endrun('nudging_init error: nudge method should &
                        &be either Step, Linear , IMT or MLTBC...')
@@ -2306,9 +2401,9 @@ contains
    logical Update_MLTBC
 
    !temporary working arrays 
-   real(r8):: ftem(pcols,pver)
-   real(r8):: ftem2(pcols) ! temporary workspace
-   real(r8):: tmp_tend(pcols,pver,begchunk:endchunk)
+   real(r8) :: ftem(pcols,pver)
+   real(r8) :: ftem2(pcols) ! temporary workspace
+   real(r8) :: pstem(pcols,1,begchunk:endchunk) 
 
    nstep = get_nstep()
 
@@ -2375,30 +2470,30 @@ contains
 
      call cnst_get_ind('Q',indw)
      do lchnk=begchunk,endchunk
-
        ncol=state(lchnk)%ncol
-
-       if ( Nudge_Uprof .ne. 0 ) then
-          Model_U(:ncol,:pver,lchnk)=state(lchnk)%u(:ncol,:pver)
-       end if
-
-       if ( Nudge_Vprof .ne. 0 ) then
-          Model_V(:ncol,:pver,lchnk)=state(lchnk)%v(:ncol,:pver)
-       end if
-
-       if ( Nudge_Tprof .ne. 0 ) then
-          Model_T(:ncol,:pver,lchnk)=state(lchnk)%t(:ncol,:pver)
-       end if
-
-       if ( Nudge_Qprof .ne. 0 ) then
-          Model_Q(:ncol,:pver,lchnk)=state(lchnk)%q(:ncol,:pver,indw)
-       end if
-
-       if ( Nudge_PSprof .ne. 0 ) then
-          Model_PS(:ncol,lchnk)=state(lchnk)%ps(:ncol)
-       end if
-
+       Model_U(:ncol,:pver,lchnk)=state(lchnk)%u(:ncol,:pver)
+       Model_V(:ncol,:pver,lchnk)=state(lchnk)%v(:ncol,:pver)
+       Model_T(:ncol,:pver,lchnk)=state(lchnk)%t(:ncol,:pver)
+       Model_Q(:ncol,:pver,lchnk)=state(lchnk)%q(:ncol,:pver,indw)
+       Model_PS(:ncol,lchnk)=state(lchnk)%ps(:ncol)
      end do
+
+     !#############################################################     
+     !gather data in chunks for machine learning model 
+     !##############################################################
+     call mltbc_gather_data(Model_U,pver,Nudge_ncol,Model_UML)
+     call mltbc_gather_data(Model_V,pver,Nudge_ncol,Model_VML)
+     call mltbc_gather_data(Model_T,pver,Nudge_ncol,Model_TML)
+     call mltbc_gather_data(Model_Q,pver,Nudge_ncol,Model_QML)
+     pstem(:,1,:) = Model_PS(:,:)
+     call mltbc_gather_data(pstem,1,Nudge_ncol,Model_PSML)
+     !if (masterproc) then 
+      !write(*,*) "gather data (U):",  shape(Model_UML),minval(Model_UML),maxval(Model_UML)
+      !write(*,*) "gather data (V):",  shape(Model_VML),minval(Model_VML),maxval(Model_VML)
+      !write(*,*) "gather data (T):",  shape(Model_TML),minval(Model_TML),maxval(Model_TML)
+      !write(*,*) "gather data (Q):",  shape(Model_QML),minval(Model_QML),maxval(Model_QML)
+      !write(*,*) "gather data (PS):", shape(Model_PSML),minval(Model_PSML),maxval(Model_PSML)
+     !end if 
    end if 
 
    !----------------------------------------------------------------
@@ -2431,88 +2526,67 @@ contains
    Nudge_Qstep(:,:,:) = 0._r8
    Nudge_PSstep(:,:)  = 0._r8
 
-   tmp_tend(:,:,:)    = 0._r8
-   Model_Var(:,:)     = fillvalue
+   if ((nstep > 0).and.(Before_End).and.((Update_Nudge).or.(Update_Model)).and.(mltbc_nudge)) then
 
-   !determine frequency of the ML call
-   if ( mod(nstep,mltbc_nstep) == 0 ) then 
-     Update_MLTBC = .true.
-   else 
-     Update_MLTBC = .false.
-   end if 
+     !determine frequency of the ML call
+     if ( mod(nstep,mltbc_nstep) == 0 ) then
+       Update_MLTBC = .true.
+     else
+       Update_MLTBC = .false.
+     end if
 
-   if ((nstep > 0).and.(Before_End).and.((Update_Nudge).or.(Update_Model))) then
      !call machine learning model to predict correction tendency 
-     if (Nudge_Uprof .ne. 0) then
-       call mltbc_calc_tend(pbuf2d,state,'U',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Ustep) 
-     end if 
-     if (Nudge_Vprof .ne. 0) then
-       call mltbc_calc_tend(pbuf2d,state,'V',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Vstep)
-     end if
-     if (Nudge_Tprof .ne. 0) then
-       call mltbc_calc_tend(pbuf2d,state,'T',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Tstep)
-     end if
-     if (Nudge_Qprof .ne. 0) then
-       call mltbc_calc_tend(pbuf2d,state,'Q',Nudge_ncol,Update_MLTBC,Model_Var,Nudge_Qstep)
-     end if
-     if (Nudge_PSprof .ne. 0 ) then
-       call mltbc_calc_tend(pbuf2d,state,'PS',Nudge_ncol,Update_MLTBC,Model_Var,tmp_tend)
-       Nudge_PSstep(:,:) = tmp_tend(:,1,:)
-     end if
-   end if 
+     !write(*,*) Nudge_ncol, Update_MLTBC, minval(Nudge_PSstep)
+     call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,1,Update_MLTBC, & !in 
+                          Model_PSML,Model_UML,Model_VML,Model_TML,Model_QML, & !in  
+                          Nudge_PSstep, Nudge_Ustep, Nudge_Vstep, & ! out
+                          Nudge_Tstep, Nudge_Qstep) !out 
 
-   !Add a linear relexation of the nudging tendency on the upper layer 
-   if (Nudge_Lin_Relax_On) then
+     !Add a linear relexation of the nudging tendency 
+     if (Nudge_Lin_Relax_On) then
+       do lchnk=begchunk,endchunk
+         ncol = state(lchnk)%ncol
+         do i = 1, ncol 
+           do k = pver, 1, -1     
+             if ( state(lchnk)%pmid(i,k) < p_uv_relax ) then
+               Nudge_Utau(i,k,lchnk) = Nudge_Utau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
+               Nudge_Vtau(i,k,lchnk) = Nudge_Vtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
+             end if                    
+             if ( state(lchnk)%pmid(i,k) < p_T_relax ) then
+               Nudge_Ttau(i,k,lchnk) = Nudge_Ttau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_T_relax)
+             end if                    
+             if ( state(lchnk)%pmid(i,k) < p_q_relax ) then
+               Nudge_Qtau(i,k,lchnk) = Nudge_Qtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_Q_relax)
+             end if                    
+             if (state(lchnk)%pmid(i,k) < p_norelax ) then
+               Nudge_Utau(i,k,lchnk) = 0._r8
+               Nudge_Vtau(i,k,lchnk) = 0._r8
+               Nudge_Ttau(i,k,lchnk) = 0._r8
+               Nudge_Qtau(i,k,lchnk) = 0._r8
+             end if
+           end do 
+         end do
+       end do
+     end if
+
+     !apply the coefficient 
      do lchnk=begchunk,endchunk
        ncol = state(lchnk)%ncol
-       do i = 1, ncol 
-         do k = pver, 1, -1     
-           if ( state(lchnk)%pmid(i,k) < p_uv_relax ) then
-             Nudge_Utau(i,k,lchnk) = Nudge_Utau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
-             Nudge_Vtau(i,k,lchnk) = Nudge_Vtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
-           end if                    
-           if ( state(lchnk)%pmid(i,k) < p_T_relax ) then
-             Nudge_Ttau(i,k,lchnk) = Nudge_Ttau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_T_relax)
-           end if                    
-           if ( state(lchnk)%pmid(i,k) < p_q_relax ) then
-             Nudge_Qtau(i,k,lchnk) = Nudge_Qtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_Q_relax)
-           end if                    
-           if (state(lchnk)%pmid(i,k) < p_norelax ) then
-             Nudge_Utau(i,k,lchnk) = 0._r8
-             Nudge_Vtau(i,k,lchnk) = 0._r8
-             Nudge_Ttau(i,k,lchnk) = 0._r8
-             Nudge_Qtau(i,k,lchnk) = 0._r8
-           end if
-         end do 
-       end do
+       Nudge_Ustep(:ncol,:pver,lchnk) = Nudge_Ustep(:ncol,:pver,lchnk) &
+                                       * Nudge_Utau(:ncol,:pver,lchnk)
+       Nudge_Vstep(:ncol,:pver,lchnk) = Nudge_Vstep(:ncol,:pver,lchnk) &
+                                         * Nudge_Vtau(:ncol,:pver,lchnk)
+       Nudge_Tstep(:ncol,:pver,lchnk) = Nudge_Tstep(:ncol,:pver,lchnk) &
+                                         * Nudge_Ttau(:ncol,:pver,lchnk)
+       Nudge_Qstep(:ncol,:pver,lchnk) = Nudge_Qstep(:ncol,:pver,lchnk) &
+                                         * Nudge_Qtau(:ncol,:pver,lchnk)
+       Nudge_PSstep(:ncol,lchnk)      = Nudge_PSstep(:ncol,lchnk) &
+                                         * Nudge_PStau(:ncol,lchnk)
      end do
    end if
 
-   !apply the coefficient 
-   do lchnk=begchunk,endchunk
-
-     ncol = state(lchnk)%ncol
-
-     Nudge_Ustep(:ncol,:pver,lchnk) = Nudge_Ustep(:ncol,:pver,lchnk) &
-                                       * Nudge_Utau(:ncol,:pver,lchnk)
-
-     Nudge_Vstep(:ncol,:pver,lchnk) = Nudge_Vstep(:ncol,:pver,lchnk) &
-                                       * Nudge_Vtau(:ncol,:pver,lchnk)
-
-     Nudge_Tstep(:ncol,:pver,lchnk) = Nudge_Tstep(:ncol,:pver,lchnk) &
-                                       * Nudge_Ttau(:ncol,:pver,lchnk)
-
-     Nudge_Qstep(:ncol,:pver,lchnk) = Nudge_Qstep(:ncol,:pver,lchnk) &
-                                       * Nudge_Qtau(:ncol,:pver,lchnk)
-
-     Nudge_PSstep(:ncol,lchnk)      = Nudge_PSstep(:ncol,lchnk) &
-                                       * Nudge_PStau(:ncol,lchnk)
-
-   end do
-
    !output Diagnostics 
    do lchnk=begchunk,endchunk
-
      call outfld('U_bf_ndg',  Model_U(:,:,lchnk), pcols,lchnk)
      call outfld('V_bf_ndg',  Model_V(:,:,lchnk), pcols,lchnk)
      call outfld('T_bf_ndg',  Model_T(:,:,lchnk), pcols,lchnk)
@@ -2538,7 +2612,6 @@ contains
      ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)*(state(lchnk)%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
-
    end do 
 
    ! End Routine
@@ -2550,7 +2623,9 @@ contains
   ! SZ - 05/10/2024: The main subrutine to call machine learning model for 
   !                  and predict the bia correction tendency 
   !===========================================================================
-  subroutine mltbc_calc_tend(pbuf2d,state,varname,ngcols,l_predict,nudge_state,nudge_tend)
+  subroutine mltbc_calc_tend(pbuf2d,state,ngcols,ngrows, & !in 
+                             mltbc_on,psglb,uglb,vglb,tglb,qglb, & !in   
+                             nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q)
    use physics_types , only: physics_state
    use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
                              physics_buffer_desc, pbuf_get_chunk
@@ -2559,125 +2634,142 @@ contains
 
    ! Arguments
    !-----------
-   type(physics_state),  intent(in) :: state(begchunk:endchunk)
+   type(physics_state), intent(in) :: state(begchunk:endchunk)
 
    type(physics_buffer_desc), pointer :: pbuf2d(:,:)
    type(physics_buffer_desc), pointer :: pbuf_chnk(:)
 
-   character(len=*), intent(in) :: varname   !nudge variable
+   integer,  intent(in)    :: ngcols,ngrows
+   logical,  intent(in)    :: mltbc_on
 
-   logical,   intent(in)    :: l_predict 
-   integer,   intent(in)    :: ngcols
-   real(r8),  intent(inout) :: nudge_state(ngcols,pver)
-   real(r8),  intent(inout) :: nudge_tend(pcols,pver,begchunk:endchunk)
+   real(r8), intent(inout) :: uglb(ngcols,ngrows,pver)
+   real(r8), intent(inout) :: vglb(ngcols,ngrows,pver)
+   real(r8), intent(inout) :: tglb(ngcols,ngrows,pver)
+   real(r8), intent(inout) :: qglb(ngcols,ngrows,pver)
+   real(r8), intent(inout) :: psglb(ngcols,ngrows,1)
+
+   real(r8), intent(inout) :: nudge_u(pcols,pver,begchunk:endchunk)
+   real(r8), intent(inout) :: nudge_v(pcols,pver,begchunk:endchunk)
+   real(r8), intent(inout) :: nudge_t(pcols,pver,begchunk:endchunk)
+   real(r8), intent(inout) :: nudge_q(pcols,pver,begchunk:endchunk)
+   real(r8), intent(inout) :: nudge_ps(pcols,begchunk:endchunk)
 
    ! local variable 
-   integer itim_old
-   integer ncol,lchnk,indw 
-   integer nudge_u_idx
-   integer nudge_v_idx
-   integer nudge_t_idx
-   integer nudge_q_idx
-   integer nudge_ps_idx
+   integer :: itim_old
+   integer :: ncol,lchnk,indw 
+   
+   real(r8), pointer, dimension(:,:) :: nudge_dum2  ! Nudging tendency(old) 2d 
+   real(r8), pointer, dimension(:)   :: nudge_dum1  ! Nudging tendency(old) 1d 
 
-   real(r8), pointer, dimension(:,:) :: nudge_v2d  ! Nudging tendency(old) 2d 
-   real(r8), pointer, dimension(:)   :: nudge_v1d  ! Nudging tendency(old) 1d 
-
-   !temporary working arrays 
-   real(r8) :: arr(pcols,begchunk:endchunk,pver)
+   !initialize tendency arrays 
+   nudge_u(:,:,:) = 0.0_r8
+   nudge_v(:,:,:) = 0.0_r8
+   nudge_t(:,:,:) = 0.0_r8
+   nudge_q(:,:,:) = 0.0_r8
+   nudge_ps(:,:)  = 0.0_r8
 
    ! Load values at Current into the Model arrays
    !-----------------------------------------------
    call cnst_get_ind('Q',indw)
 
-   !Initialize tendency to zero at the first time 
+   !obtain pbuf index for nuding tendency 
    nudge_u_idx  = pbuf_get_index('NUDGE_U')
    nudge_v_idx  = pbuf_get_index('NUDGE_V')
    nudge_t_idx  = pbuf_get_index('NUDGE_T')
    nudge_q_idx  = pbuf_get_index('NUDGE_Q')
    nudge_ps_idx = pbuf_get_index('NUDGE_PS')
    itim_old     = pbuf_old_tim_idx()
-  
-   if (l_predict) then
-     do lchnk=begchunk,endchunk
-       ncol = state(lchnk)%ncol
-       if (trim(varname) == 'U') then
-         arr(:ncol,lchnk,:pver) = state(lchnk)%u(:ncol,:pver)
-       end if 
-       if (trim(varname) == 'V') then
-         arr(:ncol,lchnk,:pver) = state(lchnk)%v(:ncol,:pver)
-       end if
-       if (trim(varname) == 'T') then
-         arr(:ncol,lchnk,:pver) = state(lchnk)%t(:ncol,:pver)
-       end if
-       if (trim(varname) == 'Q') then
-         arr(:ncol,lchnk,:pver) = state(lchnk)%q(:ncol,:pver,indw)
-       end if
-       if (trim(varname) == 'PS') then
-         arr(:ncol,lchnk,1) = state(lchnk)%ps(:ncol)
-       end if
-     end do
 
-     if (trim(varname) == 'PS') then 
-       call mltbc_gather_data(arr,1,ngcols,nudge_state(:,1))
-       call mltbc_advance(mltbc_model_path,trim(varname),1,ngcols,nudge_state(:,1),nudge_tend(:,1,:))
-     else 
-       call mltbc_gather_data(arr,pver,ngcols,nudge_state)
-       call mltbc_advance(mltbc_model_path,trim(varname),pver,ngcols,nudge_state(:,:),nudge_tend(:,:,:))
+   if (mltbc_on) then
+     !#############################################################     
+     ! call machine learning model to predict the nudging tendency 
+     !##############################################################
+     if (mltbc_patch_model) then
+       !call patch model trained for specific region        
+       call t_startf('mltbc_advance_patch')
+       call mltbc_advance_patch(mltbc_model_path,pver,ngcols,ngrows,uglb,vglb, & !in 
+                                nudge_u,nudge_v) !out 
+       call t_stopf('mltbc_advance_patch')           
+     else              
+       !call global model 
+       call t_startf('mltbc_advance_global')
+       call mltbc_advance_global(mltbc_model_path,pver,ngcols,ngrows, & !in 
+                                 uglb,vglb,tglb,qglb,psglb(:,:,1), & !in 
+                                 nudge_u,nudge_v,nudge_t,nudge_q,nudge_ps) !out
+       call t_stopf('mltbc_advance_global')
      end if 
-
+     
      !update pbuf
      do lchnk = begchunk, endchunk
        ncol = state(lchnk)%ncol
        pbuf_chnk => pbuf_get_chunk(pbuf2d, lchnk)
-       if (trim(varname) == 'PS') then
-         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_v1d)
-         nudge_v1d(1:ncol) = nudge_tend(1:ncol,1,lchnk)
-       else
-         if (trim(varname) == 'U') then
-           call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_v2d)
-         end if
-         if (trim(varname) == 'V') then
-           call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_v2d)
-         end if
-         if (trim(varname) == 'T') then
-           call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_v2d)
-         end if
-         if (trim(varname) == 'Q') then
-           call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_v2d)
-         end if
-         nudge_v2d(1:ncol,1:pver) = nudge_tend(1:ncol,1:pver,lchnk)
+
+       if (Nudge_PSprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_dum1)
+         nudge_dum1(1:ncol) = nudge_ps(1:ncol,lchnk)
+       end if 
+
+       if (Nudge_Uprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_dum2)
+         nudge_dum2(1:ncol,1:pver) = nudge_u(1:ncol,1:pver,lchnk)
        end if
+
+       if (Nudge_Vprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_dum2)
+         nudge_dum2(1:ncol,1:pver) = nudge_v(1:ncol,1:pver,lchnk)
+       end if
+
+       if (Nudge_Tprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_dum2)
+         nudge_dum2(1:ncol,1:pver) = nudge_t(1:ncol,1:pver,lchnk)
+       end if
+
+       if (Nudge_Qprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_dum2)
+         nudge_dum2(1:ncol,1:pver) = nudge_q(1:ncol,1:pver,lchnk)
+       end if
+
      end do
+
    else
-     ! use previous nudging tendency       
+
+     !use previous ml predicted nudging tendency       
      do lchnk = begchunk, endchunk
        ncol = state(lchnk)%ncol
        pbuf_chnk => pbuf_get_chunk(pbuf2d, lchnk)
-       if (trim(varname) == 'PS') then
-         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_v1d, &
+
+       if (Nudge_PSprof .ne. 0) then
+         call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_dum1, &
                              start=(/1,itim_old/),kount=(/pcols,1/))
-         nudge_tend(1:ncol,1,lchnk) = nudge_v1d(1:ncol)            
-       else 
-         if (trim(varname) == 'U') then
-           call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_v2d, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-         end if
-         if (trim(varname) == 'V') then
-           call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_v2d, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-         end if
-         if (trim(varname) == 'T') then
-           call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_v2d, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-         end if
-         if (trim(varname) == 'Q') then
-           call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_v2d, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-         end if
-         nudge_tend(1:ncol,1:pver,lchnk) = nudge_v2d(1:ncol,1:pver)
-       end if         
+         nudge_ps(1:ncol,lchnk) = nudge_dum1(1:ncol)
+       end if 
+
+       if (Nudge_Uprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         nudge_u(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+
+       if (Nudge_Vprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         nudge_v(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+
+       if (Nudge_Tprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         nudge_t(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+
+       if (Nudge_Qprof .ne. 0 ) then
+         call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         nudge_q(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+
      end do
+
    end if
 
    ! End Routine
@@ -2833,7 +2925,6 @@ contains
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
    else 
      call outfld('Nudge_T', Nudge_Tstep(:,:,lchnk), pcols, lchnk)
-
      ftem(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit) 
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_T_vint',ftem2,pcols,lchnk)
@@ -2843,13 +2934,11 @@ contains
                            -Model_Q(:ncol,:pver,lchnk)) &
                          *Nudge_Utau(:ncol,:pver,lchnk)
      call outfld('Nudge_Q', ftem,pcols,lchnk)
-
      ftem(:ncol,:pver) = ftem(:ncol,:pver)*(state%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
    else
      call outfld('Nudge_Q', Nudge_Qstep(:,:,lchnk), pcols, lchnk)
-
      ftem(:ncol,:pver) = Nudge_Qstep(:ncol,:pver,lchnk)*(state%pdel(:ncol,:pver)/gravit)
      ftem2(1:ncol)     = sum( ftem(1:ncol,:), 2 )
      call outfld('Nudge_Q_vint',ftem2,pcols,lchnk)
@@ -4632,7 +4721,7 @@ contains
 #ifdef SPMD
    call mpibcast(Nudge_File_Present, 1, mpilog, 0, mpicom)
 #endif
-   if (trim(Nudge_Method).eq. "MLTBC") then
+   if (trim(Nudge_Method) .eq. "MLTBC") then
      if(masterproc) then 
         write(iulog,*) 'Warning: using Machine Learning model to predict nudging tendency'  
         write(iulog,*) 'Warning: No need to read reference data, return'
@@ -5960,435 +6049,407 @@ contains
   return
   end subroutine !update_nudging_tend
 
-  subroutine mltbc_advance(file_path,varname,nlev,ngcol,model_state,nudging_tend) 
+  subroutine mltbc_advance_patch(file_path, nlev, ngcol, ngrow, u, v, & !in
+                                 nudge_u, nudge_v) !out 
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to read and calculate the nudging
-  !                  tendency using the Machine Learning (ML) model,
-  !                  the subroutine works on a specific model state variable
+  !                  tendency using the Machine Learning (ML) model for North 
+  !                  Atalantic and Eastern US regions 
   ! SZ - 06/21/2023: Merge the DeepOnet model developed by Brown University 
+  !                  Currently the machine learning model was only trained 
+  !                  to predict nudging tendency for U, V only 
   !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
-   use phys_grid,        only : scatter_field_to_chunk 
+   use phys_grid,        only : scatter_field_to_chunk, get_ncols_p 
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history  ,    only : outfld
 
    implicit none
-   logical, parameter           :: l_print_diag = .false.
-   character(len=*), intent(in) :: file_path !Path to Machine Learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
-   integer,intent(in)           :: nlev,ngcol 
-   real(r8),intent(in)          :: model_state(ngcol,nlev)
-   real(r8),intent(inout)       :: nudging_tend(pcols,nlev,begchunk:endchunk)
 
-   ! Arguments
-   !-----------
-   type(torch_module)           :: torch_mod
-   type(torch_tensor_wrap)      :: input_tensors
-   type(torch_tensor)           :: out_tensor
+   character(len=*), intent(in) :: file_path !Path to Machine Learning model files 
+
+   integer,intent(in)           :: nlev,ngcol,ngrow 
+   real(r8),intent(in)          :: u(ngcol,ngrow,nlev)
+   real(r8),intent(in)          :: v(ngcol,ngrow,nlev)
+ 
+   real(r8),intent(inout)       :: nudge_u(pcols,nlev,begchunk:endchunk)
+   real(r8),intent(inout)       :: nudge_v(pcols,nlev,begchunk:endchunk)
+
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !parameters used to norm/denorm input/output in deeponet ml (adhoc)   !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   real(r8), parameter          :: vmin = -8.079512_r8
+   real(r8), parameter          :: vmax = 9.116263_r8
+   real(r8), parameter          :: umin = -9.915943_r8
+   real(r8), parameter          :: umax = 9.087432_r8
+   real(r8), parameter          :: utmn = -0.0010001023_r8
+   real(r8), parameter          :: utmx = 0.0013223718_r8
+   real(r8), parameter          :: vtmn = -0.0014089954_r8
+   real(r8), parameter          :: vtmx = 0.0010921889_r8
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
    ! Local variables 
    !----------------
    integer  :: ncols,lchnk
    integer  :: i,j,n,m,k,ii,jj,ierr
-   real(r8) :: vmin,vmax
-   real(r8) :: sum_x(nlev)
-   real(r8) :: wrk_tend(ngcol,nlev)
+   
+   real(r8) :: upatch(mltbc_patch_nlon,mltbc_patch_nlat,nlev)
+   real(r8) :: vpatch(mltbc_patch_nlon,mltbc_patch_nlat,nlev)
 
-   !DeepONet convolution 2d model (regional)
-   integer,  parameter :: don_conv2d_nx = 6      ! ML model trunk in X 6
-   integer,  parameter :: don_conv2d_ny = 6      ! ML model trunk in Y 6
-   real(r8), parameter :: don_tend_dtime = 3.0_r8 ! unit: hour
-
-   !DeepONet global model 
-   integer,  parameter :: don_glb_nt = 1      ! Dummy time array size
-   integer,  parameter :: don_glb_ncol = 2700   ! ML model trunk in X 6
-   integer,  parameter :: don_glb_nlev = 64     ! ML model trunk in Y 6
+   real(r8) :: utend(ngcol,nlev)
+   real(r8) :: vtend(ngcol,nlev)
+   
+   real(r8) :: uerr(ngcol,nlev)
+   real(r8) :: verr(ngcol,nlev)
 
    !Temporary work array 
-   real(r8), allocatable :: wrk_state(:,:,:)
-   real(r8), allocatable :: enc_out(:,:,:)
-   real(r8), allocatable :: don_out(:,:,:)
-   real(r8), allocatable :: dcd_out(:,:,:)
-   real(r8), allocatable :: wrk_out(:,:)
-   real(r8), allocatable :: don_stat(:,:)
+   real(r8), allocatable :: utem(:,:,:)
+   real(r8), allocatable :: vtem(:,:,:)
 
-   !initialize tendency array 
-   wrk_tend(:,:) = 0.0_r8
+   ! This subrutine only returns U, V nudging tendency only 
+   if ((Nudge_PSprof .ne. 0) .or. (Nudge_Tprof .ne. 0) .or. (Nudge_Qprof .ne. 0) ) then 
+      write(iulog,*) 'MLTBC ERROR: path model only predicts wind nudging tendency only'
+      call endrun('MLTBC ERROR: invalid option for patch model prediction')
+   end if 
 
-   !Currently the machine learning model was only trained for U, V only 
-   !Return if other variables are passed to this subroutine
-   if ((trim(varname) /= 'U') .and. (trim(varname) /= 'V')) then
-     write(iulog,*) "Machine Learning Nudging Warning: working variable ", trim(varname)
-     write(iulog,*) "Machine Learning Nudging Warning: Convolution 2D model  & 
-                     only designed for U, V nudging, return"
-     return
+   !Collect data for patch model (regrid from model grid to patch grid)
+   do k = 1, nlev 
+     upatch(:,:,k) = mltbc_global_to_latlon(ngcol,u(:,ngrow,k),mltbc_patch_nlon, & 
+                                            mltbc_patch_nlat,mltbc_patch_bilerp) 
+     vpatch(:,:,k) = mltbc_global_to_latlon(ngcol,v(:,ngrow,k),mltbc_patch_nlon, &
+                                            mltbc_patch_nlat,mltbc_patch_bilerp) 
+   end do 
+
+   !Sanity check
+   if (masterproc) then
+     if (any(upatch(:,:,:) == fillvalue) .or. any(vpatch(:,:,:) == fillvalue) ) then 
+         write(iulog,*) 'shape, min, max of upatch = ', shape(upatch),minval(upatch),maxval(upatch)
+         write(iulog,*) 'shape, min, max of vpatch = ', shape(vpatch),minval(vpatch),maxval(vpatch)
+         call endrun('MLTBC Error: mltbc_global_to_latlon returns missing values')
+     end if
    end if
 
-   !start to call deepONet model 
-   call t_startf('mltbc_don_prediction')
+   !Test the interpolation method 
+   if (mltbc_bilerp_test) then
+     do k = 1, nlev
+       uerr(:,k) = mltbc_latlon_to_global(mltbc_patch_nlon,mltbc_patch_nlat,upatch(:,:,k), & 
+                                          ngcol,mltbc_patch_bilerp)
+       verr(:,k) = mltbc_latlon_to_global(mltbc_patch_nlon,mltbc_patch_nlat,vpatch(:,:,k), &
+                                          ngcol,mltbc_patch_bilerp)
+     end do
+     !differences before and after interpolation     
+     uerr(:,:) = uerr(:,:) - u(:,ngrow,:)
+     verr(:,:) = verr(:,:) - v(:,ngrow,:)
+     !output the differences before and after interpolation  
+     allocate (utem(pcols,pver,begchunk:endchunk))
+     allocate (vtem(pcols,pver,begchunk:endchunk))
+     call scatter_field_to_chunk(1,nlev,1,ngcol,uerr,utem)
+     call scatter_field_to_chunk(1,nlev,1,ngcol,verr,vtem)
+     do lchnk=begchunk,endchunk
+       call outfld('UPATCH_RGD_ERR', utem(:,:,lchnk), pcols,lchnk)
+       call outfld('VPATCH_RGD_ERR', vtem(:,:,lchnk), pcols,lchnk)
+     end do
+     deallocate(utem,vtem) 
+   end if   
 
-   if (mltbc_regional_on) then
+   !ML model prediction
+   allocate (utem(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
+   allocate (vtem(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
 
-     allocate (wrk_out(mltbc_patch_nlon*mltbc_patch_nlat,nlev))
-     allocate (wrk_state(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
+   utem(:,:,:) = 0.0_r8
+   vtem(:,:,:) = 0.0_r8
 
-     !collect data for deepONet
-     call mltbc_gather_patch(varname,nlev,ngcol,mltbc_patch_nlon,mltbc_patch_nlat, & 
-                                model_state,wrk_state) !inout  
-     if (masterproc .and. l_print_diag ) then
-       write(iulog,*) 'shape of model_state = ', shape(model_state)
-       write(iulog,*) 'model_state(min/max) = ', minval(model_state),maxval(model_state)
-       write(iulog,*) 'shape of wrk_state   = ', shape(wrk_state)
-       write(iulog,*) 'wrk_state(min/max)   = ', minval(wrk_state),maxval(wrk_state)
-     end if
+   select case (mltbc_option)
+     case (0)
+       !option 0: auto encoder/decoder deepONet model 
+       if (Nudge_Uprof .ne. 0 ) then 
+         call mltbc_aec_deeponet(nlev,mltbc_patch_nlon,mltbc_patch_nlat,upatch,utem, & 
+                                 mltbc_encoder_uwnd, mltbc_decoder_uwnd, mltbc_deeponet_uwnd, & 
+                                 1,nlev,umin,umax,utmn,utmx)
+       end if 
+       if (Nudge_Vprof .ne. 0 ) then
+         call mltbc_aec_deeponet(nlev,mltbc_patch_nlon,mltbc_patch_nlat,vpatch,vtem, & 
+                                 mltbc_encoder_vwnd, mltbc_decoder_vwnd, mltbc_deeponet_vwnd, & 
+                                 1,nlev,vmin,vmax,vtmn,vtmx)
+       end if
+     case (1) 
+       !option 1: deepONet (before nudging state --> after nudging state) 
+       !          nudging tedency = (After - Before) / 3*3600 (3hour)
+       if (Nudge_Uprof .ne. 0 ) then
+         call mltbc_state_deeponet(nlev,mltbc_patch_nlon,mltbc_patch_nlat,upatch,utem, & 
+                                   mltbc_deeponet_uwnd,1,nlev,minval(upatch),maxval(upatch))
+       end if 
+       if (Nudge_Vprof .ne. 0 ) then
+         call mltbc_state_deeponet(nlev,mltbc_patch_nlon,mltbc_patch_nlat,vpatch,vtem, & 
+                                   mltbc_deeponet_vwnd,1,nlev,minval(vpatch),maxval(vpatch))
+       end if
+     case (2)
+       !option 2: ML(state)-->ML(tendency),predict nudging tendency from before nuding state
+       !          no auto encoder-decoder is needed 
+       if (Nudge_Uprof .ne. 0 ) then
+         call mltbc_single_model(nlev,mltbc_patch_nlon,mltbc_patch_nlat,upatch,utem, &
+                                 mltbc_model_uwnd,1,nlev)
+       end if 
+       if (Nudge_Vprof .ne. 0 ) then
+         call mltbc_single_model(nlev,mltbc_patch_nlon,mltbc_patch_nlat,vpatch,vtem, & 
+                                 mltbc_model_vwnd,1,nlev)
+       end if
+     case default             
+       call endrun('Machine Learning Nudging Error: invalid option for patch model (regional)')
+   end select
 
-     !There are two options for convolution 2D model
-     select case (mltbc_predict_option)
-       case (0)      
-         !option 0: encoder-->deepONet-->decoder approach to 
-         !          predict nudging tendency from before nuding state
-         allocate (enc_out(don_conv2d_nx,don_conv2d_ny,nlev))
-         allocate (don_out(don_conv2d_nx,don_conv2d_ny,nlev))
-         allocate (dcd_out(mltbc_patch_nlon,mltbc_patch_nlat,nlev))
-
-         !call encoder 
-         call mltbc_don_encoder(mltbc_regional_on,file_path,varname, & 
-                                mltbc_patch_nlon,mltbc_patch_nlat,nlev, & 
-                                don_conv2d_nx,don_conv2d_ny,nlev, & 
-                                wrk_state,enc_out)
- 
-         !call deeponet               
-         call mltbc_don_tendadv(mltbc_regional_on,file_path,varname, &
-                                don_conv2d_nx,don_conv2d_ny,nlev, & 
-                                enc_out,don_out)
-
-         !call decoder                
-         call mltbc_don_decoder(mltbc_regional_on,file_path,varname, & 
-                                mltbc_patch_nlon,mltbc_patch_nlat,nlev, &
-                                don_conv2d_nx,don_conv2d_ny,nlev, &
-                                don_out,dcd_out)
-
-         !prepare for final regrid 
-         do j = 1, mltbc_patch_nlat
-           do i = 1, mltbc_patch_nlon
-             m = (j-1)*mltbc_patch_nlon + i
-             wrk_out(m,:) = dcd_out(i,j,:) 
-           end do
-         end do
-         deallocate(enc_out)
-         deallocate(don_out)
-         deallocate(dcd_out)
-
-       case (1) 
-         allocate (don_stat(mltbc_patch_nlon*mltbc_patch_nlat,nlev))
-         !option 1: deepONet (before nudging state --> after nudging state) 
-         !          nudging tedency = (After - Before) / 3*3600 (3hour)
-         call mltbc_don_statadv(file_path,varname,mltbc_patch_nlon,mltbc_patch_nlat, &
-                                nlev,wrk_state,don_stat)
-         !compute nudging tendency 
-         do j = 1, mltbc_patch_nlat
-           do i = 1, mltbc_patch_nlon
-             m = (j-1)*mltbc_patch_nlon + i 
-             !calculate nudging tendency 
-             wrk_out(m,:) = (don_stat(m,:) - wrk_state(i,j,:)) / don_tend_dtime / sec_per_hour
-           end do
-         end do
-         deallocate(don_stat)
-
-       case (2) 
-         !option 2: ML(state)-->ML(tendency)
-         !          predict nudging tendency from before nuding state
-         !call machine learning model 
-         call mltbc_reg_tendadv(file_path,varname,mltbc_patch_nlon,mltbc_patch_nlat, &
-                                nlev,wrk_state,wrk_out)
-       case default
-         call endrun('Machine Learning Nudging Error: invalid option for regional model option')
-     end select
-
-     !Debug Diagnostics 
-     if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'mltbc_advance: run deepONet successfully'
-       write(iulog,*) 'predict variable = ',varname
-       write(iulog,*) 'shape of wrk_in  = ',shape(wrk_state)
-       write(iulog,*) 'wrk_in(min/max)  = ',minval(wrk_state),maxval(wrk_state)
-       write(iulog,*) 'shape of wrk_out = ',shape(wrk_out)
-       write(iulog,*) 'wrk_out(min/max) = ',minval(wrk_out),maxval(wrk_out)
-     end if
-
-     !convert data back to model grid
-     if ( .not. mltbc_patch_biln ) then
-       !method 1: nearest to destination grid 
-       do j = 1, mltbc_patch_nlat
-         do i = 1, mltbc_patch_nlon
-           m = (j-1)*mltbc_patch_nlon + i
-           n = mltbc_se2latlon_ind(m,5)
-           wrk_tend(n,:) = wrk_out(m,:) 
-         end do 
-       end do
-     else 
-       !method 2: linear interpolation to destination grid 
-       do n = 1, Nudge_ncol
-         j = 0 
-         sum_x(:) = 0.0_r8
-         do i = 1, 4 
-           if (mltbc_latlon2se_wgt(n,i) == 0.0_r8) j = j + 1
-           m = mltbc_latlon2se_ind(n,i) 
-           sum_x(:) = sum_x(:) + mltbc_latlon2se_wgt(n,i) * wrk_out(m,:) 
-         end do
-         if (j /= 4) then
-           wrk_tend(n,:) = sum_x(:)
-         end if 
-       end do   
-     end if
-
-     !release array space   
-     deallocate(wrk_out)
-     deallocate(wrk_state)
-
-   else ! global model 
-
-     !There are two options for gobal model 
-     select case (mltbc_predict_option)
-       !option : ML(state)-->ML(tendency)
-       !         predict nudging tendency from before nuding state
-       !call machine learning model 
-       case (0)
-         !option 0 w/ ViTO,Unet,M&M: ML(X)-> X_tend approach
-         call mltbc_glb_tendadv(file_path,varname,ngcol,nlev,model_state,wrk_tend)
-       case (1)
-         !option 1 w/ DeepONet: encoder(X)-->Y-->deepONet(Y)-->Z-->decoder(Z)--> approach 
-         allocate (enc_out(don_glb_ncol,don_glb_nlev,don_glb_nt))
-         allocate (don_out(don_glb_ncol,don_glb_nlev,don_glb_nt))
-         allocate (dcd_out(ngcol,nlev,don_glb_nt))
-         allocate (wrk_state(ngcol,nlev,don_glb_nt))
-         wrk_state(1:ngcol,1:nlev,1) = model_state(1:ngcol,1:nlev)
-
-         !call encoder 
-         call mltbc_don_encoder(mltbc_regional_on,file_path,varname, & 
-                                ngcol,nlev,don_glb_nt, &
-                                don_glb_ncol,don_glb_nlev,don_glb_nt, & 
-                                wrk_state,enc_out)
-         !call deeponet               
-         call mltbc_don_tendadv(mltbc_regional_on,file_path,varname, & 
-                                don_glb_ncol,don_glb_nlev,don_glb_nt, & 
-                                enc_out,don_out)
-         !call decoder                
-         call mltbc_don_decoder(mltbc_regional_on,file_path,varname, & 
-                                ngcol,nlev,don_glb_nt, &
-                                don_glb_ncol,don_glb_nlev,don_glb_nt, &
-                                don_out,dcd_out)
-
-         wrk_tend(1:ngcol,1:nlev) = dcd_out(1:ngcol,1:nlev,1) 
-         deallocate(wrk_state)
-         deallocate(enc_out)
-         deallocate(don_out)
-         deallocate(dcd_out)
-       case default
-         call endrun('Machine Learning Nudging Error: invalid option for global model option')
-     end select
-
-   end if
-   call t_stopf('mltbc_don_prediction')
+   !convert data back to model grid
+   do k = 1, nlev
+     utend(:,k) = mltbc_latlon_to_global(mltbc_patch_nlon,mltbc_patch_nlat,utem(:,:,k), & 
+                                         ngcol,mltbc_patch_bilerp)
+     vtend(:,k) = mltbc_latlon_to_global(mltbc_patch_nlon,mltbc_patch_nlat,vtem(:,:,k), & 
+                                         ngcol,mltbc_patch_bilerp)
+   end do
 
    !scatter filed to chunk (from wrk_tend to nudging_tend) 
-   call scatter_field_to_chunk(1,nlev,1,Nudge_ncol,wrk_tend,nudging_tend)
+   call scatter_field_to_chunk(1,nlev,1,ngcol,utend,nudge_u)
+   call scatter_field_to_chunk(1,nlev,1,ngcol,vtend,nudge_v)
+   deallocate(utem,vtem)
 
    return
-  end subroutine !mltbc_advance 
+  end subroutine !mltbc_advance_patch 
 
-  subroutine mltbc_glb_tendadv(file_path,varname,ncol,nz,vari,varo)
+  subroutine mltbc_advance_global(file_path,nlev,ngcol,ngrow,u,v,t,q,ps, & !in 
+                                  nudge_u,nudge_v,nudge_t,nudge_q,nudge_ps) !out
+   !===========================================================================
+   ! SZ - 06/05/2023: This subroutine attempt to read and calculate the nudging
+   !                  tendency using the Machine Learning (ML) model for regions 
+   !                  over the globe 
+   ! SZ - 06/21/2023: Merge the DeepOnet model developed by Brown University 
+   !===========================================================================
+   use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
+   use phys_grid,        only : scatter_field_to_chunk
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+   use cam_history  ,    only : outfld
+
+   implicit none
+
+   character(len=*), intent(in)  :: file_path !Path to Machine Learning model files 
+   integer,intent(in)            :: nlev,ngcol,ngrow
+   real(r8),intent(inout)        :: u(ngcol,ngrow,nlev)
+   real(r8),intent(inout)        :: v(ngcol,ngrow,nlev)
+   real(r8),intent(inout)        :: t(ngcol,ngrow,nlev)
+   real(r8),intent(inout)        :: q(ngcol,ngrow,nlev)
+   real(r8),intent(inout)        :: ps(ngcol,ngrow)
+
+   real(r8),intent(inout)        :: nudge_u(pcols,nlev,begchunk:endchunk)
+   real(r8),intent(inout)        :: nudge_v(pcols,nlev,begchunk:endchunk)
+   real(r8),intent(inout)        :: nudge_t(pcols,nlev,begchunk:endchunk)
+   real(r8),intent(inout)        :: nudge_q(pcols,nlev,begchunk:endchunk)
+   real(r8),intent(inout)        :: nudge_ps(pcols,begchunk:endchunk)
+
+   ! Local variables 
+   !----------------
+   integer  :: ncols,lchnk
+   integer  :: i,j,n,m,k,ii,jj,ierr
+
+   real(r8) :: utend(ngcol,ngrow,nlev)
+   real(r8) :: vtend(ngcol,ngrow,nlev)
+   real(r8) :: ttend(ngcol,ngrow,nlev)
+   real(r8) :: qtend(ngcol,ngrow,nlev)
+   real(r8) :: pstend(ngcol)
+
+   ! This subrutine only returns U, V nudging tendency only 
+   if (Nudge_PSprof .ne. 0) then
+      write(iulog,*) 'MLTBC ERROR: prediction of surface pressure nudging tendency not implemented'
+      call endrun('MLTBC ERROR: invalid option for global model prediction')
+   else 
+     pstend(:)    = 0.0_r8
+   end if
+
+   utend(:,:,:) = 0.0_r8
+   vtend(:,:,:) = 0.0_r8
+   ttend(:,:,:) = 0.0_r8
+   qtend(:,:,:) = 0.0_r8
+
+   select case (mltbc_option)
+     case (0)
+       !option 0: auto encoder/decoder deepONet model 
+       if (Nudge_Uprof .ne. 0 ) then
+         call mltbc_aec_deeponet(nlev,ngcol,ngrow,u,utend, & 
+                                 mltbc_encoder_uwnd, & 
+                                 mltbc_decoder_uwnd, & 
+                                 mltbc_deeponet_uwnd, & 
+                                 1,nlev)
+       end if
+       if (Nudge_Vprof .ne. 0 ) then
+         call mltbc_aec_deeponet(nlev,ngcol,ngrow,v,vtend,& 
+                                 mltbc_encoder_vwnd, & 
+                                 mltbc_decoder_vwnd, & 
+                                 mltbc_deeponet_vwnd, &
+                                 1,nlev)
+       end if
+     case (1)
+       !option 2: ML(state)-->ML(tendency),predict nudging tendency with model state
+       !          no auto encoder-decoder is needed, and only for U, V 
+       if (Nudge_Uprof .ne. 0 ) then
+         call mltbc_single_model(nlev,ngcol,ngrow,u,utend,mltbc_model_uwnd,1,nlev)
+       end if
+       if (Nudge_Vprof .ne. 0 ) then
+         call mltbc_single_model(nlev,ngcol,ngrow,v,vtend,mltbc_model_vwnd,1,nlev)
+       end if
+     case (2)
+       !option 2: ML(state)-->ML(tendency),predict nudging tendency from model state
+       !          no auto encoder-decoder is needed, and only for global  
+       call mltbc_unified_model(nlev,ngcol,ngrow,u,v,t,q, & !in 
+                                mltbc_model_uwnd,mltbc_model_vwnd, & ! in 
+                                mltbc_model_temp,mltbc_model_humd, & !in 
+                                utend,vtend,ttend,qtend) ! out 
+     case default
+       call endrun('Machine Learning Nudging Error: invalid option for global model')
+   end select
+
+   !scatter filed to chunk (from wrk_tend to nudging_tend) 
+   call scatter_field_to_chunk(1,nlev,1,ngcol,utend(:,1,:),nudge_u)
+   call scatter_field_to_chunk(1,nlev,1,ngcol,vtend(:,1,:),nudge_v)
+   call scatter_field_to_chunk(1,nlev,1,ngcol,ttend(:,1,:),nudge_t)
+   call scatter_field_to_chunk(1,nlev,1,ngcol,qtend(:,1,:),nudge_q)
+   call scatter_field_to_chunk(1,1,1,ngcol,pstend(:),nudge_ps)
+
+   return
+  end subroutine !mltbc_advance_global
+
+  subroutine mltbc_unified_model(nz,nx,ny,u,v,t,q, & !input 
+                                 u_model_pt,v_model_pt,t_model_pt,q_model_pt, & !input 
+                                 utend, vtend, ttend, qtend) ! output 
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for
   !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+   use torch_ftn
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to machine learning model files
-   character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: ncol,nz
-   real(r8),intent(in)          :: vari(ncol,nz)
-   real(r8),intent(inout)       :: varo(ncol,nz)
+ 
+   integer, intent(in)          :: nx,ny,nz
 
+   character(len=*), intent(in) :: u_model_pt !ML pt file (U)
+   character(len=*), intent(in) :: v_model_pt !ML pt file (V)
+   character(len=*), intent(in) :: t_model_pt !ML pt file (T)
+   character(len=*), intent(in) :: q_model_pt !ML pt file (Q)
+
+   real(r8),intent(inout)       :: u(nx,ny,nz)
+   real(r8),intent(inout)       :: v(nx,ny,nz)
+   real(r8),intent(inout)       :: t(nx,ny,nz)
+   real(r8),intent(inout)       :: q(nx,ny,nz)
+   real(r8),intent(inout)       :: utend(nx,ny,nz)
+   real(r8),intent(inout)       :: vtend(nx,ny,nz)
+   real(r8),intent(inout)       :: ttend(nx,ny,nz)
+   real(r8),intent(inout)       :: qtend(nx,ny,nz)
+   
    ! Arguments
    !-----------
    type(torch_module)           :: torch_mod
    type(torch_tensor_wrap)      :: input_tensors
-   type(torch_tensor)           :: out_tensor
+   type(torch_tensor)           :: u_tensor
+   type(torch_tensor)           :: v_tensor
+   type(torch_tensor)           :: t_tensor
+   type(torch_tensor)           :: q_tensor
 
    ! Local values
    !----------------
-   logical, parameter           :: l_print_diag = .false.
+   logical                      :: l_u_predictor
+   logical                      :: l_v_predictor
+   logical                      :: l_t_predictor
+   logical                      :: l_q_predictor
    integer                      :: i,j,n,m,k,ii,jj
-   real(r4)                     :: doninp(ncol,nz,1)
-   real(r4), pointer            :: donout(:,:,:)
+   real(r8), pointer            :: output(:,:,:)
 
    if (masterproc) then
      !check if machine learning pt file exist 
-     file_predictor = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
-     if ( .not. l_mltbc_predictor) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
+     inquire(file=trim(u_model_pt),exist=l_u_predictor)
+     inquire(file=trim(v_model_pt),exist=l_v_predictor)
+     inquire(file=trim(t_model_pt),exist=l_t_predictor)
+     inquire(file=trim(q_model_pt),exist=l_q_predictor)
+     if ( (.not. l_u_predictor) .or. (.not. l_v_predictor) .or. & 
+          (.not. l_t_predictor) .or. (.not. l_q_predictor) ) then
+       write(iulog,*) "ERROR: "//trim(u_model_pt)//" not found!"
+       write(iulog,*) "ERROR: "//trim(v_model_pt)//" not found!"
+       write(iulog,*) "ERROR: "//trim(t_model_pt)//" not found!"
+       write(iulog,*) "ERROR: "//trim(q_model_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file not exist')
      end if
    end if
-#ifdef SPMD
-   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
-#endif
 
-   call t_startf ('mltbc_input_reorg')
+   utend(:,:,:) = 0.0_r8
+   vtend(:,:,:) = 0.0_r8
+   ttend(:,:,:) = 0.0_r8
+   qtend(:,:,:) = 0.0_r8
+
    !prepare input data
    !note: if use do loops, always remember to put lev as the innerest loop 
-   doninp(:,:,1) = real(vari(:,:),kind=r4) ! single precision: float 32, 64 
-   call t_stopf ('mltbc_input_reorg')
-
-   call t_startf ('mltbc_create_array')
+   !note: should do precision conversion in ml pt files 
+   call t_startf ('mltbc_unified_model_input')
    call input_tensors%create
-   call t_stopf ('mltbc_create_array')
+   call input_tensors%add_array(u)
+   call input_tensors%add_array(v)
+   call input_tensors%add_array(t)
+   call input_tensors%add_array(q)
+   call t_stopf  ('mltbc_unified_model_input')
 
-   call t_startf ('mltbc_add_array')
-   call input_tensors%add_array(doninp)
-   call t_stopf ('mltbc_add_array')
-
-   call t_startf ('mltbc_load_mlpt')
-   call torch_mod%load(trim(file_path)//trim(file_predictor))
-   call t_stopf ('mltbc_load_mlpt')
-
-   call t_startf ('mltbc_forward_model')
-   call torch_mod%forward(input_tensors,out_tensor,1)
-   call t_stopf ('mltbc_forward_model')
-
-   call t_startf ('mltbc_output_array')
-   call out_tensor%to_array(donout)
-   call t_stopf ('mltbc_output_array')
-
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of doninp = ',shape(doninp)
-     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
-     write(iulog,*) 'shape of donout = ',shape(donout)
-     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
+   call t_startf ('mltbc_unified_model_forward')
+   if (Nudge_Uprof .ne. 0 ) then
+     call torch_mod%load(trim(u_model_pt))
+     call torch_mod%forward(input_tensors,u_tensor)
+     call u_tensor%to_array(output)
+     !output  
+     utend(1:nx,1:ny,1:nz) = output(1:nx,1:ny,1:nz)
    end if
 
-   call t_startf ('mltbc_output_reorg')
-   !return output data
-   varo(:,:) = real(donout(:,:,1),kind=r8)
-   call t_stopf ('mltbc_output_reorg')
+   if (Nudge_Vprof .ne. 0 ) then
+     call torch_mod%load(trim(v_model_pt))
+     call torch_mod%forward(input_tensors,v_tensor)
+     call v_tensor%to_array(output)
+     !output  
+     vtend(1:nx,1:ny,1:nz) = output(1:nx,1:ny,1:nz)
+   end if
+
+   if (Nudge_Tprof .ne. 0 ) then
+     call torch_mod%load(trim(t_model_pt))
+     call torch_mod%forward(input_tensors,t_tensor)
+     call t_tensor%to_array(output)
+     !output  
+     ttend(1:nx,1:ny,1:nz) = output(1:nx,1:ny,1:nz)
+   end if
+
+   if (Nudge_Qprof .ne. 0 ) then
+     call torch_mod%load(trim(q_model_pt))
+     call torch_mod%forward(input_tensors,q_tensor)
+     call q_tensor%to_array(output)
+     !output  
+     qtend(1:nx,1:ny,1:nz) = output(1:nx,1:ny,1:nz)
+   end if
+   call t_stopf ('mltbc_unified_model_forward')
 
    return
-  end subroutine !mltbc_glb_tendadv
+  end subroutine !mltbc_unified_model
 
-  subroutine mltbc_reg_tendadv(file_path,varname,nx,ny,nz,vari,varo)
+  subroutine mltbc_single_model(nz,nx,ny,vari,varo,ml_model_pt,kbot,ktop)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
   !                  the Machine Learning (ML) model,
   !===========================================================================
    use cam_abortutils  , only : endrun
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+   use torch_ftn
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to machine learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
+
    integer, intent(in)          :: nx,ny,nz
-   real(r8),intent(in)          :: vari(nx,ny,nz)
-   real(r8),intent(inout)       :: varo(nx*ny,nz)
 
-   ! Arguments
-   !-----------
-   type(torch_module)           :: torch_mod
-   type(torch_tensor_wrap)      :: input_tensors
-   type(torch_tensor)           :: out_tensor
+   character(len=*), intent(in) :: ml_model_pt   !ML pt file 
 
-   ! Local values
-   !----------------
-   logical, parameter           :: l_print_diag = .false.
-   integer                      :: i,j,n,m,k,ii,jj
-   real(r4)                     :: doninp(nx,ny,nz,1)
-   real(r4), pointer            :: donout(:,:,:,:)
-
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     file_predictor = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
-     if ( .not. l_mltbc_predictor) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
-     end if
-   end if
-#ifdef SPMD
-   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
-#endif
-
-   call t_startf ('mltbc_input_reorg')
-   !prepare input data 
-   !do k = 1,nz
-   !  do j = 1,ny
-   !    do i = 1,nx
-   !      doninp(i,j,k,1) = real(vari(i,j,k),kind=r4)
-   !    end do
-   !  end do
-   !end do
-   !avoide do loops to obtain computational gain 
-   doninp(:,:,:,1) = real(vari(:,:,:),kind=r4)
-
-   call t_stopf ('mltbc_input_reorg')
-
-   call t_startf ('mltbc_create_array')
-   call input_tensors%create
-   call t_stopf ('mltbc_create_array')
-
-   call t_startf ('mltbc_add_array')
-   call input_tensors%add_array(doninp)
-   call t_stopf ('mltbc_add_array')
-
-   call t_startf ('mltbc_load_pt')
-   call torch_mod%load(trim(file_path)//trim(file_predictor))
-   call t_stopf ('mltbc_load_pt')
-
-   call t_startf ('mltbc_forward_model')
-   call torch_mod%forward(input_tensors,out_tensor,1)
-   call t_stopf ('mltbc_forward_model')
-
-   call t_startf ('mltbc_ouput_array')
-   call out_tensor%to_array(donout)
-   call t_stopf ('mltbc_output_array')
-
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of doninp = ',shape(doninp)
-     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
-     write(iulog,*) 'shape of donout = ',shape(donout)
-     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
-   end if
-
-   call t_startf ('mltbc_output_reorg')
-   !return output data
-   do j = 1, ny
-     do i = 1, nx
-       m = (j-1)*nx + i
-       varo(m,:) = real(donout(i,j,:,1),kind=r8) 
-     end do
-   end do
-   call t_stopf ('mltbc_output_reorg')
-
-   return
-  end subroutine !mltbc_reg_tendadv
-
-  subroutine mltbc_don_tendadv(l_conv2d,file_path,varname,nx,ny,nz,vari,varo)
-  !===========================================================================
-  ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
-  !                  the Machine Learning (ML) model,
-  !===========================================================================
-   use cam_abortutils  , only : endrun
-   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
-
-   implicit none
-   logical, intent(in)          :: l_conv2d
-   character(len=*), intent(in) :: file_path !Path to machine learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx,ny,nz
    real(r8),intent(in)          :: vari(nx,ny,nz)
    real(r8),intent(inout)       :: varo(nx,ny,nz)
 
+   integer, intent(in),optional :: kbot,ktop
+
    ! Arguments
    !-----------
    type(torch_module)           :: torch_mod
@@ -6397,123 +6458,263 @@ contains
 
    ! Local values
    !----------------
-   logical, parameter           :: l_print_diag = .false.
+   logical                      :: l_ml_predictor
    integer                      :: i,j,n,m,k,ii,jj
+   integer                      :: k1, k2 
+   real(r4), allocatable        :: input3d(:,:,:)
+   real(r4), allocatable        :: input4d(:,:,:,:)
+   real(r4), pointer            :: output3d(:,:,:)
+   real(r4), pointer            :: output4d(:,:,:,:)
 
-   ! convolution 2d (regional)  
-   integer, parameter           :: dumy_nt = 248 ! Dummy time array size
-   real(r8)                     :: donmin, donmax
-   real(r4)                     :: vmax,vmin
-   real(r4)                     :: x_trunk(1,dumy_nt)    
-   real(r4)                     :: donin4d(nx*ny,dumy_nt,1,nz)
-   real(r4), pointer            :: donout4d(:,:,:,:)
-
-   ! global model  
-   real(r4)                     :: donin3d(nx,ny,nz)
-   real(r4), pointer            :: donout3d(:,:,:)
+   k1 = 1
+   k2 = nz
+   if (present(kbot)) k1 = kbot
+   if (present(ktop)) k2 = ktop
 
    if (masterproc) then
      !check if machine learning pt file exist 
-     file_predictor = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
-     if ( .not. l_mltbc_predictor) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
+     inquire(file=trim(ml_model_pt),exist=l_ml_predictor)
+     if ( .not. l_ml_predictor) then
+       write(iulog,*) "ERROR: "//trim(ml_model_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file not exist')
      end if
    end if
-#ifdef SPMD
-   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
-#endif
 
-   if ( l_conv2d ) then 
-
-     !parameters to denormalize DeepONet prediction
-     if (trim(varname) == 'U') then
-       donmax = 9.087432_r8
-       donmin = -9.915943_r8
-     else  ! "V"
-       donmax = 9.116263_r8
-       donmin = -8.079512_r8
-     end if
-
-     !prepare input data with normalization using min/max 
-     vmin = real(minval(vari),kind=r4)
-     vmax = real(maxval(vari),kind=r4)
-     do j = 1,ny
-       do i = 1,nx
-         m = (j-1)*nx + i
-         donin4d(m,1,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmin)/(vmax-vmin)-1.0_r4
-       end do
-     end do
-
-     !convolution 2D model options 
-     !0: before nudging state->nudging tendency 
-     !dummy input time
-     do n = 1,dumy_nt
-       x_trunk(1,n) = 2.0_r4*(real(n,kind=r4)-1.0_r4)/(real(dumy_nt,kind=r4)-1.0_r4)-1.0_r4
-       if ( n > 1 ) then 
-         donin4d(:,n,1,:) = donin4d(:,1,1,:)
-       end if 
-     end do
-
+   varo(:,:,:) = 0.0_r8
+   
+   call t_startf ('mltbc_single_model_input')
+   if (mltbc_patch_model) then
+     allocate(input4d(nx,ny,k2-k1+1,1))
+     input4d(:,:,:,1) = real(vari(:,:,k1:k2),kind=r4)
      call input_tensors%create
-     call input_tensors%add_array(donin4d)
-     call input_tensors%add_array(x_trunk)
-     call torch_mod%load(trim(file_path)//trim(file_predictor))
-     call torch_mod%forward(input_tensors,out_tensor,1)
-     call out_tensor%to_array(donout4d)
-
-     if (masterproc.and.l_print_diag) then
-       write(iulog,*) 'shape of donin  = ',shape(donin4d)
-       write(iulog,*) 'donin(min/max)  = ',minval(donin4d),maxval(donin4d)
-       write(iulog,*) 'shape of donout = ',shape(donout4d)
-       write(iulog,*) 'donout(min/max) = ',minval(donout4d),maxval(donout4d)
-     end if
-
-     !denormalize the deeponet prediction and output data
-     do j = 1, ny
-       do i = 1, nx
-         m = (j-1)*nx + i
-         varo(i,j,:) = 0.5_r8*(real(donout4d(i,j,1,:),kind=r8)+1.0_r8)*(donmax-donmin)+donmin
-       end do
-     end do
-   else 
-     !prepare input data 
-     donin3d(1:nx,1:ny,1:nz) = real(vari(1:nx,1:ny,1:nz),kind=r4)
-     ! call deepOnet 
+     call input_tensors%add_array(input4d)
+   else
+     allocate(input3d(nx*ny,k2-k1+1,1))
+     input3d(:,:,1) = real(vari(:,1,k1:k2),kind=r4)
      call input_tensors%create
-     call input_tensors%add_array(donin3d)
-     call torch_mod%load(trim(file_path)//trim(file_predictor))
-     call torch_mod%forward(input_tensors,out_tensor,1)
-     call out_tensor%to_array(donout3d)
+     call input_tensors%add_array(input3d)
+   end if 
+   call t_stopf  ('mltbc_single_model_input')
 
-     if (masterproc.and.l_print_diag) then
-       write(iulog,*) 'shape of donin  = ',shape(donin3d)
-       write(iulog,*) 'donin(min/max)  = ',minval(donin3d),maxval(donin3d)
-       write(iulog,*) 'shape of donout = ',shape(donout3d)
-       write(iulog,*) 'donout(min/max) = ',minval(donout3d),maxval(donout3d)
-     end if
-     !output data 
-     varo(1:nx,1:ny,1:nz) = real(donout3d(1:nx,1:ny,1:nz),kind=r8)
+   call t_startf ('mltbc_single_model_load')
+   call torch_mod%load(trim(ml_model_pt)) 
+   call t_stopf  ('mltbc_single_model_load')
+
+   call t_startf ('mltbc_single_model_forward')
+   call torch_mod%forward(input_tensors,out_tensor)
+   call t_stopf  ('mltbc_single_model_forward')
+
+   call t_startf ('mltbc_single_model_output')
+   if (mltbc_patch_model) then 
+     call out_tensor%to_array(output4d)
+     varo(:,:,k1:k2) = real(output4d(:,:,:,1),kind=r8)
+   else
+     call out_tensor%to_array(output3d)
+     varo(:,1,k1:k2) = real(output3d(:,:,1),kind=r8)
+   end if
+   call t_stopf  ('mltbc_single_model_output')
+
+   if (mltbc_patch_model) then
+     deallocate(input4d)      
+   else
+     deallocate(input3d)      
    end if 
 
    return
-  end subroutine !mltbc_don_tendadv
+  end subroutine !mltbc_single_model
 
-  subroutine mltbc_don_statadv(file_path,varname,nx,ny,nz,vari,varo)
+  subroutine mltbc_aec_deeponet(nz,nx,ny,xstate,xtend, & 
+                                encoder_pt,deeponet_pt,decoder_pt, &
+                                kbot,ktop,xmin,xmax,ymin,ymax)
+  !===========================================================================
+  ! SZ - 06/05/2023: This subroutine calls Auto Encoder/Decoder based DeepONet 
+  !                  Machine Learning (ML) model to predict the nudging tendency 
+  ! SZ - 09/24/2024: Update module to be general and flexible  
+  !===========================================================================
+   use cam_abortutils  , only : endrun
+   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
+   use torch_ftn
+
+   implicit none
+   
+   character(len=*), intent(in) :: encoder_pt  ! ML model pt file 
+   character(len=*), intent(in) :: deeponet_pt ! ML model pt file 
+   character(len=*), intent(in) :: decoder_pt  ! ML model pt file 
+
+   integer, intent(in)          :: nx,ny,nz
+   real(r8),intent(in)          :: xstate(nx,ny,nz)
+   real(r8),intent(out)         :: xtend(nx,ny,nz)
+ 
+   integer, intent(in),optional :: kbot, ktop    ! top and bottom layers for ML prediction 
+   real(r8),intent(in),optional :: xmin, xmax    ! parameters for normalization of encoder  
+   real(r8),intent(in),optional :: ymin, ymax    ! parameters for denormalization of decoder 
+
+   ! Arguments
+   !-----------
+   type(torch_module)      :: torch_mod
+   type(torch_tensor_wrap) :: input_tensors
+   type(torch_tensor)      :: out_tensor
+
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !ML parameter variables for covolution 2D patch model (adhoc)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   integer,  parameter     :: conv2d_nx = 6       ! ML model trunk in X 6
+   integer,  parameter     :: conv2d_ny = 6       ! ML model trunk in Y 6
+   integer,  parameter     :: conv2d_nt = 248     ! Dummy time array size
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !ML parameter variables for global model (adhoc)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   integer,  parameter     :: ml_glb_nt = 1      ! Dummy time array size
+   integer,  parameter     :: ml_glb_nx = 2700   ! ML model trunk in X 6
+   integer,  parameter     :: ml_glb_nz = 64     ! ML model trunk in Y 6
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+   ! Local values
+   !----------------
+   integer                 :: i,j,n,m,k,ii,jj
+   logical                 :: l_ml_encoder
+   logical                 :: l_ml_decoder
+   logical                 :: l_ml_predictor
+
+   !ML parameter variables 
+   integer                 :: nx1, ny1, nz1
+   integer                 :: k1, k2
+   real(r8)                :: ecmin, ecmax
+   real(r8)                :: dcmin, dcmax
+   real(r4), allocatable   :: input2d(:,:)     ! (1,conv2d_nt) 
+   real(r4), allocatable   :: input3d(:,:,:)   ! (nx1,ny1,nz1)
+   real(r4), allocatable   :: input4d(:,:,:,:) ! (nx1*ny1,conv2d_nt,1,ktop-kbot+1)
+   real(r4), pointer       :: output(:,:,:)    ! (nx1,ny1,nz1)
+
+   if (masterproc) then
+     !check if machine learning pt file exist 
+     inquire(file=trim(encoder_pt),exist=l_ml_encoder)
+     inquire(file=trim(deeponet_pt),exist=l_ml_predictor)
+     inquire(file=trim(decoder_pt),exist=l_ml_decoder)
+     if (.not. l_ml_encoder) then
+       write(iulog,*) "ERROR: "//trim(encoder_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file is missing')
+     end if
+     if (.not. l_ml_predictor) then
+       write(iulog,*) "ERROR: "//trim(deeponet_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file is missing')
+     end if
+     if (.not. l_ml_decoder) then
+       write(iulog,*) "ERROR: "//trim(decoder_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file is missing')
+     end if
+   end if
+
+   k1 = 1
+   k2 = nz
+   if (present(kbot)) k1 = kbot
+   if (present(ktop)) k2 = ktop
+
+   !normalization parameter before ml prediction 
+   ecmin = -1.0_r8
+   ecmax =  1.0_r8
+   if (present(xmin)) ecmin = xmin
+   if (present(xmax)) ecmax = xmax
+
+   !normalization parameter after ml prediction 
+   dcmin = -1.0_r8
+   dcmax =  1.0_r8
+   if (present(ymin)) dcmin = ymin
+   if (present(ymax)) dcmax = ymax
+
+   xtend(:,:,:) = 0.0_r8
+
+   if (mltbc_patch_model) then
+     nx1 = conv2d_nx
+     ny1 = conv2d_ny
+     nz1 = ktop-kbot+1
+     allocate(input2d(1,conv2d_nt))
+     allocate(input4d(nx1*ny1,conv2d_nt,1,nz1))
+     allocate(input3d(nx1,ny1,nz1))
+   else
+     nx1 = ml_glb_nx
+     ny1 = ml_glb_nz
+     nz1 = ml_glb_nt
+     allocate(input3d(nx1,ny1,nz1))
+   end if 
+
+   !deeponet encoder 
+   call t_startf ('mltbc_aec_deeponet_encoder')
+   call mltbc_deeponet_encoder(mltbc_patch_model,encoder_pt, & 
+                               nx,ny,nz,nx1,ny1,nz1,xstate,input3d, &
+                               k1,k2,minval(xstate),maxval(xstate))
+   call t_stopf ('mltbc_aec_deeponet_encoder')
+
+   !deeponet prediction
+   call t_startf ('mltbc_aec_deeponet_prediction')
+   if ( mltbc_patch_model ) then
+     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+     !!the regional model forecasts 248 time steps at each integration!
+     !!and it requires a trunk net to for space dimention             !
+     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+     do n = 1,conv2d_nt
+       do j = 1,ny1
+        do i = 1,nx1 
+          m = (j-1)*nx1 + i
+          input4d(m,n,1,:) = input3d(i,j,:) 
+        end do 
+       end do
+       input2d(1,n) = 2.0_r4*(float(n)-1.0_r4)/(float(conv2d_nt)-1.0_r4)-1.0_r4
+     end do
+     call input_tensors%create
+     call input_tensors%add_array(input4d)
+     call input_tensors%add_array(input2d)
+   else
+     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+     !!the global model forecasts 1 time step at each integration     !
+     !!and a trunk net is not needed                                  !
+     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+     call input_tensors%create
+     call input_tensors%add_array(input3d)
+   end if
+   call torch_mod%load(trim(deeponet_pt))
+   call torch_mod%forward(input_tensors,out_tensor)
+   call out_tensor%to_array(output)
+   call t_stopf ('mltbc_aec_deeponet_prediction')
+   
+   !deeponet decoder 
+   call t_startf ('mltbc_aec_deeponet_decoder')
+   call mltbc_deeponet_decoder(mltbc_patch_model,decoder_pt, &
+                               nx1,ny1,nz1,nx,ny,nz,output,xtend, &
+                               k1,k2,ecmin,ecmax,dcmin,dcmax)
+   call t_stopf ('mltbc_aec_deeponet_decoder')
+   
+   deallocate(input3d) 
+   if (mltbc_patch_model) deallocate(input2d,input4d) 
+
+   return
+  end subroutine !mltbc_aec_deeponet
+
+  subroutine mltbc_state_deeponet(nz,nx,ny,vari,varo,deeponet_pt, & 
+                                  ktop,kbot,vmin,vmax)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call the forecast for 
-  !                  the Machine Learning (ML) model,
+  !                  the Machine Learning (ML) model trained on North Atalatic 
+  !                  and Eastern US region
+  ! SZ - 09/25/2024: The model in this subrutine predicted the corrected model 
+  !                  state of U, V wind only on lat-lon grid 
   !===========================================================================
    use cam_abortutils  , only : endrun
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   character(len=*), intent(in) :: file_path !Path to machine learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
+
+   character(len=*), intent(in) :: deeponet_pt ! ML model pt file 
+
    integer, intent(in)          :: nx,ny,nz
+
    real(r8),intent(in)          :: vari(nx,ny,nz)
-   real(r8),intent(inout)       :: varo(nx*ny,nz)
+   real(r8),intent(inout)       :: varo(nx,ny,nz)
+
+   real(r8),intent(in),optional :: vmin, vmax
+   integer, intent(in),optional :: ktop, kbot
 
    ! Arguments
    !-----------
@@ -6521,77 +6722,85 @@ contains
    type(torch_tensor_wrap)      :: input_tensors
    type(torch_tensor)           :: out_tensor
 
+   !logical variables  
+   logical                      :: l_ml_predictor
+   
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !ML parameter variables for state correction model (adhoc)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   real(r8), parameter          :: ml_time_interval = 10800.0_r8  ! unit: s 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
    ! Local values
    !----------------
-   logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
-   real(r4)                     :: x_trunk(2,nx*ny)
-   real(r4)                     :: doninp(ny,nx,1,nz)
-   real(r4), pointer            :: donout(:,:)
-   real(r4)                     :: vmini,vmaxi
-   real(r8)                     :: vmino,vmaxo
-
+   integer                      :: k1, k2
+   real(r8)                     :: xmin, xmax
+   real(r4), allocatable        :: input2d(:,:)
+   real(r4), allocatable        :: input4d(:,:,:,:)
+   real(r4), pointer            :: output(:,:)
+ 
    if (masterproc) then
      !check if machine learning pt file exist 
-     file_predictor = trim(varname)//'_DeepONet.pt'
-     inquire(file=trim(file_path)//trim(file_predictor),exist=l_mltbc_predictor)
-     if ( .not. l_mltbc_predictor) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_predictor)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
+     inquire(file=trim(deeponet_pt),exist=l_ml_predictor)
+     if ( .not. l_ml_predictor) then
+       write(iulog,*) "ERROR: "//trim(deeponet_pt)//" not found!"
+       call endrun('MLTBC ERROR: model file not exist')
      end if
    end if
-#ifdef SPMD
-   call mpibcast(file_predictor,len(file_predictor),mpichar,0,mpicom)
-#endif
 
-   !convolution 2D model options
-   !before nudging state->after nudging state
-   !input trunk data 
-   do j = 1, ny
-     do i = 1, nx
-       n = (j-1)*nx + i
-       x_trunk(1,n) = 2.0_r4*(real(i,kind=r4)-1.0_r4)/(real(nx,kind=r4)-1.0_r4)-1.0_r4
-       x_trunk(2,n) = 2.0_r4*(real(j,kind=r4)-1.0_r4)/(real(ny,kind=r4)-1.0_r4)-1.0_r4
+   k1 = 1
+   k2 = nz
+   if (present(kbot)) k1 = kbot
+   if (present(ktop)) k2 = ktop
+
+   !normalization parameter before and after ml prediction
+   xmin = -1.0_r8
+   xmax =  1.0_r8
+   if (present(vmin)) xmin = vmin
+   if (present(vmax)) xmax = vmax
+
+   varo(:,:,:) = 0.0_r8
+
+   if (mltbc_patch_model) then 
+     !allocate working array        
+     allocate(input4d(nx,ny,1,k2-k1+1))
+     allocate(input2d(2,nx*ny))
+     !construct input trunk net (space) 
+     do j = 1, ny
+       do i = 1, nx
+         n = (j-1)*nx + i
+         input2d(1,n) = 2.0_r4*(real(i,kind=r4)-1.0_r4)/(real(nx,kind=r4)-1.0_r4)-1.0_r4
+         input2d(2,n) = 2.0_r4*(real(j,kind=r4)-1.0_r4)/(real(ny,kind=r4)-1.0_r4)-1.0_r4
+       end do
      end do
-   end do
-
-   !prepare input data 
-   vmini = real(minval(vari(:,:,:)),kind=r4)
-   vmaxi = real(maxval(vari(:,:,:)),kind=r4)
-   do j = 1,ny
-     do i = 1,nx
-       !normalize input data
-       doninp(i,j,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmini)/(vmaxi-vmini)-1.0_r4
+     !prepare input data
+     do k = k1,k2 
+       input4d(:,:,1,k) = mltbc_norm_2d(nx,ny,vari(:,:,k),xmin,xmax)
      end do
-   end do
-   call input_tensors%create
-   call input_tensors%add_array(doninp)
-   call input_tensors%add_array(x_trunk)
-   call torch_mod%load(trim(file_path)//trim(file_predictor))
-   call torch_mod%forward(input_tensors,out_tensor,1)
-   call out_tensor%to_array(donout)
 
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of doninp = ',shape(doninp)
-     write(iulog,*) 'doninp(min/max) = ',minval(doninp),maxval(doninp)
-     write(iulog,*) 'shape of donout = ',shape(donout)
-     write(iulog,*) 'donout(min/max) = ',minval(donout),maxval(donout)
-   end if
-
-  !output data (denormalize)
-   vmino = minval(vari(:,:,:))
-   vmaxo = maxval(vari(:,:,:))
-   do j = 1, ny
-     do i = 1, nx
-       m = (j-1)* nx + i
-       varo(m,:) = 0.5_r8*(real(donout(m,:),kind=r8)+1.0_r8)*(vmaxo-vmino)+vmino
-     end do
-   end do
+     call t_startf ('mltbc_state_deeponet')
+     call input_tensors%create
+     call input_tensors%add_array(input4d)
+     call input_tensors%add_array(input2d)
+     call torch_mod%load(trim(deeponet_pt))
+     call torch_mod%forward(input_tensors,out_tensor)
+     call out_tensor%to_array(output)
+     call t_stopf ('mltbc_state_deeponet')
+   
+     !output data (denormalize)
+     varo(1:nx,1:ny,k1:k2) = mltbc_denorm_2d(nx,ny,nz,output,xmin,xmax) 
+  
+     !compute nudging tendency
+     varo(:,:,k1:k2) = (varo(:,:,k1:k2) - vari(:,:,k1:k2)) / ml_time_interval
+     deallocate(input2d,input4d)
+   end if 
 
    return
-  end subroutine !mltbc_don_statadv
+  end subroutine !mltbc_state_deeponet
 
-  subroutine mltbc_don_encoder(l_conv2d,file_path,varname,nx,ny,nz,nx1,ny1,nz1,vari,varo)
+  subroutine mltbc_deeponet_encoder(l_ml_patch,encoder_pt,nx,ny,nz, &
+                                    nx1,ny1,nz1,vari,varo,k1,k2,vmin,vmax)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call auto encoder for 
   !                  the Machine Learning (ML) model,
@@ -6600,12 +6809,19 @@ contains
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   logical, intent(in)          :: l_conv2d
-   character(len=*), intent(in) :: file_path !Path to machine learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx,ny,nz,nx1,ny1,nz1
+
+   character(len=*), intent(in) :: encoder_pt
+
+   logical, intent(in)          :: l_ml_patch
+
+   integer, intent(in)          :: nx,ny,nz
+   integer, intent(in)          :: nx1,ny1,nz1
+   integer, intent(in)          :: k1,k2
+
    real(r8),intent(in)          :: vari(nx,ny,nz) 
-   real(r8),intent(inout)       :: varo(nx1,ny1,nz1)
+   real(r4),intent(out)         :: varo(nx1,ny1,nz1)
+
+   real(r8),intent(in),optional :: vmin,vmax
 
    ! Arguments
    !-----------
@@ -6615,88 +6831,61 @@ contains
 
    ! Local values
    !----------------
-   logical, parameter :: l_print_diag = .false.
-   integer            :: i,j,n,m,k
-   real(r4)           :: vmax,vmin 
-   real(r4)           :: encin3d(nx,ny,nz)   ! input array to encoder 
-   real(r4)           :: encin4d(nx,ny,1,nz) ! input array to encoder 
-   real(r4), pointer  :: encout2d(:,:)       ! output array from encoder 
-   real(r4), pointer  :: encout3d(:,:,:)     ! output array from encoder  
+   integer                      :: i,j,n,m,k
+   real(r8)                     :: xmin, xmax     
+   real(r4), allocatable        :: input3d(:,:,:)   ! input array to encoder
+   real(r4), allocatable        :: input4d(:,:,:,:) ! input array to encoder
+   real(r4), pointer            :: output2d(:,:)     ! output array from encoder  
+   real(r4), pointer            :: output3d(:,:,:)   ! output array from encoder 
 
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     file_encoder = trim(varname)//'_Encoder.pt'
-     inquire(file=trim(file_path)//trim(file_encoder),exist=l_mltbc_encoder)
-     if ( .not. l_mltbc_encoder) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_encoder)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
-     end if
-   end if
-#ifdef SPMD
-   call mpibcast(file_encoder,len(file_encoder),mpichar,0,mpicom)
-#endif
+   xmin = -1.0_r8
+   xmax =  1.0_r8
+   if (present(vmin)) xmin = vmin
+   if (present(vmax)) xmax = vmax
 
-   if ( l_conv2d ) then 
-     !prepare data and run encoder for convolution 2d model 
-     !note: transponse of E3SM(lon,lat,lev)->DeepONet(lat,lon,1,lev) 
-     vmin = real(minval(vari),kind=r4)
-     vmax = real(maxval(vari),kind=r4)
-     do j = 1, ny 
-       do i = 1, nx
-         !normalize the data with max/min
-         encin4d(i,j,1,:) = 2.0_r4*(real(vari(i,j,:),kind=r4)-vmin)/(vmax-vmin) - 1.0_r4
-       end do
+   !prepare data and run encoder for convolution 2d model 
+   if ( l_ml_patch ) then
+     allocate(input4d(nx,ny,1,k2-k1+1))
+     !note: transponse of E3SM(lon,lat,lev)->DeepONet(lat,lon,1,lev)
+     do k = k1,k2
+       input4d(:,:,1,k-k1+1) = mltbc_norm_2d(nx,ny,vari(:,:,k),xmin,xmax)
      end do
-
-     !call deepOnet Encoder  
      call input_tensors%create
-     call input_tensors%add_array(encin4d)
-     call torch_mod%load(trim(file_path)//trim(file_encoder))
-     call torch_mod%forward(input_tensors,out_tensor)
-     call out_tensor%to_array(encout2d)  
-
-     if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'shape of encin  = ',shape(encin4d)
-       write(iulog,*) 'encin(min/max)  = ',minval(encin4d),maxval(encin4d)
-       write(iulog,*) 'shape of encout = ',shape(encout2d)
-       write(iulog,*) 'encout(min/max) = ',minval(encout2d),maxval(encout2d)
-     end if
-
-     !process to output array 
-     do j = 1, ny1 
-       do i = 1, nx1
-         m = (j-1)*nx1 + i
-         varo(i,j,1:nz1) = real(encout2d(m,1:nz1), kind = r8)
-       end do 
-     end do 
-
-   else 
-
-     !prepare data and run encoder for global model 
-     encin3d(1:nx,1:ny,1:nz) = real(vari(1:nx,1:ny,1:nz),kind=r4) 
-
-     !call deepOnet Encoder  
+     call input_tensors%add_array(input4d)
+   else
+     allocate(input3d(nx,ny,k2-k1+1))
+     do k = k1, k2
+       input3d(:,:,k-k1+1) = mltbc_norm_2d(nx,ny,vari(:,:,k),xmin,xmax)
+     end do
      call input_tensors%create
-     call input_tensors%add_array(encin3d)
-     call torch_mod%load(trim(file_path)//trim(file_encoder))
-     call torch_mod%forward(input_tensors,out_tensor)
-     call out_tensor%to_array(encout3d)  
-     if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'shape of encin  = ',shape(encin3d)
-       write(iulog,*) 'encin(min/max)  = ',minval(encin3d),maxval(encin3d)
-       write(iulog,*) 'shape of encout = ',shape(encout3d)
-       write(iulog,*) 'encout(min/max) = ',minval(encout3d),maxval(encout3d)
-     end if
-
-     !output array 
-     varo(1:nx1,1:ny1,1:nz1) = real(encout3d(1:nx1,1:ny1,1:nz1), kind = r8)
-
+     call input_tensors%add_array(input3d)
    end if 
 
-   return 
-  end subroutine !mltbc_don_encoder 
+   call torch_mod%load(trim(encoder_pt))
+   call torch_mod%forward(input_tensors,out_tensor)
+   
+   if ( l_ml_patch ) then
+     call out_tensor%to_array(output2d)
+     !orgnize to output array
+     varo(1:nx1,1:ny1,1:nz1) = mltbc_norm_don(nx1,ny1,k2-k1+1,output2d(:,:),minval(output2d),maxval(output2d))
+     deallocate(input4d)
+   else
+     call out_tensor%to_array(output3d)
+     !orgnize to output array 
+     varo(1:nx1,1:ny1,1:nz1) = output3d(1:nx1,1:ny1,:)
+     deallocate(input3d)
+   end if
 
-  subroutine mltbc_don_decoder(l_conv2d,file_path,varname,nx,ny,nz,nx1,ny1,nz1,vari,varo)
+   if (masterproc) then
+     write(iulog,*) 'encoder input  shape,min,max = ',shape(vari),minval(vari),maxval(vari)
+     write(iulog,*) 'encoder output shape,min,max = ',shape(varo),minval(varo),maxval(varo)
+   end if
+
+   return 
+  end subroutine !mltbc_deeponet_encoder 
+
+  subroutine mltbc_deeponet_decoder(l_ml_patch,decoder_pt,nx1,ny1,nz1,nx,ny,nz,& 
+                                    vari,varo,k1,k2,ecmin,ecmax,dcmin,dcmax)
   !===========================================================================
   ! SZ - 06/05/2023: This subroutine attempt to call auto decoder for 
   !                  the Machine Learning (ML) model,
@@ -6705,13 +6894,20 @@ contains
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
 
    implicit none
-   logical, intent(in)          :: l_conv2d
-   character(len=*), intent(in) :: file_path !Path to machine learning model files 
-   character(len=*), intent(in) :: varname   !nudge variable
-   integer, intent(in)          :: nx,ny,nz
-   integer, intent(in)          :: nx1,ny1,nz1
-   real(r8),intent(in)          :: vari(nx1,ny1,nz1)
-   real(r8),intent(inout)       :: varo(nx,ny,nz)
+
+   character(len=*), intent(in)  :: decoder_pt !decoder pt file 
+
+   logical, intent(in)           :: l_ml_patch
+
+   integer, intent(in)           :: nx,ny,nz
+   integer, intent(in)           :: nx1,ny1,nz1
+   integer, intent(in)           :: k1, k2
+
+   real(r4),intent(in)           :: vari(nx1,ny1,nz1)
+   real(r8),intent(out)          :: varo(nx,ny,nz)
+
+   real(r8),intent(in),optional  :: ecmin, ecmax
+   real(r8),intent(in),optional  :: dcmin, dcmax
 
    ! Arguments
    !-----------
@@ -6721,84 +6917,54 @@ contains
 
    ! Local values
    !----------------
-   logical, parameter           :: l_print_diag = .false.
    integer                      :: i,j,n,m,k,ii,jj
-   real(r8)                     :: dcdmin,dcdmax
-   real(r4)                     :: dcdin2d(nx1*ny1,nz1)
-   real(r4), pointer            :: dcdout2d(:,:)
-   real(r4)                     :: dcdin3d(nx1,ny1,nz1)
-   real(r4), pointer            :: dcdout3d(:,:,:)
+   real(r4)                     :: xmin, xmax 
+   real(r8)                     :: ymin, ymax
+   real(r4), allocatable        :: input2d(:,:)
+   real(r4), pointer            :: output2d(:,:)
+   real(r4), pointer            :: output3d(:,:,:)
+   
+   varo(:,:,:) = 0.0_r8
 
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     file_decoder = trim(varname)//'_Decoder.pt'
-     inquire(file=trim(file_path)//trim(file_decoder),exist=l_mltbc_decoder)
-     if (.not. l_mltbc_decoder) then
-       write(iulog,*) "ERROR: "//trim(file_path)//trim(file_decoder)//" not found!"
-       call endrun('Machine Learning Nudging Error: model file not exist')
-     end if
-   end if
-#ifdef SPMD
-   call mpibcast(file_decoder,len(file_decoder),mpichar,0,mpicom)
-#endif
-
-   if (l_conv2d) then 
-     !parameters to normalize/denormalize DeepONet prediction 
-     if (trim(varname) == 'U') then
-       dcdmax = 0.0013223718_r8
-       dcdmin = -0.0010001023_r8
-     else  ! "V"
-       dcdmax = 0.0010921889_r8
-       dcdmin = -0.0014089954_r8
-     end if
+   !call decoder 
+   call input_tensors%create
+   if (l_ml_patch) then 
      !prepare input data and run decoder 
-     !need to convert to single precision 
-     do j = 1, ny1
-       do i = 1, nx1
-         m = (j-1)*nx1 + i
-         dcdin2d(m,1:nz1) = real(vari(i,j,1:nz1),kind=r4)
-       end do 
-     end do 
-     !call decoder 
-     call input_tensors%create
-     call input_tensors%add_array(dcdin2d)
-     call torch_mod%load(trim(file_path)//trim(file_decoder))
-     call torch_mod%forward(input_tensors, out_tensor)
-     call out_tensor%to_array(dcdout2d)
-     if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'shape of dcdin  = ',shape(dcdin2d)
-       write(iulog,*) 'dcdin(min/max)  = ',minval(dcdin2d),maxval(dcdin2d)
-       write(iulog,*) 'shape of dcdout = ',shape(dcdout2d)
-       write(iulog,*) 'dcdout(min/max) = ',minval(dcdout2d),maxval(dcdout2d)
-     end if
-     !denormalize ouput from decoder to convert it to tendency 
-     do j = 1, ny 
-       do i = 1, nx
-         m = (j-1)*nx + i
-         varo(i,j,1:nz) = 0.5_r8*(real(dcdout2d(m,1:nz),kind=r8)+1.0_r8)*(dcdmax-dcdmin)+dcdmin
-       end do
-     end do
-   else 
-     !input data 
-     dcdin3d(1:nx1,1:ny1,1:nz1) = real(vari(1:nx1,1:ny1,1:nz1),kind=r4)
-     !call decoder 
-     call input_tensors%create
-     call input_tensors%add_array(dcdin3d)
-     call torch_mod%load(trim(file_path)//trim(file_decoder))
-     call torch_mod%forward(input_tensors, out_tensor)
-     call out_tensor%to_array(dcdout3d)
-     if (masterproc .and. l_print_diag) then
-       write(iulog,*) 'shape of dcdin  = ',shape(dcdin3d)
-       write(iulog,*) 'dcdin(min/max)  = ',minval(dcdin3d),maxval(dcdin3d)
-       write(iulog,*) 'shape of dcdout = ',shape(dcdout3d)
-       write(iulog,*) 'dcdout(min/max) = ',minval(dcdout3d),maxval(dcdout3d)
-     end if
-     !output data 
-     varo(1:nx,1:ny,1:nz) = real(dcdout3d(1:nx,1:ny,1:nz),kind=r8)
+     allocate (input2d(nx1*ny1,nz1))
+     !denormalize the deeponet prediction and output data
+     xmin = -1.0_r4
+     xmax =  1.0_r4
+     if (present(ecmin)) xmin = real(ecmin,kind=r4)
+     if (present(ecmax)) xmax = real(ecmax,kind=r4)
+     input2d(:,:) = mltbc_denorm_don(nx,ny,nz,vari(:,:,:),xmin,xmax)
+     call input_tensors%add_array(input2d)
+   else
+     call input_tensors%add_array(vari)
    end if 
 
+   call torch_mod%load(trim(decoder_pt))
+   call torch_mod%forward(input_tensors,out_tensor)
+
+   if (l_ml_patch) then
+     call out_tensor%to_array(output2d)
+     ymin = -1.0_r8
+     ymax =  1.0_r8
+     if (present(dcmin)) ymin = real(dcmin,kind=r8)
+     if (present(dcmax)) ymax = real(dcmax,kind=r8)
+     varo(:,:,k1:k2) = mltbc_denorm_2d(nx,ny,nz,output2d,ymin,ymax)
+     deallocate (input2d)
+   else
+     call out_tensor%to_array(output3d)
+     varo(:,:,k1:k2) = real(output3d(1:nx,1:ny,1:nz), kind = r8)
+   end if 
+
+   if (masterproc) then
+     write(iulog,*) 'decoder input  shape,min,max = ',shape(vari),minval(vari),maxval(vari)
+     write(iulog,*) 'decoder output shape,min,max = ',shape(varo),minval(varo),maxval(varo)
+   end if
+
    return 
-  end subroutine !mltbc_don_decoder
+  end subroutine !mltbc_deeponet_decoder
 
   subroutine mltbc_gather_data(arr,nflds,ngcols,arro) !out
   !===========================================================================
@@ -6810,203 +6976,289 @@ contains
    use dyn_grid,      only: get_horiz_grid_dim_d, get_horiz_grid_d, get_dyn_grid_parm_real1d
 
    implicit none
-   logical, parameter      :: l_print_diag = .false. 
    integer, intent(in)     :: ngcols,nflds  ! number of fields
-   real(r8), intent(in)    :: arr(pcols,begchunk:endchunk,nflds) ! Input array, chunked
-   real(r8), intent(inout) :: arro(ngcols,nflds) !Output array, global rectagular 
+   real(r8), intent(in)    :: arr(pcols,nflds,begchunk:endchunk) ! Input array, chunked
+   real(r8), intent(out)   :: arro(ngcols,1,nflds) !Output array, global rectagular 
 
-   integer :: i, j, n, ifld 
+   integer :: i, j, n
    integer :: ngtot  ! global column count (all)
    integer :: hdim1, hdim2  ! dimensions of rectangular horizontal 
                             !  grid data structure, If 1D data 
                             !  structure, then hdim2_d == 1.
 
+   real(r8), allocatable :: arri(:,:,:) ! input array 
    real(r8), allocatable :: arr_field(:,:,:)  ! rectangular version of arr
 
    call get_horiz_grid_dim_d(hdim1, hdim2)
+   
    allocate(arr_field(hdim1,hdim2,nflds))
-
    arr_field(:,:,:) = 0.0_r8
-   call gather_chunk_to_field (1, 1, nflds, hdim1, arr, arr_field)
+   
+   allocate (arri(pcols,begchunk:endchunk,nflds))
+   do i = begchunk,endchunk
+     arri(:,i,:) = arr(:,:,i) 
+   end do
+   call gather_chunk_to_field (1, 1, nflds, hdim1, arri, arr_field)
 
    ngtot = hdim1*hdim2
    if ( ngtot /= ngcols ) then 
-     write(iulog,*) 'Machine Learning Nudging Error: in/out size mismatch ngcols(in),ngcols(out) = ',ngtot,ngcols 
-     call endrun ('Machine Learning Nudging Error: mltbc_gather_data failed')
+     write(iulog,*) 'MLTBC Error: ngcols size mismatch in,out = ',ngtot,ngcols 
+     call endrun ('MLTBC Error: failure in mltbc_gather_data subroutine')
    end if 
 
    !combine lat-lon array to ncol array
    do j = 1, hdim2
      do i = 1, hdim1
        n = (j-1)*hdim1 + i
-       arro(n,:) = arr_field(i,j,:) 
+       arro(n,1,:) = arr_field(i,j,:) 
      end do 
    end do 
  
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of arr(in)  = ',shape(arr)
-     write(iulog,*) 'min/max arr(in)   = ',minval(arr),maxval(arr)
-     write(iulog,*) 'shape of arr(out) = ',shape(arro)
-     write(iulog,*) 'min/max arr(out)  = ',minval(arro),maxval(arro)
+   if (masterproc) then 
+     write(iulog,*) 'gather global data, shape,min,max (input)  = ',shape(arr),minval(arr),maxval(arr)
+     write(iulog,*) 'gather global data, shape,min,max (output) = ',shape(arro),minval(arro),maxval(arro)
    end if
 
-   deallocate(arr_field)
+   deallocate(arri,arr_field)
 
    return
   end subroutine !mltbc_gather_data
 
-  subroutine mltbc_gather_patch(vname,nlev,ngcol,nlon,nlat,model_state,out_state) !out
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  !!Following subroutine is used to gather global data and process it to      !!
-  !!Model space input to Machine Learning model                      !! 
-  !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                            !! 
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
-   use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
-   use phys_grid,        only : get_ncols_p, scatter_field_to_chunk 
-   use cam_abortutils  , only : endrun
-   use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
-   use cam_history  ,    only : outfld
+  function mltbc_norm_2d(nx,ny,x,xmin,xmax) result (xnorm)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to apply normalization on physical fields using the global min/max  !!
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+   
+   !Argument 
+   !----------------
+   integer,  intent(in) :: nx,ny
+   real(r8), intent(in) :: x(nx,ny)
 
-   implicit none
-   logical, parameter           :: l_print_diag = .false. 
-   character(len=*), intent(in) :: vname   !nudge variable
-   integer, intent(in)          :: nlev,ngcol,nlon,nlat 
-   real(r8), intent(in)         :: model_state(ngcol,nlev)
-   real(r8), intent(inout)      :: out_state(nlon,nlat,nlev)
+   real(r8), intent(in), optional :: xmin,xmax
+
+   !Return array
+   !---------------
+   real(r4) :: xnorm(nx,ny)
+   
+   !Local variable
+   integer :: i,j 
+
+   do j = 1, ny
+     do i = 1, nx
+       if (present(xmin) .and. present(xmax)) then
+         !normalize the data with max/min
+         xnorm(i,j) = real(2.0_r8*(x(i,j)-xmin)/(xmax-xmin) - 1.0_r8, kind=r4)
+       else 
+         xnorm(i,j) = real(x(i,j), kind=r4)
+       end if 
+     end do
+   end do
+
+   return
+  end  function !mltbc_norm_2d
+
+  function mltbc_denorm_2d(nx,ny,nz,xnorm,xmin,xmax) result (x)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to apply denormalization on ML prediction fields 
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+
+   !Argument 
+   !----------------
+   integer,  intent(in) :: nx,ny,nz
+   real(r4), intent(in) :: xnorm(nx*ny,nz)
+
+   real(r8), intent(in), optional :: xmin,xmax
+
+   !Return array
+   !---------------
+   real(r8) :: x(nx,ny,nz)
+
+   !Local variable
+   integer :: i,j,m
+
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)*nx + i
+       if (present(xmin) .and. present(xmax)) then
+          x(i,j,:) = 0.5_r8*(real(xnorm(m,:),kind=r8)+1.0_r8)*(xmax-xmin)+xmin
+       else
+          x(i,j,:) = real(xnorm(m,:),kind=r8)
+       end if
+     end do
+   end do
+
+   return
+  end  function !mltbc_denorm_2d
+
+  function mltbc_norm_don(nx,ny,nz,x,xmin,xmax) result (xnorm)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to apply normalization on physical fields using the global min/max  !!
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+     
+   !Argument 
+   !----------------
+   integer,  intent(in) :: nx,ny,nz
+   real(r4), intent(in) :: x(nx*ny,nz)
+   real(r4), intent(in), optional :: xmin, xmax
+     
+   !Return array 
+   !---------------
+   real(r4) :: xnorm(nx,ny,nz)
+       
+   !Local variable
+   integer :: i,j,m
+
+   do j = 1,ny
+     do i = 1,nx
+       m = (j-1)*nx + i
+       if (present(xmin) .and. present(xmax)) then
+         xnorm(i,j,:) = real(2.0_r8*(x(m,:)-xmin)/(xmax-xmin) - 1.0_r8, kind = r4)
+       else
+         xnorm(i,j,:) = real(x(m,:), kind = r4)
+       end if 
+     end do
+   end do
+   return
+  end  function !mltbc_norm_don
+
+  function mltbc_denorm_don(nx,ny,nz,xnorm,xmin,xmax) result (x)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to apply denormalization on ML prediction fields 
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+   
+   !Argument 
+   !----------------
+   integer,  intent(in) :: nx,ny,nz
+   real(r4), intent(in) :: xnorm(nx,ny,nz)
+
+   real(r4), intent(in), optional :: xmin,xmax
+
+   !Return array
+   !---------------
+   real(r4) :: x(nx*ny,nz)
+
+   !Local variable
+   integer :: i,j,m
+
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)*nx + i
+       if (present(xmin) .and. present(xmax)) then
+          x(m,:) = 0.5_r4*(xnorm(i,j,:)+1.0_r4)*(xmax-xmin)+xmin
+       else 
+          x(m,:) = xnorm(i,j,:)
+       end if 
+     end do
+   end do 
+
+   return
+  end  function !mltbc_denorm_don 
+
+  function mltbc_global_to_latlon(nxy, xglb, nx, ny, interp_bilin) result (xpatch) 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to interpolate model grid (SE) data to specific patch grid (lat-lon)!! 
+   !!using pre-generated weighting coefficients for interpolation                 !!
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+   !Argument 
+   !----------------
+   integer, intent(in)  :: nxy,nx,ny 
+   logical, intent(in)  :: interp_bilin
+   real(r8), intent(in) :: xglb(nxy)
+   
+   !function return value
+   real(r8) :: xpatch(nx,ny)
 
    ! Local values
    !----------------
-   integer  :: lchnk,ncol
-   integer  :: i,j,k,ii,jj,m,n 
-   real(r8) :: sum_x(nlev)
-   real(r8), allocatable :: test_rgd(:,:)
-   real(r8), allocatable :: test_dif(:,:)
-   real(r8), allocatable :: ftem(:,:,:)
-   real(r8), allocatable :: ftem2(:,:)
+   integer :: i,j,ii,jj,m,n 
 
-   ! initialize output array as fillvalue 
-   out_state(:,:,:) = fillvalue
-
-   !Interpolate to regional data 
-   if (mltbc_patch_biln) then
-     !bilinear interpolation      
-     do j = 1, nlat
-       do i = 1, nlon
-         sum_x(:) = 0.0_r8
-         ii = 0
-         m = (j-1)*nlon + i
+   !Initialize output array as fillvalue 
+   xpatch(:,:) = fillvalue
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)*nx + i
+       xpatch(i,j) = 0.0_r8
+       if (interp_bilin) then 
+         ii = 0      
+         !Method 1: bilinear interpolation of source grid to target grid
          do jj = 1, 4
            n = mltbc_se2latlon_ind(m,jj)
+           xpatch(i,j) = xpatch(i,j) + xglb(n) * mltbc_se2latlon_wgt(m,jj)
            if (mltbc_se2latlon_wgt(m,jj) == 0.0_r8) ii = ii + 1
-           sum_x(:) = sum_x(:) + model_state(n,:) * mltbc_se2latlon_wgt(m,jj)
          end do
-         if (ii /= 4) then
-           out_state(i,j,:) = sum_x
+         if (ii == 4) then
+           xpatch(i,j) = fillvalue
          end if
-       end do
-     end do
-   else 
-     !neareast to destination 
-     do j = 1, nlat
-       do i = 1, nlon
-         m = (j-1)*nlon + i
+       else
+         !Method 2: assign target grid with neareast value in source grid 
          n = mltbc_se2latlon_ind(m,5)
-         out_state(i,j,:) = model_state(n,:) 
-       end do
+         xpatch(i,j)  = xglb(n) 
+       end if 
+     end do
+   end do
+
+   return 
+  end function !mltbc_global_to_latlon
+
+  function mltbc_latlon_to_global(nx, ny, xpatch, nxy, interp_bilin) result (xglb)
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   !!Function to interpolate patch grid (lat-lon) data to model grid (SE)         !!
+   !!using pre-generated weighting coefficients for interpolation                 !!
+   !!Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)                               !! 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+   !Argument 
+   !----------------
+   integer, intent(in)  :: nxy,nx,ny
+   logical, intent(in)  :: interp_bilin
+
+   real(r8), intent(in) :: xpatch(nx,ny)
+
+   !function return value
+   real(r8) :: xglb(nxy)
+
+   ! Local values
+   !----------------
+   integer :: i,j,ii,jj,m,n
+   real(r8) :: xtmp(nx*ny)
+
+   !Initialize output array as fillvalue 
+   xglb(:) = fillvalue
+   do j = 1, ny
+     do i = 1, nx
+       m = (j-1)*nx + i
+       if (interp_bilin) then 
+         xtmp(m) = xpatch(i,j)
+       else
+         !Method 2: assign target grid with neareast value in source grid        
+         n = mltbc_se2latlon_ind(m,5)
+         xglb(n) = xpatch(i,j) 
+       end if         
      end do 
-   end if 
-
-   if (masterproc.and.l_print_diag) then
-     write(iulog,*) 'shape of state(in)  = ',shape(model_state)
-     write(iulog,*) 'min/max state(in)   = ',minval(model_state),maxval(model_state)
-     write(iulog,*) 'shape of state(out) = ',shape(out_state)
-     write(iulog,*) 'min/max state(out)  = ',minval(out_state),maxval(out_state)
-   end if
-
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
-   !!Begin diagnose interpolation!! 
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   if (mltbc_interp_test) then 
-     allocate (test_dif(ngcol,nlev))
-     allocate (test_rgd(nlon*nlat,nlev))
-     test_dif(:,:) = 0.0_r8
-     !interpolated back to model grid and check  
-     if (mltbc_patch_biln) then
-       !method 1: linear interpolation to destination grid
-       do j = 1, nlat
-         do i = 1, nlon
-           m = (j-1)*nlon+i
-           test_rgd(m,:) = out_state(i,j,:)
-         end do
-       end do 
-       do n = 1, ngcol
-         sum_x(:) = 0.0_r8
-         ii = 0
-         do jj = 1, 4
-           m = mltbc_latlon2se_ind(n,jj)
-           if(mltbc_latlon2se_wgt(n,jj) == 0.0_r8) ii = ii + 1
-           sum_x(:) = sum_x(:) + mltbc_latlon2se_wgt(n,jj)*test_rgd(m,:)
-         end do
-         if( ii /= 4 ) then
-           test_dif(n,:) = model_state(n,:) - sum_x(:)
-         end if
-       end do   
-     else 
-       !method 2: nearest to destination grid
-       do j = 1, nlat
-         do i = 1, nlon
-           m = (j-1)*nlon + i
-           n = mltbc_se2latlon_ind(m,5)
-           test_dif(n,:) = (model_state(n,:) - out_state(i,j,:))
-         end do
+   end do 
+   
+   if (interp_bilin) then
+     !Method 1: bilinear interpolation of source grid to target grid 
+     do n = 1, nxy
+       ii = 0
+       xglb(n) = 0.0_r8
+       do jj = 1, 4
+         m = mltbc_latlon2se_ind(n,jj)
+         xglb(n) = xglb(n) + mltbc_latlon2se_wgt(n,jj)*xtmp(m)
+         if(mltbc_latlon2se_wgt(n,jj) == 0.0_r8) ii = ii + 1
        end do
-     end if
-     !output Diagnostics 
-     !scatter filed to chunk (from wrk_tend to nudging_tend) 
-     if (nlev > 1) then 
-       allocate (ftem(pcols,pver,begchunk:endchunk))
-       call scatter_field_to_chunk(1,nlev,1,ngcol,test_dif(:,:),ftem)
-       do lchnk=begchunk,endchunk
-         ncol=get_ncols_p(lchnk)
-         if (trim(vname) == 'U') then 
-           call outfld('DON_RGD_UERR',  ftem(:,:,lchnk), pcols,lchnk)
-         end if 
-         if (trim(vname) == 'V') then
-           call outfld('DON_RGD_VERR',  ftem(:,:,lchnk), pcols,lchnk)
-         end if
-         if (trim(vname) == 'T') then
-           call outfld('DON_RGD_TERR',  ftem(:,:,lchnk), pcols,lchnk)
-         end if
-         if (trim(vname) == 'Q') then
-           call outfld('DON_RGD_QERR',  ftem(:,:,lchnk), pcols,lchnk)
-         end if
-       end do 
-       deallocate(ftem)
-     else
-       allocate (ftem2(pcols,begchunk:endchunk))      
-       call scatter_field_to_chunk(1,nlev,1,ngcol,test_dif(:,1),ftem2) 
-       do lchnk = begchunk,endchunk
-         ncol=get_ncols_p(lchnk)
-         if (trim(vname) == 'PS') then
-           call outfld('DON_RGD_PSERR',  ftem2(:,lchnk), pcols,lchnk)
-         end if
-       end do 
-       deallocate(ftem2)
-     end if 
-     deallocate(test_dif)
-     deallocate(test_rgd)
-
-   end if
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
-   !!End diagnose interpolation  !! 
-   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-   !Sanity check
-   if (any(out_state(:,:,:) == fillvalue)) then 
-      write(iulog,*) 'Machine Learning Nudging Error: missing value appears'
-      call endrun('Machine Learning Nudging Error: working data contains missing values')
+       if (ii == 4) then
+         xglb(n) = fillvalue
+       end if
+     end do
    end if 
-  end subroutine !mltbc_gather_patch
+
+   return 
+  end function !mltbc_latlon_to_global
 
   subroutine update_land_nudging_tend(ncol, umod, vmod, tvmod, qmod,    & ! In 
                                       ubobs, vbobs, tbobs, tdbobs,      & ! In  
@@ -7287,7 +7539,7 @@ contains
                         uref, vref, tref, qref, tobs, psref, &
                         phis_obs, phis_mod, psobs, psmod, psfac, psdt )
 
-  use physconst,     only  : rga, cpair, gravit, rair, zvir, cappa
+  use physconst,     only  : rga, cpair, gravit, rair, zvir
   use shr_vmath_mod, only  : shr_vmath_log
   use hycoef,        only  : hycoef_init, hyam, hybm, hyai, hybi, ps0
   use ppgrid,        only  : pver,pverp,pcols
@@ -7336,12 +7588,10 @@ contains
 
   real(r8), parameter :: z_min      = 150._r8
 
-  integer  :: i, k, m, kk
+  integer  :: i, k, kk
   real(r8) :: x
   real(r8) :: del_phis, tbot, pbot, tmp
   real(r8) :: tsurf, lapse, t0
-  real(r8) :: tvobs(pcols,pver)
-  real(r8) :: zobs(pcols,pverp)
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   do i = 1,ncol
@@ -7537,38 +7787,40 @@ contains
    real(r8), allocatable :: trlat(:), olat(:)
 
    ! local variables
-   logical  :: neg_root
    integer  :: i, j, n, m, k
    integer  :: iorg, ntcs, nmin, nrecg
    integer  :: oc(1)
    integer  :: sh_corn(ncorner)
    real(r8) :: sh_rlat(ncorner), sh_rlon(ncorner), sh_rdst(ncorner)
-   real(r8) :: rlat, rlon, dlat, dlon, ddlon, rtemp
+   real(r8) :: rlat, rlon, dlat, dlon
    real(r8) :: maxdist, dmin, this_dist
-   real(r8) :: dx,dy, p, q
+   real(r8) :: p, q
 
    if (.not. dycore_is('UNSTRUCTURED')) then
-      call endrun ('latlon2se_interp_init ERROR: only works for  SE dycore')
+      call endrun ('latlon2se_interp_init ERROR: only works for SE dycore')
    end if
 
    !maxdistance for the search 
    maxdist = 1.2_r8*(21600.0_r8/ngcols)*deg2rad
+   nrecg   = nrlat * nrlon
 
-   !initialize arrary for interpolation 
+   !allocate temporary/working array 
+   allocate(weight_qdl(ngcols,5))
+   allocate(close_ind(ngcols,5))   
    allocate(close_lat(ngcols,5))
    allocate(close_lon(ngcols,5))
    allocate(close_dst(ngcols,5))
-   allocate(weight_qdl(ngcols,5))
-   allocate(close_ind(ngcols,5))
+   allocate(trlat(nrecg))
+   allocate(trlon(nrecg))
+   allocate(olat(nrecg))
+   allocate(olon(nrecg))
+
+   !initialize arrary for interpolation
+   weight_qdl(:,:) = rmissing
+   close_ind(:,:)  = imissing
    close_lat(:,:)  = rmissing
    close_lon(:,:)  = rmissing
    close_dst(:,:)  = rmissing
-   weight_qdl(:,:) = rmissing
-   close_ind(:,:)  = imissing
-
-   nrecg   = nrlat * nrlon
-   allocate(trlat(nrecg))
-   allocate(trlon(nrecg))
    do j = 1, nrlat
      do i = 1, nrlon
        m = (j-1)*nrlon + i
@@ -7578,10 +7830,10 @@ contains
    end do
 
    !find the cell-center grid point closest to machine learning lat-lon grid
+   !use a temporary array olat/olon so that we can modify values 
+   olat(:) = rmissing
+   olon(:) = rmissing
    do n = 1, ngcols
-     !use a temporary array olat/olon so that we can modify values 
-     allocate(olat(nrecg))
-     allocate(olon(nrecg))
      olat  = trlat
      olon  = trlon
      rlat  = rlat_d(n)
@@ -7715,12 +7967,6 @@ contains
      if ((close_dst(n,5) > maxdist) .or. any(close_dst(n,:) == rmissing)) then 
        weight_qdl(n,:) = 0._r8
        close_ind(n,:)  = 1 
-      !write(iulog,*) "latlon2se_interp_init: close_dst(n,1)= ", close_dst(n,1)
-      !write(iulog,*) "latlon2se_interp_init: close_dst(n,2)= ", close_dst(n,2)
-      !write(iulog,*) "latlon2se_interp_init: close_dst(n,3)= ", close_dst(n,3)
-      !write(iulog,*) "latlon2se_interp_init: close_dst(n,4)= ", close_dst(n,4)
-      !write(iulog,*) "latlon2se_interp_init: close_dst(n,5)= ", close_dst(n,5)
-      !call endrun ('latlon2se_interp_init: error in finding interpolation points')
      else 
        !cshift is used to shift array to the left so 
        !corner(4,4) is the nearest point to target 
@@ -7732,10 +7978,9 @@ contains
        sh_rlat(1:4) = cshift(close_lat(n,1:4), iorg)
        sh_rlon(1:4) = cshift(close_lon(n,1:4), iorg)
        !calculate the interpolation weights  
-       call coord_ind_weight(sh_corn,sh_rlat,sh_rlon,sh_rdst,rlat,rlon, & !In 
+       call coord_ind_weight(sh_rlat,sh_rlon,rlat,rlon, & !In 
                              close_lat(n,iorg),close_lon(n,iorg),close_dst(n,iorg), & !In 
                              p,q) !Out
-
        !calculate the final weight for each corner 
        do k = 1, 5
          weight_qdl(n,k) = 0._r8
@@ -7748,21 +7993,8 @@ contains
        close_dst(n,1:4) = sh_rdst(1:4)
        close_lat(n,1:4) = sh_rlat(1:4)
        close_lon(n,1:4) = sh_rlon(1:4)
-       !if(masterproc) then
-       !  write(iulog,*) "latlon2se_interp_init: close_dst, close_lat, close_lon, rlat, rlon, weight_qdl= "
-       !  write(iulog,*) close_dst(n,1),close_dst(n,2),close_dst(n,3),close_dst(n,4),close_dst(n,5)
-       !  write(iulog,*) close_lat(n,1),close_lat(n,2),close_lat(n,3),close_lat(n,4),close_lat(n,5),rlat
-       !  write(iulog,*) close_lon(n,1),close_lon(n,2),close_lon(n,3),close_lon(n,4),close_lon(n,5),rlon
-       !  write(iulog,*) weight_qdl(n,1),weight_qdl(n,2),weight_qdl(n,3),weight_qdl(n,4),weight_qdl(n,5) 
-       !end if
      end if 
-     deallocate(olat)
-     deallocate(olon)
    end do 
-
-   deallocate(close_lat)
-   deallocate(close_lon)
-   deallocate(close_dst)
 
    !final sanity check 
    if (any(close_ind == imissing)) then 
@@ -7772,6 +8004,7 @@ contains
      call endrun('latlon2se_interp_init: ERROR, interpolation weight contains missing values')
    end if 
    !write(iulog,*) 'latlon2se_interp_init: interpolation initialization succeed!'
+   deallocate(trlat,trlon,olat,olon,close_lat,close_lon,close_dst)
 
    return 
   end subroutine !latlon2se_interp_init
@@ -7812,13 +8045,12 @@ contains
    real(r8), allocatable :: olat(:)
 
    ! local variables
-   logical  :: neg_root  
-   integer  :: i, j, ifld, n, m, k, ii, jj 
+   integer  :: i, j, n, m, k
    integer  :: iorg, ntcs, nmin, nrecg
    integer  :: oc(1)
    integer  :: sh_corn(ncorner)
    real(r8) :: sh_rlat(ncorner), sh_rlon(ncorner), sh_rdst(ncorner)
-   real(r8) :: rlat, rlon, dlat, dlon, rtemp
+   real(r8) :: rlat, rlon, dlat, dlon
    real(r8) :: maxdist, dmin, this_dist
    real(r8) :: p, q
 
@@ -7830,24 +8062,28 @@ contains
    maxdist = 1.2_r8*(43200.0_r8/ngcols)*deg2rad
    nrecg   = nrlat * nrlon
 
-   !initialize arrary for interpolation 
+   !allocate temporary/working array 
+   allocate(close_ind(nrecg,5))
+   allocate(weight_qdl(nrecg,5))
    allocate(close_lat(nrecg,5))
    allocate(close_lon(nrecg,5))
    allocate(close_dst(nrecg,5))
-   allocate(close_ind(nrecg,5))
-   allocate(weight_qdl(nrecg,5))
+   allocate(olat(ngcols))
+   allocate(olon(ngcols))
+
+   !initialize arrary for interpolation 
+   close_ind(:,:)  = imissing
+   weight_qdl(:,:) = rmissing
    close_lat(:,:)  = rmissing
    close_lon(:,:)  = rmissing
    close_dst(:,:)  = rmissing
-   close_ind(:,:)  = imissing 
-   weight_qdl(:,:) = rmissing
+   olat(:)         = rmissing
+   olon(:)         = rmissing
 
    !find the cell-center grid point closest to machine learning lat-lon grid
    do j = 1, nrlat
      do i = 1, nrlon
        !use a temporary array olat/olon so that we can modify values 
-       allocate(olat(ngcols))
-       allocate(olon(ngcols))
        olat = rlat_d
        olon = rlon_d
        rlon = reclon(i)
@@ -7983,7 +8219,7 @@ contains
          sh_rlat(1:4) = cshift(close_lat(m,1:4), iorg)
          sh_rlon(1:4) = cshift(close_lon(m,1:4), iorg)
          !calculate the interpolation weights  
-         call coord_ind_weight(sh_corn,sh_rlat,sh_rlon,sh_rdst,rlat,rlon, & !In 
+         call coord_ind_weight(sh_rlat,sh_rlon,rlat,rlon, & !In 
                                close_lat(m,iorg),close_lon(m,iorg),close_dst(m,iorg), & !In 
                                p,q) !Out
 
@@ -7999,21 +8235,10 @@ contains
          close_dst(m,1:4) = sh_rdst(1:4)
          close_lat(m,1:4) = sh_rlat(1:4)
          close_lon(m,1:4) = sh_rlon(1:4)
-        !write(iulog,*) "se2latlon_interp_init: close_dst,close_lat,close_lon,rlat,rlon,weight_qdl= "
-        !write(iulog,*) close_dst(m,1),close_dst(m,2),close_dst(m,3),close_dst(m,4),close_dst(m,5)
-        !write(iulog,*) close_lat(m,1),close_lat(m,2),close_lat(m,3),close_lat(m,4),close_lat(m,5),rlat
-        !write(iulog,*) close_lon(m,1),close_lon(m,2),close_lon(m,3),close_lon(m,4),close_lon(m,5),rlon
-        !write(iulog,*) weight_qdl(m,1),weight_qdl(m,2),weight_qdl(m,3),weight_qdl(m,4),weight_qdl(m,5)
        end if 
-       deallocate(olat)
-       deallocate(olon)
      end do
    end do 
 
-   deallocate(close_lat)
-   deallocate(close_lon)
-   deallocate(close_dst)
-    
    !final sanity check 
    if (any(close_ind == imissing)) then 
      call endrun('se2latlon_interp_init: ERROR, interpolation index contains missing values')
@@ -8022,12 +8247,14 @@ contains
      call endrun('se2latlon_interp_init: ERROR, interpolation weight contains missing values')
    end if 
    !write(iulog,*) 'se2latlon_interp_init: interpolation initialization succeed!' 
+   deallocate(olat,olon,close_lat,close_lon,close_dst)
 
    return 
   end subroutine !se2latlon_interp_init
   
-  subroutine coord_ind_weight(sh_corn,sh_rlat,sh_rlon,sh_rdst,rlat,rlon, & 
-                              close_lat,close_lon,close_dst,p,q)
+  subroutine coord_ind_weight(sh_rlat,sh_rlon,rlat,rlon, & 
+                              close_lat,close_lon,close_dst, & 
+                              p,q)
    !---------------------------------------------------------------------------
    ! This program computes weighting functions to map a variable on 
    ! SE grid to (nlat,nlon) resolution
@@ -8044,10 +8271,8 @@ contains
    real(r8), parameter   :: two_PI  = 2.0_r8 * SHR_CONST_PI
    real(r8), parameter   :: deg2rad = SHR_CONST_PI/180._r8
 
-   integer,  intent(in)  :: sh_corn(ncorner)
    real(r8), intent(in)  :: sh_rlat(ncorner)
    real(r8), intent(in)  :: sh_rlon(ncorner)
-   real(r8), intent(in)  :: sh_rdst(ncorner)
    real(r8), intent(in)  :: rlat
    real(r8), intent(in)  :: rlon
    real(r8), intent(in)  :: close_lat 
@@ -8057,13 +8282,11 @@ contains
 
    ! local variables
    logical  :: neg_root
-   integer  :: i, j, ifld, n, m, k, ii, jj
-   integer  :: iorg, ntcs, nmin, nrecg
-   integer  :: oc(1)
-   real(r8) :: dlat, dlon, rtemp, this_dist
+   integer  :: ii
+   real(r8) :: dlon, this_dist
    real(r8) :: xaa, xbb, xcc, as, bs, cs, disc
    real(r8) :: xaxbr, det, p1, p2, p_neg, q_neg
-   real(r8) :: lon1c, lon2c, dist, angle, bearo, x_o, y_o
+   real(r8) :: lon1c, lon2c, angle, bearo, x_o, y_o
    real(r8) :: xa(3), bearg(3), xplr(3), yplr(3), xb(2)
 
    xa    = rmissing
@@ -8072,6 +8295,7 @@ contains
    xplr  = rmissing
    yplr  = rmissing
    bearg = rmissing
+
    do ii = 3,1,-1  ! clockwise loop from 1 to 1
      if (half_PI - abs(sh_rlat(4)) < epsilon(sh_rlat(4))) then
        lon1c = 0.0_r8
@@ -8228,8 +8452,7 @@ contains
 
      ! Both roots yield a good mapping.
      if (neg_root) then
-       write(iulog,*) 'qdl_interp_init: BOTH roots of the m quadratic &
-                       yield usable mappings.  The +root is being used.'
+       write(iulog,*) 'qdl_interp_init: BOTH roots of the m quadratic yield usable mappings.  The +root is being used.'
      endif
 
    else if (neg_root) then
@@ -8237,8 +8460,7 @@ contains
      ! The -root yields a good mapping.  Pass along the -root m and l.
      p = p_neg
      q = q_neg
-     write(iulog,*) 'qdl_interp_init: The negative root of the m quadratic &
-                     yields the only usable mapping.'
+     write(iulog,*) 'qdl_interp_init: The negative root of the m quadratic yields the only usable mapping.'
 
    end if
 
