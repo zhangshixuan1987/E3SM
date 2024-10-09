@@ -233,7 +233,7 @@
 
       <modules compiler="gnu">
         <command name="load">PrgEnv-gnu/8.5.0</command>
-        <command name="load">gcc/12.2.0</command>
+        <command name="load">gcc/11.2.0</command>
         <command name="load">cray-libsci/23.02.1.1</command>
       </modules>
 
@@ -282,6 +282,13 @@
     <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
     <TEST_TPUT_TOLERANCE>0.1</TEST_TPUT_TOLERANCE>
     <TEST_MEMLEAK_TOLERANCE>0.20</TEST_MEMLEAK_TOLERANCE>
+
+    <environment_variables compiler="gnu">
+      <env name="TORCH_DIR">/global/homes/z/zhan391/.conda/envs/pytorch</env>
+      <env name="PYTHONPATH">/global/common/software/e3sm/anaconda_envs/base/envs/e3sm_unified_1.10.0_pm-cpu/lib/python3.10/site-packages:/global/homes/z/zhan391/.conda/envs/pytorch/torch/lib/</env>
+      <env name="LD_LIBRARY_PATH">$ENV{LD_LIBRARY_PATH}:/global/homes/z/zhan391/.conda/envs/pytorch/torch/lib:/global/homes/z/zhan391/.conda/envs/pytorch/torch/include:/global/homes/z/zhan391/.conda/envs/pytorch/torch/include/mod_files</env>
+      <env name="PATH">$ENV{PATH}:/global/homes/z/zhan391/.conda/envs/pytorch/torch/lib/python3.10/site-packages:/global/homes/z/zhan391/.conda/envs/pytorch/torch/include/mod_files:/global/homes/z/zhan391/.conda/envs/pytorch/torch/include</env>
+    </environment_variables>
 
     <environment_variables>
       <env name="MPICH_ENV_DISPLAY">1</env>

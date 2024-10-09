@@ -328,6 +328,201 @@
        Default: 0
        </entry>
 
+<entry id="Nudge_UV_OPT" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option of method for U nudging.
+       Default: 0
+       </entry>
+
+<entry id="Nudge_T_OPT" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option of method for T nudging.
+       Default: 0
+       </entry>
+
+<entry id="Nudge_Q_OPT" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option of method for Q nudging.
+       Default: 0
+       </entry>
+
+<entry id="Nudge_PS_OPT" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option of method for PS nudging.
+       Default: 0
+       </entry>
+
+<entry id="Nudge_PS_Adjust_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, apply the topography adjustment on surface pressure
+       at the location of calculation of nudging tendency for surface pressure
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_Q_Adjust_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, apply the adjustment on constitutes when Q is nudged
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_Pdep_Weight_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, scale the nudging strength coefficient by pressure
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_Tau" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Use user-defined relaxation time scale (unit: hour) for land surface nudging
+       Default: 6
+       </entry>
+
+<entry id="Nudge_SRF_File_Template" type="char*80" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Template for Nudging analyses file names (land surface).
+       Default: none
+       </entry>
+
+<entry id="Nudge_SRF_Times_Per_Day" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Number of analyses files per day (land surface).
+       Default: none
+       </entry>
+
+<entry id="Nudge_Srfprof" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Profile index for surface nudging.
+       Default: none
+       </entry>
+
+<entry id="Nudge_Srfcoef" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Coeffcient for surface nudging.
+       Default: none
+       </entry>
+
+<entry id="Nudge_SRF_PSWgt_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, scale the nudging strength coefficient by surface pressure
+       This is for the land surface nudging
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_Prec_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, nudge the precipitation fluxes at surface
+       This is for the land surface nudging
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_RadFlux_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, nudge the radiative fluxes at surface
+       This is for the land surface nudging
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_State_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, nudge the model state at surface
+       This is for the land surface nudging
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_Q_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, nudge the humidity at surface
+       This is for the land surface nudging
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_Land" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, turn on nudging for land surface variable
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_Flux_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, turn on nudging for land surface flux (SHFLX, LHFLX, QFLX) variable
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_SRF_File_Ntime" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Number of time slices per nudging data file for land surface quantities
+       Nudge_SRF_File_Ntime has to be equal to 1 or Nudge_Times_Per_Day.
+       Set default Nudge_SRF_File_Ntime to 0 to force the user to set its value correctly.
+       Default: 0
+       </entry>
+
+<entry id="Nudge_Lin_Relax_On" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, Linear relex the nudging strength coefficient to zero by pressure
+       above the 30hPa layer
+       Default: FALSE
+       </entry>
+
+<entry id="Nudge_NO_PBL_UV" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude UV nudging tendency below PBL
+       Default: 0
+       </entry>
+
+<entry id="Nudge_NO_PBL_T" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude T nudging tendency below PBL
+       Default: 0
+       </entry>
+
+<entry id="Nudge_NO_PBL_Q" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude Q nudging tendency below PBL
+       Default: 0
+       </entry>
+
+<entry id="mltbc_patch_model" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Turn On/Off with machine learning bias correction model trained for selected patch.
+       Default: FALSE
+       </entry>
+
+<entry id="mltbc_patch_bilerp" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Turn ON/OFF bilinear interpolation for Machine Learning 2D Convolution model ON/OFF.
+       Default: FALSE
+       </entry>
+
+<entry id="mltbc_nstep" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to select freqency of ML prediction: 1 for updating at every time step.
+       Default: 1
+       </entry>
+
+<entry id="mltbc_option" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to select type of machine learning bias correction model.
+       Default: 0
+       </entry>
+
+<entry id="mltbc_interp_test" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Turn ON/OFF Test for interpolation for Machine Learning 2D Convolution model ON/OFF.
+       Default: FALSE
+       </entry>
+
+<entry id="mltbc_model_path" type="char*256" input_pathname="abs" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Full pathname for machine learning model pt file to use for bias correction.
+       Default: none
+       </entry>
+
+<entry id="mltbc_file_template" type="char*80" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Template for machine learning model pt file names.
+       Default: none
+       </entry>
+
 <!-- Aerosols: Data (CAM version) -->
 
 <entry id="bndtvaer" type="char*256" input_pathname="abs" category="aero_data_cam"
