@@ -460,9 +460,14 @@ module nudging
   private:: mltbc_single_model
   private:: mltbc_unified_model
   private:: mltbc_aec_deeponet
-  private:: mltbc_state_deeponet 
+  private:: mltbc_state_deeponet
   private:: mltbc_deeponet_encoder
   private:: mltbc_deeponet_decoder
+  private:: mltbc_update_prof
+  private:: mltbc_calc_tend
+  private:: mltbc_global_to_patch
+  private:: mltbc_global_to_latlon
+  private:: mltbc_latlon_to_global
 
   ! Nudging Parameters
   !--------------------
@@ -1226,6 +1231,12 @@ contains
    call addfld('T_bf_ndg',(/ 'lev' /),  'A','K'      ,'Temperature Before Nudging')
    call addfld('Q_bf_ndg',(/ 'lev' /),  'A','kg/kg'  ,'Specific Humidity Before Nudging')
    call addfld('PS_bf_ndg', horiz_only, 'A','Pa'     ,'Surface Pressure Before Nudging')
+
+   call addfld('U_MLTBC',(/ 'lev' /),  'A','m/s'    ,'Zonal Wind Before Machine Learning Bias Correction')
+   call addfld('V_MLTBC',(/ 'lev' /),  'A','m/s'    ,'Meridional Wind Before Machine Learning Bias Correction')
+   call addfld('T_MLTBC',(/ 'lev' /),  'A','K'      ,'Temperature Before Machine Learning Bias Correction')
+   call addfld('Q_MLTBC',(/ 'lev' /),  'A','kg/kg'  ,'Specific Humidity Before Machine Learning Bias Correction')
+   call addfld('PS_MLTBC', horiz_only, 'A','Pa'     ,'Surface Pressure Before Machine Learning Bias Correction')
 
    call addfld('Z3_af_ndg',(/ 'lev' /), 'A','m'      ,'Geopotential Height After Nudging')
    call addfld('U_af_ndg',(/ 'lev' /),  'A','m/s'    ,'Zonal Wind After Nudging')
@@ -2289,6 +2300,7 @@ contains
    real(r8),             intent(in) :: dtime
 
    type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
+   type(physics_buffer_desc), pointer :: phys_buffer_chunk(:)
    
    ! Local values
    !----------------
@@ -2444,56 +2456,26 @@ contains
                           Model_PSML(:,:,1),Model_UML,Model_VML,Model_TML,Model_QML, & !in  
                           Nudge_PSstep,Nudge_Ustep,Nudge_Vstep,Nudge_Tstep,Nudge_Qstep) !out 
 
-     !Add a linear relexation of the nudging tendency 
-     if (Nudge_Lin_Relax_On) then
-       do lchnk=begchunk,endchunk
-         ncol = state(lchnk)%ncol
-         do i = 1, ncol 
-           do k = pver, 1, -1     
-             if ( state(lchnk)%pmid(i,k) < p_uv_relax ) then
-               Nudge_Utau(i,k,lchnk) = Nudge_Utau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
-               Nudge_Vtau(i,k,lchnk) = Nudge_Vtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_uv_relax)
-             end if                    
-             if ( state(lchnk)%pmid(i,k) < p_T_relax ) then
-               Nudge_Ttau(i,k,lchnk) = Nudge_Ttau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_T_relax)
-             end if                    
-             if ( state(lchnk)%pmid(i,k) < p_q_relax ) then
-               Nudge_Qtau(i,k,lchnk) = Nudge_Qtau(i,k,lchnk) * max(0.01_r8, state(lchnk)%pmid(i,k)/p_Q_relax)
-             end if                    
-             if (state(lchnk)%pmid(i,k) < p_norelax ) then
-               Nudge_Utau(i,k,lchnk) = 0._r8
-               Nudge_Vtau(i,k,lchnk) = 0._r8
-               Nudge_Ttau(i,k,lchnk) = 0._r8
-               Nudge_Qtau(i,k,lchnk) = 0._r8
-             end if
-           end do 
-         end do
-       end do
-     end if
-
-     !apply the coefficient 
+     !Apply scaling or constrains on nudging strength
      do lchnk=begchunk,endchunk
-       ncol = state(lchnk)%ncol
-       Nudge_Ustep(:ncol,:pver,lchnk) = Nudge_Ustep(:ncol,:pver,lchnk) &
-                                       * Nudge_Utau(:ncol,:pver,lchnk)
-       Nudge_Vstep(:ncol,:pver,lchnk) = Nudge_Vstep(:ncol,:pver,lchnk) &
-                                         * Nudge_Vtau(:ncol,:pver,lchnk)
-       Nudge_Tstep(:ncol,:pver,lchnk) = Nudge_Tstep(:ncol,:pver,lchnk) &
-                                         * Nudge_Ttau(:ncol,:pver,lchnk)
-       Nudge_Qstep(:ncol,:pver,lchnk) = Nudge_Qstep(:ncol,:pver,lchnk) &
-                                         * Nudge_Qtau(:ncol,:pver,lchnk)
-       Nudge_PSstep(:ncol,lchnk)      = Nudge_PSstep(:ncol,lchnk) &
-                                         * Nudge_PStau(:ncol,lchnk)
-     end do
+       phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
+       call mltbc_update_prof(phys_buffer_chunk,state(lchnk),Nudge_Lin_Relax_On, & !in 
+                              Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
+                              Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
+                              Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
+                              Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
+                              Nudge_Ustep(:,:,lchnk),Nudge_Vstep(:,:,lchnk), & !inout
+                              Nudge_Tstep(:,:,lchnk),Nudge_Qstep(:,:,lchnk)) !inout
+     end do 
    end if
 
    !output Diagnostics 
    do lchnk=begchunk,endchunk
-     call outfld('U_bf_ndg',  Model_U(:,:,lchnk), pcols,lchnk)
-     call outfld('V_bf_ndg',  Model_V(:,:,lchnk), pcols,lchnk)
-     call outfld('T_bf_ndg',  Model_T(:,:,lchnk), pcols,lchnk)
-     call outfld('Q_bf_ndg',  Model_Q(:,:,lchnk), pcols,lchnk)
-     call outfld('PS_bf_ndg', Model_PS(:,lchnk),  pcols,lchnk)
+     call outfld('U_MLTBC',  Model_U(:,:,lchnk), pcols,lchnk)
+     call outfld('V_MLTBC',  Model_V(:,:,lchnk), pcols,lchnk)
+     call outfld('T_MLTBC',  Model_T(:,:,lchnk), pcols,lchnk)
+     call outfld('Q_MLTBC',  Model_Q(:,:,lchnk), pcols,lchnk)
+     call outfld('PS_MLTBC', Model_PS(:,lchnk),  pcols,lchnk)
 
      call outfld('Nudge_U',   Nudge_Ustep(:,:,lchnk),pcols,lchnk)
      call outfld('Nudge_V',   Nudge_Vstep(:,:,lchnk),pcols,lchnk)
@@ -2658,6 +2640,251 @@ contains
    !------------
    return
   end subroutine ! mltbc_calc_tend
+
+  !===========================================================================
+  ! SZ - 10/13/2024: The main subrutine to modify the predicted nudging tendency 
+  !                  profiles from machine learning model 
+  !===========================================================================
+  subroutine mltbc_update_prof(pbuf,state,use_upp_relx,no_pbl_uv,no_pbl_t,no_pbl_q, &
+                               nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
+                               nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
+   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
+   use physics_types , only: physics_state
+   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                             physics_buffer_desc, pbuf_get_chunk
+   use constituents  , only: cnst_get_ind,pcnst
+   use phys_grid     , only: scatter_field_to_chunk, get_ncols_p
+   use ppgrid        , only: pver,pverp,pcols,begchunk,endchunk
+   use shr_vmath_mod,  only: shr_vmath_log
+   use geopotential,   only: geopotential_t
+   use wv_saturation,  only: qsat, qsat_water, svp_ice
+   use physconst,      only: rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
+
+   ! Arguments
+   !-----------
+   type(physics_state), intent(in) :: state
+   type(physics_buffer_desc), pointer :: pbuf(:)
+
+   logical,  intent(in)    :: use_upp_relx
+   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
+   real(r8), intent(inout) :: nudge_uprf(pcols,pver)
+   real(r8), intent(inout) :: nudge_vprf(pcols,pver)
+   real(r8), intent(inout) :: nudge_tprf(pcols,pver)
+   real(r8), intent(inout) :: nudge_qprf(pcols,pver)
+   real(r8), intent(inout) :: nudge_psprf(pcols)
+
+   real(r8), intent(inout) :: nudge_u(pcols,pver)
+   real(r8), intent(inout) :: nudge_v(pcols,pver)
+   real(r8), intent(inout) :: nudge_t(pcols,pver)
+   real(r8), intent(inout) :: nudge_q(pcols,pver)
+   real(r8), intent(inout) :: nudge_ps(pcols)
+
+   ! local variables 
+   integer  :: pblh_idx        ! PBL pbuf
+   integer  :: lchnk,ncol,indw
+   integer  :: i, k, m
+
+   real(r8) :: rairv(pcols,pver)
+   real(r8) :: zvirv(pcols,pver)
+   real(r8) :: kpblt(pcols)
+
+   real(r8) :: pint_mod(pcols,pverp)
+   real(r8) :: pmid_mod(pcols,pver)
+   real(r8) :: pdel_mod(pcols,pver)
+   real(r8) :: rpdel_mod(pcols,pver)
+   real(r8) :: lnpint_mod(pcols,pverp)
+   real(r8) :: lnpmid_mod(pcols,pver)
+   real(r8) :: exner_mod(pcols,pver)
+   real(r8) :: zi_mod(pcols,pverp)
+
+   real(r8) :: dqsdT_mod(pcols,pver)
+   real(r8) :: qsmod(pcols,pver)
+   real(r8) :: esmod(pcols,pver)
+   real(r8) :: rhmod(pcols,pver)
+   real(r8) :: tvmod(pcols,pver)
+
+   real(r8) :: wuprof(pcols,pver)
+   real(r8) :: wvprof(pcols,pver)
+   real(r8) :: wtprof(pcols,pver)
+   real(r8) :: wqprof(pcols,pver)
+   real(r8) :: zm_mod(pcols,pver)
+
+   real(r8), pointer :: pblh(:)
+
+   ! Load values at Current into the Model arrays
+   !-----------------------------------------------
+   lchnk = state%lchnk
+   ncol  = state%ncol
+
+   pblh_idx = pbuf_get_index('pblh')
+   call pbuf_get_field(pbuf, pblh_idx,  pblh)
+
+   call cnst_get_ind('Q',indw)
+
+   ! initialize zvir and rair 
+   do i = 1, ncol
+     kpblt(i) = pver
+     do k = 1, pver
+       rairv(i,k) = rair
+       zvirv(i,k) = zvir
+     end do
+   end do
+
+   !compute pressure and ln(pres) at interface layer 
+   do k = 1, pverp
+     pint_mod(:ncol,k) = hyai(k)*ps0 + hybi(k)* state%ps(:ncol)
+     !logrithm of pressure 
+     call shr_vmath_log(pint_mod(:ncol,k),lnpint_mod(:ncol,k),ncol)
+   end do
+
+   !compute pressure and ln(pres) at middle layer 
+   do k = 1, pver
+     pmid_mod(:ncol,k) = hyam(k)*ps0 + hybm(k)* state%ps(:ncol)
+     !logrithm of pressure 
+     call shr_vmath_log(pmid_mod(:ncol,k),lnpmid_mod(:ncol,k),ncol)
+   end do 
+
+   !derive the layer thickness and exner
+   do k = 1, pver
+     do i = 1, ncol
+       pdel_mod(i,k)  = pint_mod(i,k+1) - pint_mod(i,k)
+       rpdel_mod(i,k) = 1._r8/pdel_mod(i,k)
+       exner_mod(i,k) = (pint_mod(i,pverp)/pmid_mod(i,k))**cappa
+     end do
+   end do
+
+   !derive the geoptential height 
+   call geopotential_t(lnpint_mod,lnpmid_mod,pint_mod, pmid_mod, pdel_mod,rpdel_mod, &
+                       state%t(:ncol,:pver),state%q(:ncol,:pver,indw), &
+                       rairv,gravit,zvirv,zi_mod,zm_mod,ncol)
+
+  !Exclude the nudging tendency in boundary layer
+  !Note: PBL height is in AGL  
+  do k = pver-1,1,-1
+    do i = 1,ncol
+      if (abs(zm_mod(i,k)-pblh(i)) < (zi_mod(i,k)-zi_mod(i,k+1))*0.5_r8) kpblt(i) = k
+    end do
+  end do
+  !if (masterproc) then
+  !  write(iulog,*) "MLTBC Nudging: PBL level index min/max ", minval(kpblt),maxval(kpblt)
+  !  write(iulog,*) "MLTBC Nudging: PBL height min/max      ", minval(pblh),maxval(pblh)
+  !  write(iulog,*) "MLTBC Nudging: Model height min/max    ", minval(zm_mod),maxval(zm_mod) 
+  !end if
+
+  !--------------------------------------------------
+  ! Strategy to exclude the nudging at near surface 
+  !--------------------------------------------------
+  select case (no_pbl_uv)
+    case (0)
+      wuprof(:ncol,:pver) = 1.0_r8
+      wvprof(:ncol,:pver) = 1.0_r8
+    case (1)
+      do i = 1, ncol
+        do k = pver, 1, -1
+          wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+          wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+        end do 
+      end do 
+    case (2)
+      do i = 1, ncol
+        do k = pver, 1, -1
+          wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
+                        0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+          wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
+                        0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+        end do 
+      end do 
+    case default
+      call endrun('nudging_tend error: invalid option for no_pbl_uv nudging')
+  end select
+
+  select case (no_pbl_t)
+     case (0)
+       wtprof(:ncol,:pver) = 1.0_r8
+     case (1)
+       do i = 1, ncol
+         do k = pver, 1, -1
+           wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+         end do 
+       end do 
+     case (2)
+       do i = 1, ncol
+         do k = pver, 1, -1
+           wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
+                         0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+         end do 
+       end do 
+     case default
+       call endrun('nudging_tend error: invalid option for no_pbl_t nudging')
+  end select
+
+  select case (no_pbl_q)
+     case (0)
+       wqprof(:ncol,:pver) = 1.0_r8
+     case (1)
+       do i = 1, ncol
+         do k = pver, 1, -1
+           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+         end do 
+       end do 
+     case (2)
+       do i = 1, ncol
+         do k = pver, 1, -1
+           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
+                         0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+         end do 
+       end do
+     case default
+       call endrun('nudging_tend error: invalid option for no_pbl_q nudging')
+  end select
+
+  ! Add a linear relexation of the nudging tendency on the upper layer 
+  if (use_upp_relx) then
+    do i = 1, ncol
+      do k = pver, 1, -1
+        if ( pmid_mod(i,k) < p_uv_relax ) then
+          wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
+          wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
+        end if
+        if ( pmid_mod(i,k) < p_T_relax ) then
+          wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_T_relax)
+        end if
+        if ( pmid_mod(i,k) < p_q_relax ) then
+          wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_q_relax)
+        end if
+        if ( pmid_mod(i,k) < p_norelax ) then
+          wuprof(i,k) = 0._r8
+          wvprof(i,k) = 0._r8
+          wtprof(i,k) = 0._r8
+          wqprof(i,k) = 0._r8
+        end if
+      end do
+    end do
+  end if
+
+  ! finally apply the scaling on the nudging weighting function 
+  do i = 1, ncol
+    do k = pver, 1, -1
+      nudge_uprf(i,k) = nudge_uprf(i,k) * wuprof(i,k)
+      nudge_vprf(i,k) = nudge_vprf(i,k) * wvprof(i,k)
+      nudge_tprf(i,k) = nudge_tprf(i,k) * wtprof(i,k)
+      nudge_qprf(i,k) = nudge_qprf(i,k) * wqprof(i,k)
+    end do
+  end do
+
+  ! finally apply weighting function on the nudging tendency
+  do i = 1, ncol
+    do k = pver, 1, -1
+      nudge_u(i,k) = nudge_uprf(i,k) * nudge_u(i,k)
+      nudge_v(i,k) = nudge_vprf(i,k) * nudge_v(i,k)
+      nudge_t(i,k) = nudge_tprf(i,k) * nudge_t(i,k)
+      nudge_q(i,k) = nudge_qprf(i,k) * nudge_q(i,k)
+    end do
+    nudge_ps(i) = nudge_psprf(i) * nudge_ps(i)
+  end do
+
+  return
+  end subroutine  !mltbc_update_prof
 
   !===========================================================================
   ! JS - 11/05/2019: Based on Shixuan Zhang's suggestion, the calculation of 
