@@ -2459,8 +2459,9 @@ contains
      !Apply scaling or constrains on nudging strength
      do lchnk=begchunk,endchunk
        phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
-       call mltbc_update_prof(phys_buffer_chunk,state(lchnk),Nudge_Lin_Relax_On, & !in 
+       call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
+                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in 
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
                               Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
@@ -2645,130 +2646,257 @@ contains
   ! SZ - 10/13/2024: The main subrutine to modify the predicted nudging tendency 
   !                  profiles from machine learning model 
   !===========================================================================
-  subroutine mltbc_update_prof(pbuf,state,use_upp_relx,no_pbl_uv,no_pbl_t,no_pbl_q, &
+  subroutine mltbc_update_prof(pbuf,state,dtime,use_upp_relx,no_pbl_uv,no_pbl_t,no_pbl_q, &
+                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
-   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
-   use physics_types , only: physics_state
-   use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
-                             physics_buffer_desc, pbuf_get_chunk
-   use constituents  , only: cnst_get_ind,pcnst
-   use phys_grid     , only: scatter_field_to_chunk, get_ncols_p
-   use ppgrid        , only: pver,pverp,pcols,begchunk,endchunk
-   use shr_vmath_mod,  only: shr_vmath_log
-   use geopotential,   only: geopotential_t
-   use wv_saturation,  only: qsat, qsat_water, svp_ice
-   use physconst,      only: rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
+  use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
+  use physics_types , only: physics_state
+  use physics_buffer, only: pbuf_get_index, pbuf_old_tim_idx, pbuf_get_field, &
+                            physics_buffer_desc, pbuf_get_chunk
+  use constituents  , only: cnst_get_ind,pcnst
+  use phys_grid     , only: scatter_field_to_chunk, get_ncols_p
+  use ppgrid        , only: pver,pverp,pcols,begchunk,endchunk
+  use shr_vmath_mod,  only: shr_vmath_log
+  use geopotential,   only: geopotential_t
+  use wv_saturation,  only: qsat, qsat_water, svp_ice
+  use physconst,      only: rga, cpair, gravit, rair, latvap, rh2o, zvir, cappa
 
-   ! Arguments
-   !-----------
-   type(physics_state), intent(in) :: state
-   type(physics_buffer_desc), pointer :: pbuf(:)
+  ! Arguments
+  !-----------
+  type(physics_state), intent(in) :: state
+  type(physics_buffer_desc), pointer :: pbuf(:)
 
-   logical,  intent(in)    :: use_upp_relx
-   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
-   real(r8), intent(inout) :: nudge_uprf(pcols,pver)
-   real(r8), intent(inout) :: nudge_vprf(pcols,pver)
-   real(r8), intent(inout) :: nudge_tprf(pcols,pver)
-   real(r8), intent(inout) :: nudge_qprf(pcols,pver)
-   real(r8), intent(inout) :: nudge_psprf(pcols)
+  logical,  intent(in)    :: use_upp_relx
+  integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
+  integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
+  real(r8), intent(in)    :: dtime
+  real(r8), intent(inout) :: nudge_uprf(pcols,pver)
+  real(r8), intent(inout) :: nudge_vprf(pcols,pver)
+  real(r8), intent(inout) :: nudge_tprf(pcols,pver)
+  real(r8), intent(inout) :: nudge_qprf(pcols,pver)
+  real(r8), intent(inout) :: nudge_psprf(pcols)
+  real(r8), intent(inout) :: nudge_u(pcols,pver)
+  real(r8), intent(inout) :: nudge_v(pcols,pver)
+  real(r8), intent(inout) :: nudge_t(pcols,pver)
+  real(r8), intent(inout) :: nudge_q(pcols,pver)
+  real(r8), intent(inout) :: nudge_ps(pcols)
 
-   real(r8), intent(inout) :: nudge_u(pcols,pver)
-   real(r8), intent(inout) :: nudge_v(pcols,pver)
-   real(r8), intent(inout) :: nudge_t(pcols,pver)
-   real(r8), intent(inout) :: nudge_q(pcols,pver)
-   real(r8), intent(inout) :: nudge_ps(pcols)
+  ! local variables 
+  logical, parameter  :: l_adj_super_saturation = .false.  
+  
+  integer  :: pblh_idx        ! PBL pbuf
+  integer  :: lchnk,ncol,indw
+  integer  :: i, k, m
 
-   ! local variables 
-   integer  :: pblh_idx        ! PBL pbuf
-   integer  :: lchnk,ncol,indw
-   integer  :: i, k, m
+  real(r8) :: rairv(pcols,pver)
+  real(r8) :: zvirv(pcols,pver)
+  real(r8) :: kpblt(pcols)
 
-   real(r8) :: rairv(pcols,pver)
-   real(r8) :: zvirv(pcols,pver)
-   real(r8) :: kpblt(pcols)
+  real(r8) :: pint(pcols,pverp)
+  real(r8) :: pmid(pcols,pver)
+  real(r8) :: pdel(pcols,pver)
+  real(r8) :: rpdel(pcols,pver)
+  real(r8) :: lnpint(pcols,pverp)
+  real(r8) :: lnpmid(pcols,pver)
+  real(r8) :: exner(pcols,pver)
+  real(r8) :: zi(pcols,pverp)
+  real(r8) :: zm(pcols,pver)
 
-   real(r8) :: pint_mod(pcols,pverp)
-   real(r8) :: pmid_mod(pcols,pver)
-   real(r8) :: pdel_mod(pcols,pver)
-   real(r8) :: rpdel_mod(pcols,pver)
-   real(r8) :: lnpint_mod(pcols,pverp)
-   real(r8) :: lnpmid_mod(pcols,pver)
-   real(r8) :: exner_mod(pcols,pver)
-   real(r8) :: zi_mod(pcols,pverp)
+  real(r8) :: ucur(pcols,pver)
+  real(r8) :: vcur(pcols,pver)
+  real(r8) :: tcur(pcols,pver)
+  real(r8) :: qcur(pcols,pver)
+  real(r8) :: utp1(pcols,pver)
+  real(r8) :: vtp1(pcols,pver)
+  real(r8) :: ttp1(pcols,pver)
+  real(r8) :: qtp1(pcols,pver)
 
-   real(r8) :: dqsdT_mod(pcols,pver)
-   real(r8) :: qsmod(pcols,pver)
-   real(r8) :: esmod(pcols,pver)
-   real(r8) :: rhmod(pcols,pver)
-   real(r8) :: tvmod(pcols,pver)
+  real(r8) :: dqsdT_cur(pcols,pver)
+  real(r8) :: qscur(pcols,pver)
+  real(r8) :: escur(pcols,pver)
+  real(r8) :: rhcur(pcols,pver)
+  real(r8) :: tvcur(pcols,pver)
 
-   real(r8) :: wuprof(pcols,pver)
-   real(r8) :: wvprof(pcols,pver)
-   real(r8) :: wtprof(pcols,pver)
-   real(r8) :: wqprof(pcols,pver)
-   real(r8) :: zm_mod(pcols,pver)
+  real(r8) :: dqsdT_tp1(pcols,pver)
+  real(r8) :: qstp1(pcols,pver)
+  real(r8) :: estp1(pcols,pver)
+  real(r8) :: rhtp1(pcols,pver)
+  real(r8) :: tvtp1(pcols,pver)
 
-   real(r8), pointer :: pblh(:)
+  real(r8) :: wuprof(pcols,pver)
+  real(r8) :: wvprof(pcols,pver)
+  real(r8) :: wtprof(pcols,pver)
+  real(r8) :: wqprof(pcols,pver)
 
-   ! Load values at Current into the Model arrays
-   !-----------------------------------------------
-   lchnk = state%lchnk
-   ncol  = state%ncol
+  real(r8), pointer :: pblh(:)
 
-   pblh_idx = pbuf_get_index('pblh')
-   call pbuf_get_field(pbuf, pblh_idx,  pblh)
+  ! Load values at Current into the Model arrays
+  !-----------------------------------------------
+  lchnk = state%lchnk
+  ncol  = state%ncol
 
-   call cnst_get_ind('Q',indw)
+  pblh_idx = pbuf_get_index('pblh')
+  call pbuf_get_field(pbuf, pblh_idx,  pblh)
 
-   ! initialize zvir and rair 
-   do i = 1, ncol
-     kpblt(i) = pver
-     do k = 1, pver
-       rairv(i,k) = rair
-       zvirv(i,k) = zvir
-     end do
-   end do
+  call cnst_get_ind('Q',indw)
 
-   !compute pressure and ln(pres) at interface layer 
-   do k = 1, pverp
-     pint_mod(:ncol,k) = hyai(k)*ps0 + hybi(k)* state%ps(:ncol)
-     !logrithm of pressure 
-     call shr_vmath_log(pint_mod(:ncol,k),lnpint_mod(:ncol,k),ncol)
-   end do
+  !model state at current time  
+  ucur(:ncol,:pver) = state%u(:ncol,:pver) 
+  vcur(:ncol,:pver) = state%v(:ncol,:pver) 
+  tcur(:ncol,:pver) = state%t(:ncol,:pver) 
+  qcur(:ncol,:pver) = state%q(:ncol,:pver,indw) 
 
-   !compute pressure and ln(pres) at middle layer 
-   do k = 1, pver
-     pmid_mod(:ncol,k) = hyam(k)*ps0 + hybm(k)* state%ps(:ncol)
-     !logrithm of pressure 
-     call shr_vmath_log(pmid_mod(:ncol,k),lnpmid_mod(:ncol,k),ncol)
-   end do 
+  !calculate the model state before and after bias correction
+  utp1(:ncol,:pver) = ucur(:ncol,:pver) + nudge_u(:ncol,:pver) * dtime
+  vtp1(:ncol,:pver) = vcur(:ncol,:pver) + nudge_v(:ncol,:pver) * dtime
+  ttp1(:ncol,:pver) = tcur(:ncol,:pver) + nudge_t(:ncol,:pver) * dtime
+  qtp1(:ncol,:pver) = qcur(:ncol,:pver) + nudge_q(:ncol,:pver) * dtime
 
-   !derive the layer thickness and exner
-   do k = 1, pver
-     do i = 1, ncol
-       pdel_mod(i,k)  = pint_mod(i,k+1) - pint_mod(i,k)
-       rpdel_mod(i,k) = 1._r8/pdel_mod(i,k)
-       exner_mod(i,k) = (pint_mod(i,pverp)/pmid_mod(i,k))**cappa
-     end do
-   end do
+  ! initialize zvir and rair 
+  do i = 1, ncol
+    kpblt(i) = pver
+    do k = 1, pver
+      rairv(i,k) = rair
+      zvirv(i,k) = zvir
+    end do
+  end do
 
-   !derive the geoptential height 
-   call geopotential_t(lnpint_mod,lnpmid_mod,pint_mod, pmid_mod, pdel_mod,rpdel_mod, &
-                       state%t(:ncol,:pver),state%q(:ncol,:pver,indw), &
-                       rairv,gravit,zvirv,zi_mod,zm_mod,ncol)
+  !compute pressure and ln(pres) at interface layer 
+  do k = 1, pverp
+    pint(:ncol,k) = hyai(k)*ps0 + hybi(k)* state%ps(:ncol)
+    !logrithm of pressure 
+    call shr_vmath_log(pint(:ncol,k),lnpint(:ncol,k),ncol)
+  end do
+
+  !compute pressure and ln(pres) at middle layer 
+  do k = 1, pver
+    pmid(:ncol,k) = hyam(k)*ps0 + hybm(k)* state%ps(:ncol)
+    !logrithm of pressure 
+    call shr_vmath_log(pmid(:ncol,k),lnpmid(:ncol,k),ncol)
+  end do 
+
+  !derive the layer thickness and exner
+  do k = 1, pver
+    do i = 1, ncol
+      pdel(i,k)  = pint(i,k+1) - pint(i,k)
+      rpdel(i,k) = 1._r8/pdel(i,k)
+      exner(i,k) = (pint(i,pverp)/pmid(i,k))**cappa
+    end do
+  end do
+
+  !derive the geoptential height 
+  call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
+                      tcur(:ncol,:pver),qcur(:ncol,:pver), &
+                      rairv,gravit,zvirv,zi,zm,ncol)
+
+  !calculate the virtual temperature, saturation mixing ratio and relative humidity 
+  !before and after the ml bias correction, which will be used to apply constrains on the 
+  !ml bias correction tendency  
+  if ( (Nudge_Tprof .ne. 0 ) .or. (Nudge_Qprof .ne. 0) ) then
+    do k = 1, pver
+      do i = 1, ncol
+        qtp1(i,k)  = max(0.0_r8, qtp1(i,k))
+        call qsat(tcur(i,k), pmid(i,k), escur(i,k), qscur(i,k), dqsdt=dqsdT_cur(i,k))
+        call qsat(ttp1(i,k), pmid(i,k), estp1(i,k), qstp1(i,k), dqsdt=dqsdT_tp1(i,k))
+        rhcur(i,k) = qcur(i,k) / qscur(i,k)
+        rhtp1(i,k) = qtp1(i,k) / qstp1(i,k)
+        tvcur(i,k) = tcur(i,k) * (1.0_r8 + zvir * qcur(i,k))
+        tvtp1(i,k) = ttp1(i,k) * (1.0_r8 + zvir * qtp1(i,k))
+        if (l_adj_super_saturation) then 
+          if (qcur(i,k) > qscur(i,k)) then 
+            qcur(i,k) = qscur(i,k)
+            rhcur(i,k) = 1._r8
+          end if         
+          if (qtp1(i,k) > qstp1(i,k)) then
+            qtp1(i,k) = qstp1(i,k)
+            rhtp1(i,k) = 1._r8
+          end if
+        end if 
+      end do
+    end do
+  end if
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! apply constrains on temperature  and humidity nudging!!!
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  if ( Nudge_Tprof .ne. 0  ) then
+    select case (ndg_t_opt)
+       case (0)
+         ! direct nudging 
+         nudge_t(:ncol,:pver) = (ttp1(:ncol,:pver) - tcur(:ncol,:pver)) / dtime 
+       case (1)
+         ! nudge virtual temperature (Tv) 
+         ! Tangent linear of Tv with respect to T and q 
+         ! dT/dTv = d(Tv/(1 + zvir * q))/dTv = 1/(1 + zvir * q)
+         ! dT     = dTv / (1 + zvir * q) 
+         do k = 1, pver
+          do i = 1, ncol
+            nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime & 
+                           / (1.0_r8 + zvir * qcur(i,k))
+          end do
+         end do
+       case (2)
+         ! Reference: Yang et. al. (2021, JMR), Fan and Tilley (2005, MWR)
+         ! nudge relative humidity (RH) to adjust T 
+         ! Tangent linear of RH with respect to T and q 
+         ! dRH/dT = d(q/qs)/dT = - q/qs^2 * dqs/dT 
+         ! dT     = dRH / (-RH/qs * dqs/dT )
+         do k = 1, pver
+          do i = 1, ncol
+            if ( (qcur(i,k) > 0._r8) .and. (dqsdT_cur(i,k) > 0._r8) ) then
+              nudge_t(i,k) = - (rhtp1(i,k) - rhcur(i,k)) / dtime & 
+                             * qscur(i,k) * qscur(i,k) &
+                             / (max(qcur(i,k),1.E-8_r8)*dqsdT_cur(i,k))
+            else
+              nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime &
+                             /(1.0_r8 + zvir * qcur(i,k))
+            end if
+          end do
+         end do
+       case default
+         call endrun('MLTBC error: invalid option for T nudging')
+    end select
+  end if
+
+  ! humidity
+  if ( Nudge_Qprof .ne. 0 ) then
+    select case (ndg_q_opt)
+       case (0)
+         ! direct nudging 
+         nudge_q(:ncol,:pver) = (qtp1(:ncol,:pver) - qcur(:ncol,:pver)) / dtime
+       case (1) 
+         ! use virtual temperature relationship to update q 
+         nudge_q(:ncol,:pver) = (tvtp1(:ncol,:pver) / ttp1(:ncol,:pver) &
+                                 - tvcur(:ncol,:pver) / tcur(:ncol,:pver)) / zvir / dtime       
+       case (2)
+         ! Reference: Yang et. al. (2021, JMR), Fan and Tilley (2005, MWR)
+         ! nudge relative humidity (RH), only adjust q
+         ! Tangent linear of RH with respect to q 
+         ! dRH/dT   = d(q/qs)/dT = - q/qs^2 * dqs/dT = -RH/qs * dqs/dT 
+         ! dRH/dq   = d(q/qs)/dq = 1/qs = RH / q 
+         ! dq       = qs*dRH
+         do k = 1, pver
+          do i = 1, ncol
+             nudge_q(i,k) = (rhtp1(i,k)-rhcur(i,k)) * qscur(i,k) / dtime 
+          end do
+         end do
+       case default
+         call endrun('nudging_tend error: invalid option for Q nudging')
+    end select
+  end if
 
   !Exclude the nudging tendency in boundary layer
   !Note: PBL height is in AGL  
   do k = pver-1,1,-1
     do i = 1,ncol
-      if (abs(zm_mod(i,k)-pblh(i)) < (zi_mod(i,k)-zi_mod(i,k+1))*0.5_r8) kpblt(i) = k
+      if (abs(zm(i,k)-pblh(i)) < (zi(i,k)-zi(i,k+1))*0.5_r8) kpblt(i) = k
     end do
   end do
   !if (masterproc) then
   !  write(iulog,*) "MLTBC Nudging: PBL level index min/max ", minval(kpblt),maxval(kpblt)
   !  write(iulog,*) "MLTBC Nudging: PBL height min/max      ", minval(pblh),maxval(pblh)
-  !  write(iulog,*) "MLTBC Nudging: Model height min/max    ", minval(zm_mod),maxval(zm_mod) 
+  !  write(iulog,*) "MLTBC Nudging: Model height min/max    ", minval(zm),maxval(zm) 
   !end if
 
   !--------------------------------------------------
@@ -2842,17 +2970,17 @@ contains
   if (use_upp_relx) then
     do i = 1, ncol
       do k = pver, 1, -1
-        if ( pmid_mod(i,k) < p_uv_relax ) then
-          wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
-          wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_uv_relax)
+        if ( pmid(i,k) < p_uv_relax ) then
+          wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid(i,k)/p_uv_relax)
+          wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid(i,k)/p_uv_relax)
         end if
-        if ( pmid_mod(i,k) < p_T_relax ) then
-          wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_T_relax)
+        if ( pmid(i,k) < p_T_relax ) then
+          wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid(i,k)/p_T_relax)
         end if
-        if ( pmid_mod(i,k) < p_q_relax ) then
-          wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid_mod(i,k)/p_q_relax)
+        if ( pmid(i,k) < p_q_relax ) then
+          wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid(i,k)/p_q_relax)
         end if
-        if ( pmid_mod(i,k) < p_norelax ) then
+        if ( pmid(i,k) < p_norelax ) then
           wuprof(i,k) = 0._r8
           wvprof(i,k) = 0._r8
           wtprof(i,k) = 0._r8
@@ -5837,7 +5965,6 @@ contains
   integer, intent(in)  :: ndg_uv_opt
   integer, intent(in)  :: ndg_t_opt
   integer, intent(in)  :: ndg_q_opt
-
   integer, intent(in)  :: ndg_ps_flg
   integer, intent(in)  :: ndg_u_flg
   integer, intent(in)  :: ndg_v_flg
