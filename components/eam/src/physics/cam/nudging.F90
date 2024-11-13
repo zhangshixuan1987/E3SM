@@ -2917,9 +2917,9 @@ contains
       do i = 1, ncol
         do k = pver, 1, -1
           wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                        0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+                        0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
           wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                        0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+                        0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
         end do 
       end do 
     case default
@@ -2939,7 +2939,7 @@ contains
        do i = 1, ncol
          do k = pver, 1, -1
            wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                         0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+                         0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
          end do 
        end do 
      case default
@@ -2952,14 +2952,14 @@ contains
      case (1)
        do i = 1, ncol
          do k = pver, 1, -1
-           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8))
+           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) 
          end do 
        end do 
      case (2)
        do i = 1, ncol
          do k = pver, 1, -1
            wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                         0.5_r8 * (1.0_r8 + tanh((real(k)-real(pver-1))/0.1_r8))
+                         0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
          end do 
        end do
      case default
