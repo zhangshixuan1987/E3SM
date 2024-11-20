@@ -690,6 +690,30 @@ module nudging
   real(r8) :: mltbc_patch_dx
   real(r8) :: mltbc_patch_dy
 
+  !module for machine learning model 
+  public :: torch_umod
+  public :: torch_vmod
+  public :: torch_tmod
+  public :: torch_qmod
+  public :: enc_umod
+  public :: dec_umod
+  public :: don_umod
+  public :: enc_vmod
+  public :: dec_vmod
+  public :: don_vmod 
+
+  type(torch_module) :: torch_umod
+  type(torch_module) :: torch_vmod
+  type(torch_module) :: torch_tmod
+  type(torch_module) :: torch_qmod
+
+  type(torch_module) :: enc_umod
+  type(torch_module) :: dec_umod
+  type(torch_module) :: don_umod
+  type(torch_module) :: enc_vmod
+  type(torch_module) :: dec_vmod
+  type(torch_module) :: don_vmod
+
   character(len=cl) :: mltbc_model_path
   character(len=cl) :: mltbc_file_template 
 
@@ -1923,6 +1947,10 @@ contains
                write(iulog,*) 'Machine Learning NUDGING: global ML model'
              end if
            end if       
+
+           !load machine learning model (only need to call once at initial time)
+           call mltbc_load_model(mltbc_patch_model,mltbc_option)
+           
       case default
            call endrun('nudging_init error: nudge method should &
                        &be either Step, Linear , IMT or MLTBC...')
@@ -2275,6 +2303,101 @@ contains
    return
   end subroutine ! nudging_timestep_init
   !================================================================
+  subroutine mltbc_load_model(l_patch_model,i_ml_option)
+   !
+   ! DEEPONET_LOAD_MODEL:
+   !                 load the machine learning model pt file to the 
+   !                 memory for the prediction of nudging tendency 
+   !===============================================================
+   use filenames,    only: interpret_filename_spec
+
+   implicit none
+   
+   logical, intent(in)             :: l_patch_model
+   integer, intent(in)             :: i_ml_option
+
+   ! Local values
+   !----------------
+   character(len=10), dimension(4) :: vars
+   character(len=cl)               :: ml_model_pt
+   character(len=cl)               :: dec_model_pt
+   character(len=cl)               :: enc_model_pt
+   character(len=cl)               :: don_model_pt
+   logical                         :: l_ml_predictor
+   logical                         :: l_enc_predictor
+   logical                         :: l_dec_predictor
+   logical                         :: l_don_predictor
+   integer                         :: i,j,k
+   
+   !assign variable array 
+   vars = [character(len=10) :: "U", "V", "T", "Q"]
+
+   if ( l_patch_model .and. (i_ml_option == 0) ) then 
+     do i = 1,2  
+       don_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i))//'_deepONet')
+       enc_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i))//'_Encoder')
+       dec_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i))//'_Decoder')
+       if (masterproc) then
+         !check if machine learning pt file exist
+         inquire(file=trim(mltbc_model_path)//trim(enc_model_pt),exist=l_enc_predictor)
+         inquire(file=trim(mltbc_model_path)//trim(dec_model_pt),exist=l_dec_predictor)
+         inquire(file=trim(mltbc_model_path)//trim(don_model_pt),exist=l_don_predictor)
+         if ( .not. l_enc_predictor) then
+           write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(enc_model_pt)//" not found!"
+           call endrun('MLTBC ERROR: model file not exist')
+         else if ( .not. l_dec_predictor) then
+           write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(dec_model_pt)//" not found!"
+           call endrun('MLTBC ERROR: model file not exist')
+         else if ( .not. l_don_predictor) then
+           write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(don_model_pt)//" not found!"
+           call endrun('MLTBC ERROR: model file not exist')
+         end if
+         write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
+       end if
+       !load pt files to the torch module 
+       if((Nudge_Uprof .ne. 0) .and. (trim(vars(i)) == "U") ) then 
+         call enc_umod%load(trim(mltbc_model_path)//trim(enc_model_pt))
+         call dec_umod%load(trim(mltbc_model_path)//trim(dec_model_pt))
+         call don_umod%load(trim(mltbc_model_path)//trim(don_model_pt))
+       end if 
+       if((Nudge_Vprof .ne. 0) .and. (trim(vars(i)) == "V") ) then
+         call enc_vmod%load(trim(mltbc_model_path)//trim(enc_model_pt))
+         call dec_vmod%load(trim(mltbc_model_path)//trim(dec_model_pt))
+         call don_vmod%load(trim(mltbc_model_path)//trim(don_model_pt))
+       end if
+     end do 
+   else 
+     do i = 1,size(vars)
+       ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i)))
+       if (masterproc) then
+         !check if machine learning pt file exist
+         inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
+         if (.not. l_ml_predictor) then
+           write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
+           call endrun('MLTBC ERROR: model file not exist')
+         end if
+         write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
+       end if 
+       !load pt files to the torch module
+       if((Nudge_Uprof .ne. 0) .and. (trim(vars(i)) == "U") ) then
+         call torch_umod%load(trim(mltbc_model_path)//trim(ml_model_pt))
+       end if
+       if((Nudge_Vprof .ne. 0) .and. (trim(vars(i)) == "V") ) then
+         call torch_vmod%load(trim(mltbc_model_path)//trim(ml_model_pt))
+       end if
+       if((Nudge_Tprof .ne. 0) .and. (trim(vars(i)) == "T") ) then
+         call torch_tmod%load(trim(mltbc_model_path)//trim(ml_model_pt))
+       end if
+       if((Nudge_Qprof .ne. 0) .and. (trim(vars(i)) == "Q") ) then
+         call torch_qmod%load(trim(mltbc_model_path)//trim(ml_model_pt))
+       end if
+     end do 
+   end if
+
+   ! End Routine
+   !------------
+   return
+  end subroutine ! mltbc_load_model
 
   !================================================================
   subroutine mltbc_timestep_init(state,pbuf2d,dtime)
@@ -2294,7 +2417,6 @@ contains
                            get_lat_all_p, gather_chunk_to_field,scatter_field_to_chunk
    use dyn_grid,     only: get_dyn_grid_parm,get_horiz_grid_dim_d, &
                            get_horiz_grid_d, get_dyn_grid_parm_real1d
-   use filenames,    only: interpret_filename_spec
    use time_manager, only: get_nstep
    use cam_history,  only: outfld
    use physconst,    only: cpair, gravit, rga
@@ -6623,11 +6745,9 @@ contains
    !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
  
@@ -6641,26 +6761,12 @@ contains
    real(r8), intent(inout)       :: tend(ngtot,nz)
 
    type(torch_tensor_wrap)       :: input_tensors
-   type(torch_module)            :: torch_mod
    type(torch_tensor)            :: out_tensor
 
    ! Local values
    !----------------
-   character(len=cl)             :: ml_model_pt
-   logical                       :: l_ml_predictor
    integer                       :: i,j,n,m,k,ii,jj
    real(r8), pointer             :: xout(:,:,:)
-
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var))
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-     if (.not. l_ml_predictor) then
-       write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-       call endrun('MLTBC ERROR: model file not exist')
-     end if
-     write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
-   end if 
 
    !prepare input data
    call t_startf ('mltbc_unified_model_input')
@@ -6671,14 +6777,21 @@ contains
    call input_tensors%add_array(q)
    call t_stopf ('mltbc_unified_model_input')
 
-   call t_startf ('mltbc_unified_model_load')
-   call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt))
-   call t_stopf ('mltbc_unified_model_load')
-
    call t_startf ('mltbc_unified_model_forward')
-   call torch_mod%forward(input_tensors,out_tensor)
-   call out_tensor%to_array(xout)
+   if (trim(var) == "U" ) then 
+     call torch_umod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "V" ) then
+     call torch_vmod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "T" ) then
+     call torch_tmod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "Q" ) then
+     call torch_qmod%forward(input_tensors,out_tensor)
+   else 
+     call endrun('MLTBC ERROR: torch module not implemented for variable '//trim(var))
+   end if
    call t_stopf ('mltbc_unified_model_forward')
+
+   call out_tensor%to_array(xout)
    tend(1:ngtot,1:nz) = real(xout(:,1,:),kind = r8)
 
    return
@@ -6691,14 +6804,11 @@ contains
    !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
-
 
    character(len=*),intent(in)  :: var
    integer, intent(in)          :: nx,ny,nz,ngtot
@@ -6709,13 +6819,10 @@ contains
    integer, intent(in),optional :: kbot,ktop !bottom and top model levels 
 
    type(torch_tensor_wrap)      :: input_tensors
-   type(torch_module)           :: torch_mod
    type(torch_tensor)           :: out_tensor
 
    ! Local values
    !----------------
-   logical                      :: l_ml_predictor
-   character(cl)                :: ml_model_pt   !ML pt file 
    integer                      :: i,j,n,m,k,ii,jj
    integer                      :: k1, k2
    real(r4), allocatable        :: input3d(:,:,:)
@@ -6727,17 +6834,6 @@ contains
    k2 = nz
    if (present(kbot)) k1 = kbot
    if (present(ktop)) k2 = ktop
-
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var))
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-     if ( .not. l_ml_predictor) then
-       write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-       call endrun('MLTBC ERROR: model file not exist')
-     end if
-     write(iulog,*)'MLTBC Nudging: load machine learning pt file ',trim(mltbc_model_path)//trim(ml_model_pt)
-   end if 
 
    call t_startf ('mltbc_single_model_input')
    if (mltbc_patch_model) then
@@ -6754,9 +6850,18 @@ contains
    call t_stopf  ('mltbc_single_model_input')
   
    call t_startf ('mltbc_single_model_forward')
-   call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt)) 
-   call torch_mod%forward(input_tensors,out_tensor)
-   call t_stopf  ('mltbc_single_model_forward')
+   if (trim(var) == "U" ) then
+     call torch_umod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "V" ) then
+     call torch_vmod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "T" ) then
+     call torch_tmod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "Q" ) then
+     call torch_qmod%forward(input_tensors,out_tensor)
+   else
+     call endrun('MLTBC ERROR: torch module not implemented for variable '//trim(var))
+   end if
+   call t_stopf ('mltbc_single_model_forward')
   
    call t_startf ('mltbc_single_model_output')
    if (mltbc_patch_model) then 
@@ -6784,11 +6889,9 @@ contains
   !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
    
@@ -6818,13 +6921,10 @@ contains
    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
    type(torch_tensor_wrap) :: input_tensors
-   type(torch_module)      :: torch_mod
    type(torch_tensor)      :: out_tensor
 
    ! Local values
    !----------------
-   logical                 :: l_ml_predictor 
-   character(len=cl)       :: ml_model_pt  ! ML model pt file 
    integer                 :: i,j,n,m,k,ii,jj
    integer                 :: nx1, ny1, nz1
    integer                 :: k1,k2
@@ -6852,17 +6952,6 @@ contains
    dcmax =  1.0_r8
    if (present(ymin)) dcmin = ymin
    if (present(ymax)) dcmax = ymax
-
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var)//'_deepONet')
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-     if ( .not. l_ml_predictor) then
-       write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-       call endrun('MLTBC ERROR: model file not exist')
-     end if
-     write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
-   end if 
 
    if (mltbc_patch_model) then
      nx1 = conv2d_nx
@@ -6913,8 +7002,14 @@ contains
      call input_tensors%add_array(input3d)
    end if
 
-   call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt))
-   call torch_mod%forward(input_tensors,out_tensor)
+   call t_startf ('mltbc_aec_deeponet_prediction')
+   if (trim(var) == "U" ) then
+     call don_umod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "V" ) then
+     call don_vmod%forward(input_tensors,out_tensor)
+   else
+     call endrun('MLTBC ERROR: deepONet module not implemented for variable '//trim(var))
+   end if
    call out_tensor%to_array(output)
    call t_stopf ('mltbc_aec_deeponet_prediction')
    
@@ -6948,11 +7043,9 @@ contains
   !=================================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
 
@@ -6967,7 +7060,6 @@ contains
    real(r8),intent(in),optional :: xmin, xmax
 
    type(torch_tensor_wrap)      :: input_tensors
-   type(torch_module)           :: torch_mod
    type(torch_tensor)           :: out_tensor
 
    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -6978,8 +7070,6 @@ contains
 
    ! Local values
    !----------------
-   character(len=cl)            :: ml_model_pt ! ML model pt file    
-   logical                      :: l_ml_predictor
    integer                      :: i,j,n,m,k,ii,jj
    integer                      :: k1, k2
    real(r8)                     :: vmin, vmax
@@ -6999,17 +7089,6 @@ contains
    if (present(xmin)) vmin = xmin
    if (present(xmax)) vmax = xmax
    
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var))
-   if (masterproc) then
-     !check if machine learning pt file exist 
-     inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-     if ( .not. l_ml_predictor) then
-       write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-       call endrun('MLTBC ERROR: model file not exist')
-     end if
-     write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
-   end if 
-
    if (mltbc_patch_model) then 
      !allocate working array        
      allocate(input4d(nx,ny,1,k2-k1+1))
@@ -7031,8 +7110,14 @@ contains
      call input_tensors%create
      call input_tensors%add_array(input4d)
      call input_tensors%add_array(input2d)
-     call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt))
-     call torch_mod%forward(input_tensors,out_tensor)
+
+     if (trim(var) == "U" ) then
+       call torch_umod%forward(input_tensors,out_tensor)
+     else if (trim(var) == "V" ) then
+       call torch_vmod%forward(input_tensors,out_tensor)
+     else  
+       call endrun('MLTBC ERROR: deepONet module not implemented for variable '//trim(var))
+     end if
      call out_tensor%to_array(output)
      call t_stopf ('mltbc_state_deeponet')
   
@@ -7062,11 +7147,9 @@ contains
   !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
 
@@ -7082,28 +7165,16 @@ contains
    real(r8),intent(in),optional :: vmin,vmax
 
    type(torch_tensor_wrap)      :: input_tensors
-   type(torch_module)           :: torch_mod
    type(torch_tensor)           :: out_tensor
 
    ! Local values
    !----------------
-   logical                      :: l_ml_predictor
-   character(len=cl)            :: ml_model_pt
    integer                      :: i,j,n,m,k
    real(r8)                     :: xmin, xmax     
    real(r4), allocatable        :: input3d(:,:,:)   ! input array to encoder
    real(r4), allocatable        :: input4d(:,:,:,:) ! input array to encoder
    real(r4), pointer            :: output2d(:,:)     ! output array from encoder  
    real(r4), pointer            :: output3d(:,:,:)   ! output array from encoder 
-
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var)//'_Encoder')
-   !check if machine learning pt file exist 
-   inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-   if ( .not. l_ml_predictor) then
-     write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-     call endrun('MLTBC ERROR: model file not exist')
-   end if
-   write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
 
    xmin = -1.0_r8
    xmax =  1.0_r8
@@ -7128,8 +7199,13 @@ contains
      call input_tensors%add_array(input3d)
    end if 
 
-   call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt))
-   call torch_mod%forward(input_tensors,out_tensor)
+   if (trim(var) == "U" ) then
+     call enc_umod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "V" ) then
+     call enc_vmod%forward(input_tensors,out_tensor)
+   else  
+     call endrun('MLTBC ERROR: encoder module not implemented for variable '//trim(var))
+   end if
    
    if ( l_ml_patch ) then
      call out_tensor%to_array(output2d)
@@ -7154,11 +7230,9 @@ contains
   !===========================================================================
    use ppgrid,           only : pver,pverp,pcols,begchunk,endchunk
    use phys_grid,        only : scatter_field_to_chunk
-   use filenames,        only : interpret_filename_spec
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
-   use torch_ftn
 
    implicit none
 
@@ -7176,13 +7250,10 @@ contains
 
    !Declare the following class for machine learning calculation 
    type(torch_tensor_wrap)       :: input_tensors
-   type(torch_module)            :: torch_mod
    type(torch_tensor)            :: out_tensor
 
    ! Local values
    !----------------
-   logical                       :: l_ml_predictor
-   character(len=cl)             :: ml_model_pt
    integer                       :: i,j,n,m,k,ii,jj
    real(r4)                      :: xmin, xmax 
    real(r8)                      :: ymin, ymax
@@ -7190,15 +7261,6 @@ contains
    real(r4), pointer             :: output2d(:,:)
    real(r4), pointer             :: output3d(:,:,:)
    
-   ml_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(var)//'_Decoder')
-   !check if machine learning pt file exist 
-   inquire(file=trim(mltbc_model_path)//trim(ml_model_pt),exist=l_ml_predictor)
-   if ( .not. l_ml_predictor) then
-     write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(ml_model_pt)//" not found!"
-     call endrun('MLTBC ERROR: model file not exist')
-   end if
-   write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
-
    xmin = -1.0_r4
    xmax =  1.0_r4
    if (present(ecmin)) xmin = real(ecmin,kind=r4)
@@ -7223,8 +7285,13 @@ contains
      call input_tensors%add_array(vari)
    end if 
 
-   call torch_mod%load(trim(mltbc_model_path)//trim(ml_model_pt))
-   call torch_mod%forward(input_tensors,out_tensor)
+   if (trim(var) == "U" ) then
+     call dec_umod%forward(input_tensors,out_tensor)
+   else if (trim(var) == "V" ) then
+     call dec_vmod%forward(input_tensors,out_tensor)
+   else  
+     call endrun('MLTBC ERROR: decoder module not implemented for variable '//trim(var))
+   end if
 
    if (l_ml_patch) then
      call out_tensor%to_array(output2d)
