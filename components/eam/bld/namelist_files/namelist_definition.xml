@@ -456,6 +456,12 @@
        Default: 0
        </entry>
 
+<entry id="Nudge_Balance_Constrain" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, using hydrostatic balance to rederive nudging tendency for temperature and humidity 
+       Default: FALSE
+       </entry>
+
 <entry id="Nudge_Lin_Relax_On" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
        If TRUE, Linear relex the nudging strength coefficient to zero by pressure

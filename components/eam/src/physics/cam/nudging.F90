@@ -401,6 +401,7 @@ module nudging
   public:: Nudge_Allow_Missing_File
   public:: Nudge_Pdep_Weight_On
   public:: Nudge_Lin_Relax_On
+  public:: Nudge_Balance_Constrain
   public:: Nudge_PS_Adjust_On
   public:: Nudge_PS_On
   public:: Nudge_Q_Adjust_On
@@ -483,6 +484,7 @@ module nudging
   logical::         Nudge_SRF_RadFlux_On = .false.
   logical::         Nudge_SRF_State_On   = .false. 
   logical::         Nudge_Lin_Relax_On   = .false.
+  logical::         Nudge_Balance_Constrain = .false.
   logical::         Nudge_PS_Adjust_On   = .false.
   logical::         Nudge_PS_On          = .false.
   logical::         Nudge_Q_Adjust_On    = .false.
@@ -749,6 +751,7 @@ contains
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
+                         Nudge_Balance_Constrain,                      & 
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,mltbc_nstep,  & 
                          mltbc_patch_bilerp, mltbc_bilerp_test
@@ -773,6 +776,7 @@ contains
    Nudge_Allow_Missing_File = .false.
    Nudge_Pdep_Weight_On = .false.
    Nudge_Lin_Relax_On   = .false.
+   Nudge_Balance_Constrain = .false.
    Nudge_PS_Adjust_On   = .false.
    Nudge_Q_Adjust_On    = .false.
    Nudge_Land           = .false.
@@ -963,6 +967,7 @@ contains
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On    , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Lin_Relax_On      , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Balance_Constrain , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On             , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Q_Adjust_On       , 1, mpilog, 0, mpicom)
@@ -1467,6 +1472,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
      write(iulog,*) 'NUDGING: Nudge_Lin_Relax_On=', Nudge_Lin_Relax_On
+     write(iulog,*) 'NUDGING: Nudge_Balance_Constrain=', Nudge_Balance_Constrain
      write(iulog,*) 'NUDGING: Nudge_PS_On=',Nudge_PS_On
      write(iulog,*) 'NUDGING: Nudge_Q_Adjust_On=',Nudge_Q_Adjust_On
      write(iulog,*) 'NUDGING: Nudge_PS_Adjust_On=',Nudge_PS_Adjust_On
@@ -1566,6 +1572,7 @@ contains
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
    call mpibcast(Nudge_Lin_Relax_On  , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Balance_Constrain, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On         , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Q_Adjust_On   , 1, mpilog, 0, mpicom)
@@ -2461,7 +2468,7 @@ contains
        phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
        call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
-                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in 
+                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, Nudge_Balance_Constrain, & !in 
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
                               Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
@@ -2647,7 +2654,7 @@ contains
   !                  profiles from machine learning model 
   !===========================================================================
   subroutine mltbc_update_prof(pbuf,state,dtime,use_upp_relx,no_pbl_uv,no_pbl_t,no_pbl_q, &
-                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, &
+                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, use_hydro_constrain, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
@@ -2668,6 +2675,7 @@ contains
   type(physics_buffer_desc), pointer :: pbuf(:)
 
   logical,  intent(in)    :: use_upp_relx
+  logical,  intent(in)    :: use_hydro_constrain
   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
   integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
   real(r8), intent(in)    :: dtime
@@ -2688,6 +2696,7 @@ contains
   integer  :: pblh_idx        ! PBL pbuf
   integer  :: lchnk,ncol,indw
   integer  :: i, k, m
+  real(r8) :: invrs_gravit
 
   real(r8) :: rairv(pcols,pver)
   real(r8) :: zvirv(pcols,pver)
@@ -2711,6 +2720,8 @@ contains
   real(r8) :: vtp1(pcols,pver)
   real(r8) :: ttp1(pcols,pver)
   real(r8) :: qtp1(pcols,pver)
+  real(r8) :: zitp1(pcols,pverp)
+  real(r8) :: zmtp1(pcols,pver)
 
   real(r8) :: dqsdT_cur(pcols,pver)
   real(r8) :: qscur(pcols,pver)
@@ -2741,18 +2752,6 @@ contains
 
   call cnst_get_ind('Q',indw)
 
-  !model state at current time  
-  ucur(:ncol,:pver) = state%u(:ncol,:pver) 
-  vcur(:ncol,:pver) = state%v(:ncol,:pver) 
-  tcur(:ncol,:pver) = state%t(:ncol,:pver) 
-  qcur(:ncol,:pver) = state%q(:ncol,:pver,indw) 
-
-  !calculate the model state before and after bias correction
-  utp1(:ncol,:pver) = ucur(:ncol,:pver) + nudge_u(:ncol,:pver) * dtime
-  vtp1(:ncol,:pver) = vcur(:ncol,:pver) + nudge_v(:ncol,:pver) * dtime
-  ttp1(:ncol,:pver) = tcur(:ncol,:pver) + nudge_t(:ncol,:pver) * dtime
-  qtp1(:ncol,:pver) = qcur(:ncol,:pver) + nudge_q(:ncol,:pver) * dtime
-
   ! initialize zvir and rair 
   do i = 1, ncol
     kpblt(i) = pver
@@ -2761,6 +2760,8 @@ contains
       zvirv(i,k) = zvir
     end do
   end do
+
+  invrs_gravit = 1._r8 / gravit
 
   !compute pressure and ln(pres) at interface layer 
   do k = 1, pverp
@@ -2785,10 +2786,17 @@ contains
     end do
   end do
 
-  !derive the geoptential height 
-  call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
-                      tcur(:ncol,:pver),qcur(:ncol,:pver), &
-                      rairv,gravit,zvirv,zi,zm,ncol)
+  !model state at current time  
+  ucur(:ncol,:pver) = state%u(:ncol,:pver)
+  vcur(:ncol,:pver) = state%v(:ncol,:pver)
+  tcur(:ncol,:pver) = state%t(:ncol,:pver)
+  qcur(:ncol,:pver) = state%q(:ncol,:pver,indw)
+
+  !calculate the model state after bias correction
+  utp1(:ncol,:pver) = ucur(:ncol,:pver) + nudge_u(:ncol,:pver) * dtime
+  vtp1(:ncol,:pver) = vcur(:ncol,:pver) + nudge_v(:ncol,:pver) * dtime
+  ttp1(:ncol,:pver) = tcur(:ncol,:pver) + nudge_t(:ncol,:pver) * dtime
+  qtp1(:ncol,:pver) = qcur(:ncol,:pver) + nudge_q(:ncol,:pver) * dtime
 
   !calculate the virtual temperature, saturation mixing ratio and relative humidity 
   !before and after the ml bias correction, which will be used to apply constrains on the 
@@ -2887,6 +2895,10 @@ contains
   end if
 
   !Exclude the nudging tendency in boundary layer
+  !derive the geoptential height 
+  call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
+                      tcur(:ncol,:pver),qcur(:ncol,:pver), &
+                      rairv,gravit,zvirv,zi,zm,ncol)
   !Note: PBL height is in AGL  
   do k = pver-1,1,-1
     do i = 1,ncol
@@ -3010,6 +3022,43 @@ contains
     end do
     nudge_ps(i) = nudge_psprf(i) * nudge_ps(i)
   end do
+
+  !use hydrostatic balance to constrain the ml predicted nudging tendency of temperature and humidity
+  if (use_hydro_constrain) then 
+    !calculate the model state after bias correction
+    utp1(:ncol,:pver) = ucur(:ncol,:pver) + nudge_u(:ncol,:pver) * dtime
+    vtp1(:ncol,:pver) = vcur(:ncol,:pver) + nudge_v(:ncol,:pver) * dtime
+    ttp1(:ncol,:pver) = tcur(:ncol,:pver) + nudge_t(:ncol,:pver) * dtime
+    qtp1(:ncol,:pver) = qcur(:ncol,:pver) + nudge_q(:ncol,:pver) * dtime
+    !derive the geoptential height 
+    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
+                        ttp1(:ncol,:pver),qtp1(:ncol,:pver), &
+                        rairv,gravit,zvirv,zitp1,zmtp1,ncol)
+
+    !derive the dlogp and dz before and after correction 
+    do k = 1, pver
+      do i = 1, ncol
+        tvcur(i,k)  = - gravit * (zi(i,k+1) - zi(i,k)) / (lnpint(i,k+1) - lnpint(i,k)) / rair
+        tvtp1(i,k)  = - gravit * (zitp1(i,k+1) - zitp1(i,k)) / (lnpint(i,k+1) - lnpint(i,k)) / rair
+      end do
+    end do
+
+    if ( Nudge_Tprof .ne. 0  ) then
+      do k = 1, pver
+        do i = 1, ncol
+          nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime &
+                         / (1.0_r8 + zvir * qcur(i,k))
+        end do
+      end do 
+    end if
+    if ( Nudge_Qprof .ne. 0  ) then
+      do k = 1, pver
+        do i = 1, ncol
+          nudge_q(i,k) = (tvtp1(i,k)/ttp1(i,k) - tvcur(i,k)/tcur(i,k)) / dtime / zvir 
+        end do
+      end do    
+    end if
+  end if 
 
   return
   end subroutine  !mltbc_update_prof
