@@ -487,6 +487,16 @@
        Default: 0
        </entry>
 
+<entry id="mltbc_method" type="char*80" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Method to perform Nudging analyses.
+       1. Step: the machine learning correction tendency is applied with same values 
+	  within each nudging window (e.g., 3-hr).
+       2. IMT: the machine learning correction tendency is applied only at the time 
+	  step when machine learning prediction is issued.
+       Default: Step
+       </entry>
+
 <entry id="mltbc_patch_model" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
        Turn On/Off with machine learning bias correction model trained for selected patch.
@@ -497,6 +507,12 @@
        group="nudging_nl" valid_values="" >
        Turn ON/OFF bilinear interpolation for Machine Learning 2D Convolution model ON/OFF.
        Default: FALSE
+       </entry>
+
+<entry id="mltbc_ibatch" type="integer" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to specify batchsize dimension of ML prediction: 1 for first dimension.
+       Default: 1
        </entry>
 
 <entry id="mltbc_nstep" type="integer" category="nudging"

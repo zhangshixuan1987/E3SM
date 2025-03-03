@@ -1103,7 +1103,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        end do
 
        !call deepONet nudging prediction (skip first step)
-       call mltbc_nudging(ztodt,pbuf2d,mltbc_state)
+       call mltbc_nudging(ztodt,pbuf2d,cam_in,mltbc_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
        if ( end_proc_cnt < beg_proc_cnt ) end_proc_cnt = end_proc_cnt + sysclock_max
@@ -2987,7 +2987,7 @@ subroutine add_fld_default_calls()
 
 end subroutine add_fld_default_calls
 
-subroutine mltbc_nudging(dtime,pbuf2d,phys_state)
+subroutine mltbc_nudging(dtime,pbuf2d,cam_in,phys_state)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place to call deepOnet machine learning model to predict nudging 
@@ -3000,10 +3000,13 @@ subroutine mltbc_nudging(dtime,pbuf2d,phys_state)
   use physics_types,       only: physics_state
   use nudging,             only: Nudge_Model,MLTBC_Nudge,mltbc_timestep_init
   use physics_buffer,      only: physics_buffer_desc, pbuf_get_chunk, pbuf_allocate
+  use camsrfexch,          only: cam_out_t, cam_in_t
 
   implicit none
 
   type(physics_state), intent(in), dimension(begchunk:endchunk) :: phys_state
+  type(cam_in_t),      intent(in), dimension(begchunk:endchunk) :: cam_in
+  
   real(r8), intent(in) :: dtime ! model time step sizes 
 
   type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
@@ -3012,7 +3015,7 @@ subroutine mltbc_nudging(dtime,pbuf2d,phys_state)
   ! Update Nudging tendency if needed
   !===================================
   if (Nudge_Model .and. MLTBC_Nudge) then
-     call mltbc_timestep_init(phys_state,pbuf2d,dtime)
+     call mltbc_timestep_init(phys_state,pbuf2d,cam_in,dtime)
   endif
 
 end subroutine mltbc_nudging
