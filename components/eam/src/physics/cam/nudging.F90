@@ -7042,8 +7042,6 @@ contains
    !----------------
    integer                       :: i,j,n,m,k,ii,jj
    real(r8), pointer             :: xout(:,:,:)
-   real(r8)                      :: lat(ngtot)
-   real(r8)                      :: lon(ngtot)
 
    !prepare input data
    call t_startf ('mltbc_scalar_model_input')
@@ -7067,13 +7065,13 @@ contains
    if (present(area)) then
       call input_tensors%add_array(area)
    end if
-   if (present(land)) then  
+   if (present(lndfrc)) then  
       call input_tensors%add_array(lndfrc)
    end if
-   if (present(ocean)) then
+   if (present(ocnfrc)) then
       call input_tensors%add_array(ocnfrc)
    end if
-   if (present(ice)) then
+   if (present(icefrc)) then
       call input_tensors%add_array(icefrc)
    end if
    call t_stopf ('mltbc_scalar_model_input')
