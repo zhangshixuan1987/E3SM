@@ -2514,12 +2514,11 @@ contains
    nstep = get_nstep()
 
    !determine frequency of the ML call
-   if ( mod(nstep,mltbc_nstep) == 0 ) then
+   mltbc_istep = mod(nstep,mltbc_nstep)
+   if ( mltbc_istep == 0 ) then
      Update_MLTBC = .true.
-     mltbc_istep = 1
    else
      Update_MLTBC = .false.
-     mltbc_istep = mltbc_istep + 1
    end if
 
    ! Check if mltbc_istep is updated in correct way 
@@ -2528,8 +2527,6 @@ contains
      write(iulog,*) 'mltbc_timestep_init: mltbc_istep = ', mltbc_istep 
      write(iulog,*) 'mltbc_timestep_init: mltbc_nstep = ', mltbc_nstep
      call endrun('mltbc_timestep_init:: mltbc_istep > mltbc_nstep')
-   else if (mltbc_istep == mltbc_nstep ) then
-     write(iulog,*) 'mltbc_timestep_init: mltbc_istep = ', mltbc_istep
    end if 
 
    ! Check if Nudging is initialized
@@ -2738,7 +2735,7 @@ contains
         case ('STEP')
            mltbc_wgtstep = 1.0_r8
         case ('Linear')
-           mltbc_wgtstep = min(real(mltbc_istep,kind=r8)/real(mltbc_nstep,kind=r8),1.0_r8)
+           mltbc_wgtstep = min((real(mltbc_istep,kind=r8)+1.0_r8)/real(mltbc_nstep,kind=r8),1.0_r8)
         case default
            write(iulog,*) 'ERROR: Unknown Input MLTBC Method'
            call endrun('mltbc_timestep_init: bad input mltbc_method')
