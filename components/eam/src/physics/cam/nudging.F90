@@ -602,6 +602,7 @@ module nudging
   real(r8), allocatable :: Model_LNDFRC(:,:)   !(pcols,begchunk:endchunk)
   real(r8), allocatable :: Model_OCNFRC(:,:)   !(pcols,begchunk:endchunk)
   real(r8), allocatable :: Model_COSZ(:,:)     !(pcols,begchunk:endchunk)
+  real(r8), allocatable :: Model_area(:)       !(Nudge_ncol)
   real(r8), allocatable :: Model_rlat(:)       !(Nudge_ncol)
   real(r8), allocatable :: Model_rlon(:)       !(Nudge_ncol)
   real(r8), allocatable :: Model_UML(:,:,:)    !(Nudge_ncol,1,Nudge_nlev)
@@ -1874,6 +1875,8 @@ contains
            call alloc_err(istat,'Machine Learning NUDGING','Model_rlat',Nudge_ncol)
            allocate(Model_rlon(Nudge_ncol),stat=istat)
            call alloc_err(istat,'Machine Learning NUDGING','Model_rlon',Nudge_ncol)
+           allocate(Model_area(Nudge_ncol),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','Model_area',Nudge_ncol)
            allocate(Model_UML(Nudge_ncol,1,Nudge_nlev),stat=istat)
            call alloc_err(istat,'Machine Learning NUDGING','Model_UML',Nudge_ncol*Nudge_nlev)
            allocate(Model_VML(Nudge_ncol,1,Nudge_nlev),stat=istat)
@@ -1896,11 +1899,13 @@ contains
            call alloc_err(istat,'Machine Learning NUDGING','Model_COZML',Nudge_ncol)
            
            !extract the lat/lon/weight info            
-           call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat,clon_d_out=Model_rlon)
+           call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat, & 
+                                 clon_d_out=Model_rlon,area_d_out=Model_area)
 
 #ifdef SPMD
            call mpibcast(Model_rlat, Nudge_ncol, mpir8,   0, mpicom)
            call mpibcast(Model_rlon, Nudge_ncol, mpir8,   0, mpicom)
+           call mpibcast(Model_area, Nudge_ncol, mpir8,   0, mpicom)
 #endif
           ! Initialize Machine Learning lat/lon info in local arrays
           !------------------------------------------------------
@@ -2496,8 +2501,8 @@ contains
    real(r8), pointer, dimension(:)   :: nudge_dum1  ! Nudging tendency(old) 1d 
 
    !temporary working arrays 
-   integer  :: itim_old
-   real(r8) :: mltbc_tstep 
+   integer  :: itim_old, mltbc_istep
+   real(r8) :: mltbc_wgtstep
    real(r8) :: ftem(pcols,pver)
    real(r8) :: ftem2(pcols) ! temporary workspace
    real(r8) :: pstem(pcols,nrows,begchunk:endchunk) 
@@ -2509,12 +2514,23 @@ contains
    nstep = get_nstep()
 
    !determine frequency of the ML call
-   mltbc_tstep = mltbc_nstep * dtime 
    if ( mod(nstep,mltbc_nstep) == 0 ) then
      Update_MLTBC = .true.
+     mltbc_istep = 1
    else
      Update_MLTBC = .false.
+     mltbc_istep = mltbc_istep + 1
    end if
+
+   ! Check if mltbc_istep is updated in correct way 
+   !---------------------------------
+   if(mltbc_istep > mltbc_nstep ) then
+     write(iulog,*) 'mltbc_timestep_init: mltbc_istep = ', mltbc_istep 
+     write(iulog,*) 'mltbc_timestep_init: mltbc_nstep = ', mltbc_nstep
+     call endrun('mltbc_timestep_init:: mltbc_istep > mltbc_nstep')
+   else if (mltbc_istep == mltbc_nstep ) then
+     write(iulog,*) 'mltbc_timestep_init: mltbc_istep = ', mltbc_istep
+   end if 
 
    ! Check if Nudging is initialized
    !---------------------------------
@@ -2632,8 +2648,6 @@ contains
        call mltbc_gather_data(Model_Q,pver,Nudge_ncol,Model_QML)
        pstem(:,nrows,:) = Model_PS(:,:)
        call mltbc_gather_data(pstem,nrows,Nudge_ncol,Model_PSML)
-       pstem(:,nrows,:) = Model_PHIS(:,:)
-       call mltbc_gather_data(pstem,nrows,Nudge_ncol,Model_ZSML)
 
        if (mltbc_option == 4) then 
          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -2651,6 +2665,8 @@ contains
            call zenith(calday,clat,clon,coszrs,ncol,dtime)
            Model_COSZ(:ncol,lchnk) = coszrs(:ncol)
          end do
+         pstem(:,nrows,:) = Model_PHIS(:,:)
+         call mltbc_gather_data(pstem,nrows,Nudge_ncol,Model_ZSML)
          pstem(:,nrows,:) = Model_ICEFRC(:,:)
          call mltbc_gather_data(pstem,nrows,Nudge_ncol,Model_IFRML)
          pstem(:,nrows,:) = Model_LNDFRC(:,:)
@@ -2662,129 +2678,91 @@ contains
        end if    
 
        !call machine learning model to predict correction tendency 
-       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_method,mltbc_ibatch,mltbc_tstep, & !in 
-                            Model_UML,Model_VML,Model_TML,Model_QML,Model_rlat,Model_rlon, & !in 
-                            Model_PSML(:,:,1),Model_ZSML(:,:,1),Model_COZML(:,:,1), & !in  
-                            Model_IFRML(:,:,1),Model_LFRML(:,:,1),Model_OFRML(:,:,1), & !in 
-                            Nudge_PSstep,Nudge_Ustep,Nudge_Vstep,Nudge_Tstep,Nudge_Qstep) !out 
+       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_ibatch, & !in 
+                            Model_UML,Model_VML,Model_TML,Model_QML,Model_PSML(:,:,1), & !in 
+                            Model_rlat,Model_rlon,Model_area,Model_ZSML(:,:,1), & !in 
+                            Model_COZML(:,:,1),Model_IFRML(:,:,1), & !in 
+                            Model_LFRML(:,:,1),Model_OFRML(:,:,1), & !in 
+                            Nudge_PSstep,Nudge_Ustep,Nudge_Vstep, & !out 
+                            Nudge_Tstep,Nudge_Qstep) !out 
 
-       !Apply scaling or constrains on nudging strength
-       do lchnk=begchunk,endchunk
+     else  ! extract from pbuf 
+       !obtain pbuf index for nuding tendency 
+       nudge_u_idx  = pbuf_get_index('NUDGE_U')
+       nudge_v_idx  = pbuf_get_index('NUDGE_V')
+       nudge_t_idx  = pbuf_get_index('NUDGE_T')
+       nudge_q_idx  = pbuf_get_index('NUDGE_Q')
+       nudge_ps_idx = pbuf_get_index('NUDGE_PS')
+       itim_old     = pbuf_old_tim_idx()
+       !use previous ml predicted nudging tendency       
+       do lchnk = begchunk, endchunk
+         ncol = state(lchnk)%ncol
          phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
-         call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
-                                Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
-                                Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, Nudge_Balance_Constrain, & !in 
-                                Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
-                                Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
-                                Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
-                                Nudge_Ustep(:,:,lchnk),Nudge_Vstep(:,:,lchnk), & !inout
-                                Nudge_Tstep(:,:,lchnk),Nudge_Qstep(:,:,lchnk)) !inout
-       end do 
+         if (Nudge_PSprof .ne. 0) then
+           call pbuf_get_field(phys_buffer_chunk,nudge_ps_idx,nudge_dum1, &
+                               start=(/1,itim_old/),kount=(/pcols,1/))
+           Nudge_PSstep(1:ncol,lchnk) = nudge_dum1(1:ncol)
+         end if 
+         if (Nudge_Uprof .ne. 0 ) then
+           call pbuf_get_field(phys_buffer_chunk,nudge_u_idx,nudge_dum2, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Ustep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+         end if
+         if (Nudge_Vprof .ne. 0 ) then
+           call pbuf_get_field(phys_buffer_chunk,nudge_v_idx,nudge_dum2, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Vstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+         end if
+         if (Nudge_Tprof .ne. 0 ) then
+           call pbuf_get_field(phys_buffer_chunk,nudge_t_idx,nudge_dum2, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Tstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+         end if
+         if (Nudge_Qprof .ne. 0 ) then
+            call pbuf_get_field(phys_buffer_chunk,nudge_q_idx,nudge_dum2, &
+                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+           Nudge_Qstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+         end if
+       end do
 
-     end if !end of call ML prediction 
+     end if 
 
      !Options to apply ML predicted nudging tendency 
      select case (mltbc_method)
         case ('IMT')
-           !use previous ml predicted nudging tendency       
-           do lchnk = begchunk, endchunk
-             ncol = state(lchnk)%ncol
-             Nudge_Ustep(:ncol,:pver,lchnk) =0._r8
-             Nudge_Vstep(:ncol,:pver,lchnk) =0._r8
-             Nudge_Tstep(:ncol,:pver,lchnk) =0._r8
-             Nudge_Qstep(:ncol,:pver,lchnk) =0._r8
-             Nudge_PSstep(:ncol,lchnk)      =0._r8
-           end do 
+           if (Update_MLTBC) then
+             mltbc_wgtstep = 1.0_r8
+           else
+             mltbc_wgtstep = 0.0_r8
+           end if
         case ('STEP')
-           !obtain pbuf index for nuding tendency 
-           nudge_u_idx  = pbuf_get_index('NUDGE_U')
-           nudge_v_idx  = pbuf_get_index('NUDGE_V')
-           nudge_t_idx  = pbuf_get_index('NUDGE_T')
-           nudge_q_idx  = pbuf_get_index('NUDGE_Q')
-           nudge_ps_idx = pbuf_get_index('NUDGE_PS')
-           itim_old     = pbuf_old_tim_idx()
-           !use previous ml predicted nudging tendency       
-           do lchnk = begchunk, endchunk
-             ncol = state(lchnk)%ncol
-             phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
-             if (Nudge_PSprof .ne. 0) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_ps_idx,nudge_dum1, &
-                                   start=(/1,itim_old/),kount=(/pcols,1/))
-               Nudge_PSstep(1:ncol,lchnk) = nudge_dum1(1:ncol)
-             end if 
-             if (Nudge_Uprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_u_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Ustep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-             end if
-             if (Nudge_Vprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_v_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Vstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-             end if
-             if (Nudge_Tprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_t_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Tstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-             end if
-             if (Nudge_Qprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_q_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Qstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-             end if
-           end do
+           mltbc_wgtstep = 1.0_r8
         case ('Linear')
-           !obtain pbuf index for nuding tendency 
-           nudge_u_idx  = pbuf_get_index('NUDGE_U')
-           nudge_v_idx  = pbuf_get_index('NUDGE_V')
-           nudge_t_idx  = pbuf_get_index('NUDGE_T')
-           nudge_q_idx  = pbuf_get_index('NUDGE_Q')
-           nudge_ps_idx = pbuf_get_index('NUDGE_PS')
-           itim_old     = pbuf_old_tim_idx()
-           !use previous ml predicted nudging tendency
-           do lchnk = begchunk, endchunk
-             ncol = state(lchnk)%ncol
-             phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
-             if (Nudge_PSprof .ne. 0) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_ps_idx,nudge_dum1, &
-                                   start=(/1,itim_old/),kount=(/pcols,1/))
-               Nudge_PSstep(1:ncol,lchnk) = (nudge_dum1(1:ncol)  & 
-                                             - Model_PS(1:ncol,lchnk)) & 
-                                             /mltbc_tstep 
-             end if
-             if (Nudge_Uprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_u_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Ustep(1:ncol,1:pver,lchnk) = (nudge_dum2(1:ncol,1:pver) & 
-                                                   - Model_U(1:ncol,1:pver,lchnk)) &
-                                                   /mltbc_tstep
-             end if
-             if (Nudge_Vprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_v_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Vstep(1:ncol,1:pver,lchnk) = (nudge_dum2(1:ncol,1:pver) &
-                                                   - Model_V(1:ncol,1:pver,lchnk)) & 
-                                                   /mltbc_tstep
-             end if
-             if (Nudge_Tprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_t_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Tstep(1:ncol,1:pver,lchnk) = (nudge_dum2(1:ncol,1:pver) & 
-                                                   - Model_T(1:ncol,1:pver,lchnk)) &
-                                                   /mltbc_tstep
-             end if
-             if (Nudge_Qprof .ne. 0 ) then
-               call pbuf_get_field(phys_buffer_chunk,nudge_q_idx,nudge_dum2, &
-                                   start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-               Nudge_Qstep(1:ncol,1:pver,lchnk) = (nudge_dum2(1:ncol,1:pver) & 
-                                                   - Model_Q(1:ncol,1:pver,lchnk)) & 
-                                                   /mltbc_tstep
-             end if
-           end do
+           mltbc_wgtstep = min(real(mltbc_istep,kind=r8)/real(mltbc_nstep,kind=r8),1.0_r8)
         case default
            write(iulog,*) 'ERROR: Unknown Input MLTBC Method'
-           call endrun('mltbc_timestep_init: bad input mltbc method')
+           call endrun('mltbc_timestep_init: bad input mltbc_method')
      end select
+
+     !modify nudging tendency 
+     Nudge_PSstep(:,:)  = Nudge_PSstep(:,:)  * mltbc_wgtstep
+     Nudge_Ustep(:,:,:) = Nudge_Ustep(:,:,:) * mltbc_wgtstep
+     Nudge_Vstep(:,:,:) = Nudge_Vstep(:,:,:) * mltbc_wgtstep
+     Nudge_Tstep(:,:,:) = Nudge_Tstep(:,:,:) * mltbc_wgtstep
+     Nudge_Qstep(:,:,:) = Nudge_Qstep(:,:,:) * mltbc_wgtstep
+
+     !Apply scaling or constrains on nudging strength
+     do lchnk=begchunk,endchunk
+       phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
+       call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
+                              Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
+                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, Nudge_Balance_Constrain, & !in 
+                              Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
+                              Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
+                              Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
+                              Nudge_Ustep(:,:,lchnk),Nudge_Vstep(:,:,lchnk), & !inout
+                              Nudge_Tstep(:,:,lchnk),Nudge_Qstep(:,:,lchnk)) !inout
+     end do
 
    end if
 
@@ -2826,8 +2804,9 @@ contains
   ! SZ - 05/10/2024: The main subrutine to call machine learning model for 
   !                  and predict the bia correction tendency 
   !===========================================================================
-  subroutine mltbc_calc_tend(pbuf2d,state,ngcols,ngrows,mltbc_method,mltbc_ibdim,mltbc_tstep, & !in 
-                             uglb,vglb,tglb,qglb,rlat,rlon,psglb,phis, & !in 
+  subroutine mltbc_calc_tend(pbuf2d,state,ngcols,ngrows,mltbc_ibdim, & !in 
+                             uglb,vglb,tglb,qglb,psglb, & !in 
+                             rlat,rlon,area,phis, & !in 
                              cosz,icefrc,lndfrc,ocnfrc, & !in   
                              nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q)
    use physics_types , only: physics_state
@@ -2844,21 +2823,18 @@ contains
    type(physics_buffer_desc), pointer :: pbuf2d(:,:)
    type(physics_buffer_desc), pointer :: pbuf_chnk(:)
 
-   character(10), intent(in) :: mltbc_method
-
    integer,  intent(in)    :: mltbc_ibdim
    integer,  intent(in)    :: ngcols,ngrows
-
-   real(r8), intent(in)    :: mltbc_tstep
-   real(r8), intent(in)    :: rlat(ngcols)
-   real(r8), intent(in)    :: rlon(ngcols) 
 
    real(r8), intent(in)    :: uglb(ngcols,ngrows,pver)
    real(r8), intent(in)    :: vglb(ngcols,ngrows,pver)
    real(r8), intent(in)    :: tglb(ngcols,ngrows,pver)
    real(r8), intent(in)    :: qglb(ngcols,ngrows,pver)
-   
    real(r8), intent(in)    :: psglb(ngcols,ngrows)
+   
+   real(r8), intent(in)    :: rlat(ngcols)
+   real(r8), intent(in)    :: rlon(ngcols)
+   real(r8), intent(in)    :: area(ngcols)
    real(r8), intent(in)    :: cosz(ngcols,ngrows)
    real(r8), intent(in)    :: phis(ngcols,ngrows)
    real(r8), intent(in)    :: icefrc(ngcols,ngrows)
@@ -2903,7 +2879,8 @@ contains
      call t_startf('mltbc_advance_global')
      call mltbc_advance_global(pver,ngcols,ngrows,mltbc_ibdim, & !in 
                                uglb,vglb,tglb,qglb,psglb, & !in 
-                               cosz,icefrc,lndfrc,ocnfrc,phis,rlat,rlon, & !in
+                               cosz,icefrc,lndfrc,ocnfrc, & !in 
+                               phis,rlat,rlon,area, & !in
                                nudge_u,nudge_v,nudge_t,nudge_q,nudge_ps) !out
      call t_stopf('mltbc_advance_global')
    end if 
@@ -2914,48 +2891,23 @@ contains
      pbuf_chnk => pbuf_get_chunk(pbuf2d, lchnk)
      if (Nudge_PSprof .ne. 0 ) then
        call pbuf_get_field(pbuf_chnk,nudge_ps_idx,nudge_dum1)
-       if (trim(mltbc_method) .eq. 'Linear') then 
-         nudge_dum1(1:ncol) = state(lchnk)%ps(1:ncol)  & 
-                              + nudge_ps(1:ncol,lchnk) * mltbc_tstep
-       else
-         nudge_dum1(1:ncol) = nudge_ps(1:ncol,lchnk) 
-       end if 
+       nudge_dum1(1:ncol) = nudge_ps(1:ncol,lchnk) 
      end if 
      if (Nudge_Uprof .ne. 0 ) then
        call pbuf_get_field(pbuf_chnk,nudge_u_idx,nudge_dum2)
-       if (trim(mltbc_method) .eq. 'Linear') then
-         nudge_dum2(1:ncol,1:pver) = state(lchnk)%u(1:ncol,1:pver) & 
-                                     + nudge_u(1:ncol,1:pver,lchnk) * mltbc_tstep
-       else 
-         nudge_dum2(1:ncol,1:pver) = nudge_u(1:ncol,1:pver,lchnk) 
-       end if 
+       nudge_dum2(1:ncol,1:pver) = nudge_u(1:ncol,1:pver,lchnk) 
      end if
      if (Nudge_Vprof .ne. 0 ) then
        call pbuf_get_field(pbuf_chnk,nudge_v_idx,nudge_dum2)
-       if (trim(mltbc_method) .eq. 'Linear') then
-         nudge_dum2(1:ncol,1:pver) = state(lchnk)%v(1:ncol,1:pver) & 
-                                     + nudge_v(1:ncol,1:pver,lchnk) * mltbc_tstep
-       else 
-         nudge_dum2(1:ncol,1:pver) = nudge_v(1:ncol,1:pver,lchnk) 
-       end if 
+       nudge_dum2(1:ncol,1:pver) = nudge_v(1:ncol,1:pver,lchnk) 
      end if
      if (Nudge_Tprof .ne. 0 ) then
        call pbuf_get_field(pbuf_chnk,nudge_t_idx,nudge_dum2)
-       if (trim(mltbc_method) .eq. 'Linear') then
-         nudge_dum2(1:ncol,1:pver) = state(lchnk)%t(1:ncol,1:pver) & 
-                                     + nudge_t(1:ncol,1:pver,lchnk) * mltbc_tstep
-       else 
-         nudge_dum2(1:ncol,1:pver) = nudge_t(1:ncol,1:pver,lchnk)
-       end if 
+       nudge_dum2(1:ncol,1:pver) = nudge_t(1:ncol,1:pver,lchnk)
      end if
      if (Nudge_Qprof .ne. 0 ) then
        call pbuf_get_field(pbuf_chnk,nudge_q_idx,nudge_dum2)
-       if (trim(mltbc_method) .eq. 'Linear') then
-         nudge_dum2(1:ncol,1:pver) = state(lchnk)%q(1:ncol,1:pver,indw) & 
-                                     + nudge_q(1:ncol,1:pver,lchnk) * mltbc_tstep
-       else 
-         nudge_dum2(1:ncol,1:pver) = nudge_q(1:ncol,1:pver,lchnk) 
-       end if 
+       nudge_dum2(1:ncol,1:pver) = nudge_q(1:ncol,1:pver,lchnk) 
      end if
    end do
 
@@ -6837,8 +6789,9 @@ contains
    return 
   end subroutine !mltbc_global_to_patch 
 
-  subroutine mltbc_advance_global(nlev,ngcol,ngrow,ibatch_dim,u,v,t,q,ps,cosz, & !in 
-                                  icefrc,lndfrc,ocnfrc,phis,rlat,rlon, & !in 
+  subroutine mltbc_advance_global(nlev,ngcol,ngrow,ibatch_dim,u,v,t,q,ps, & !in 
+                                  cosz,icefrc,lndfrc,ocnfrc, & !in 
+                                  phis,rlat,rlon,area, & !in 
                                   nudge_u,nudge_v,nudge_t,nudge_q,nudge_ps) !out
    !===========================================================================
    ! SZ - 06/05/2023: This subroutine attempt to read and calculate the nudging
@@ -6855,18 +6808,20 @@ contains
 
    integer,intent(in)       :: ibatch_dim
    integer,intent(in)       :: nlev,ngcol,ngrow
-   real(r8),intent(in)      :: rlat(ngcol),rlon(ngcol) 
    real(r8),intent(in)      :: u(ngcol,ngrow,nlev)
    real(r8),intent(in)      :: v(ngcol,ngrow,nlev)
    real(r8),intent(in)      :: t(ngcol,ngrow,nlev)
    real(r8),intent(in)      :: q(ngcol,ngrow,nlev)
    real(r8),intent(in)      :: ps(ngcol,ngrow)
 
-   real(r8),intent(in)      :: cosz(ngcol,ngrow)
-   real(r8),intent(in)      :: phis(ngcol,ngrow)
-   real(r8),intent(in)      :: icefrc(ngcol,ngrow)
-   real(r8),intent(in)      :: lndfrc(ngcol,ngrow)
-   real(r8),intent(in)      :: ocnfrc(ngcol,ngrow)
+   real(r8),intent(in)      :: rlat(ngcol)         !radians
+   real(r8),intent(in)      :: rlon(ngcol)         !radians
+   real(r8),intent(in)      :: area(ngcol)         !radians squared  
+   real(r8),intent(in)      :: phis(ngcol,ngrow)   !m2/s2 
+   real(r8),intent(in)      :: cosz(ngcol,ngrow)   !unitless [-1,1]
+   real(r8),intent(in)      :: icefrc(ngcol,ngrow) !unitless [0,1]
+   real(r8),intent(in)      :: lndfrc(ngcol,ngrow) !unitless [0,1]
+   real(r8),intent(in)      :: ocnfrc(ngcol,ngrow) !unitless [0,1]
 
    real(r8), intent(inout)  :: nudge_u(pcols,pver,begchunk:endchunk)
    real(r8), intent(inout)  :: nudge_v(pcols,pver,begchunk:endchunk)
@@ -6878,6 +6833,8 @@ contains
    !----------------
    integer  :: ncols,lchnk
    integer  :: i,j,n,m,k,ii,jj,ierr
+   real(r8) :: lat(ngcol)
+   real(r8) :: lon(ngcol)
    real(r8) :: utend(ngcol,nlev)
    real(r8) :: vtend(ngcol,nlev)
    real(r8) :: ttend(ngcol,nlev)
@@ -6888,6 +6845,11 @@ contains
    vtend(:,:) = 0.0_r8
    ttend(:,:) = 0.0_r8
    qtend(:,:) = 0.0_r8
+
+   !lat/lon are in radians from E3SM by default
+   !convert the radians to degree that will be used by ML model 
+   lat(:) = rlat(:)*180._r8/SHR_CONST_PI
+   lon(:) = rlon(:)*180._r8/SHR_CONST_PI
 
    ! This subrutine only returns U, V nudging tendency only 
    if (Nudge_PSprof .ne. 0) then
@@ -6931,31 +6893,35 @@ contains
      case (3)
        !option 3: with lat,lon info as input 
        if (Nudge_Uprof .ne. 0 ) then
-         call mltbc_scalar_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend,rlat,rlon)
+         call mltbc_scalar_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend,lat,lon)
        end if
        if (Nudge_Vprof .ne. 0 ) then
-         call mltbc_scalar_model("V",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,vtend,rlat,rlon)
+         call mltbc_scalar_model("V",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,vtend,lat,lon)
        end if
        if (Nudge_Tprof .ne. 0 ) then
-         call mltbc_scalar_model("T",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,ttend,rlat,rlon)
+         call mltbc_scalar_model("T",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,ttend,lat,lon)
        end if
        if (Nudge_Qprof .ne. 0 ) then
-         call mltbc_scalar_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend,rlat,rlon)
+         call mltbc_scalar_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend,lat,lon)
        end if
      case (4)
        !option 4: ML(state,scalars)-->ML(tendency),predict nudging tendency from model state
        !          no auto encoder-decoder is needed, and only for global  
        if (Nudge_Uprof .ne. 0 ) then
-         call mltbc_unified_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend,cosz,icefrc,lndfrc,phis)
+         call mltbc_scalar_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend, & 
+                                 lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
        end if
        if (Nudge_Vprof .ne. 0 ) then
-         call mltbc_unified_model("V",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,vtend,cosz,icefrc,lndfrc,phis)
+         call mltbc_scalar_model("V",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,vtend, & 
+                                 lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
        end if
        if (Nudge_Tprof .ne. 0 ) then
-         call mltbc_unified_model("T",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,ttend,cosz,icefrc,lndfrc,phis)
+         call mltbc_scalar_model("T",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,ttend, & 
+                                 lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
        end if
        if (Nudge_Qprof .ne. 0 ) then
-         call mltbc_unified_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend,cosz,icefrc,lndfrc,phis)
+         call mltbc_scalar_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend, & 
+                                 lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
        end if
      case default
        call endrun('Machine Learning Nudging Error: invalid option for global model')
@@ -6970,7 +6936,7 @@ contains
    return
   end subroutine !mltbc_advance_global
 
-  subroutine mltbc_unified_model(var,nz,nx,ny,ngtot,ibdim,u,v,t,q,tend,cosz,ice,land,phis)
+  subroutine mltbc_unified_model(var,nz,nx,ny,ngtot,ibdim,u,v,t,q,tend) 
    !===========================================================================
    ! SZ - 06/05/2023: This subroutine attempt to call the forecast for
    !                  the Machine Learning (ML) model,
@@ -6992,11 +6958,6 @@ contains
 
    real(r8),intent(inout)        :: tend(ngtot,nz)
 
-   real(r8),intent(in),optional  :: cosz(nx,ny)
-   real(r8),intent(in),optional  :: ice(nx,ny)
-   real(r8),intent(in),optional  :: land(nx,ny)
-   real(r8),intent(in),optional  :: phis(nx,ny)
-
    type(torch_tensor_wrap)       :: input_tensors
    type(torch_tensor)            :: out_tensor
 
@@ -7012,13 +6973,6 @@ contains
    call input_tensors%add_array(v)
    call input_tensors%add_array(t)
    call input_tensors%add_array(q)
-   if ( present(cosz) .and. present(ice) .and. present(land) .and. present(phis) ) then
-     !add scalars (sequence needs to be consistent with training)
-     call input_tensors%add_array(cosz)
-     call input_tensors%add_array(ice)
-     call input_tensors%add_array(land)
-     call input_tensors%add_array(phis)
-   end if
    call t_stopf ('mltbc_unified_model_input')
 
    call t_startf ('mltbc_unified_model_forward')
@@ -7048,7 +7002,8 @@ contains
    return
   end subroutine !mltbc_unified_model
 
-  subroutine mltbc_scalar_model(var,nz,nx,ny,ngtot,ibdim,u,v,t,q,tend,rlat,rlon)
+  subroutine mltbc_scalar_model(var,nz,nx,ny,ngtot,ibdim,u,v,t,q,tend, &
+                                lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
    !===========================================================================
    ! SZ - 06/05/2023: This subroutine attempt to call the forecast for
    !                  the Machine Learning (ML) model,
@@ -7070,8 +7025,15 @@ contains
 
    real(r8),intent(inout)        :: tend(ngtot,nz)
 
-   real(r8),intent(in),optional  :: rlat(nx)
-   real(r8),intent(in),optional  :: rlon(nx)
+   real(r8),intent(in),optional  :: lat(nx)
+   real(r8),intent(in),optional  :: lon(nx)
+   real(r8),intent(in),optional  :: area(nx)
+   real(r8),intent(in),optional  :: cosz(nx,ny)
+   real(r8),intent(in),optional  :: phis(nx,ny)
+   real(r8),intent(in),optional  :: ocnfrc(nx,ny)
+   real(r8),intent(in),optional  :: lndfrc(nx,ny)
+   real(r8),intent(in),optional  :: icefrc(nx,ny)
+
 
    type(torch_tensor_wrap)       :: input_tensors
    type(torch_tensor)            :: out_tensor
@@ -7084,22 +7046,39 @@ contains
    real(r8)                      :: lon(ngtot)
 
    !prepare input data
-   call t_startf ('mltbc_unified_model_input')
+   call t_startf ('mltbc_scalar_model_input')
    call input_tensors%create
    call input_tensors%add_array(u)
    call input_tensors%add_array(v)
    call input_tensors%add_array(t)
    call input_tensors%add_array(q)
-   if ( present(rlat) .and. present(rlon) ) then
-     lat(:) = rlat(:)*180._r8/SHR_CONST_PI
-     lon(:) = rlon(:)*180._r8/SHR_CONST_PI
-     !add scalars (sequence needs to be consistent with training)
-     call input_tensors%add_array(lat)
-     call input_tensors%add_array(lon)
+   if (present(cosz)) then 
+      call input_tensors%add_array(cosz)
+   end if 
+   if (present(lat)) then  
+      call input_tensors%add_array(lat)
    end if
-   call t_stopf ('mltbc_unified_model_input')
+   if (present(lon)) then  
+      call input_tensors%add_array(lon)
+   end if
+   if (present(phis)) then  
+      call input_tensors%add_array(phis)
+   end if
+   if (present(area)) then
+      call input_tensors%add_array(area)
+   end if
+   if (present(land)) then  
+      call input_tensors%add_array(lndfrc)
+   end if
+   if (present(ocean)) then
+      call input_tensors%add_array(ocnfrc)
+   end if
+   if (present(ice)) then
+      call input_tensors%add_array(icefrc)
+   end if
+   call t_stopf ('mltbc_scalar_model_input')
 
-   call t_startf ('mltbc_unified_model_forward')
+   call t_startf ('mltbc_scalar_model_forward')
    if (trim(var) == "U" ) then
      call torch_umod%forward(input_tensors,out_tensor)
    else if (trim(var) == "V" ) then
@@ -7111,7 +7090,7 @@ contains
    else
      call endrun('MLTBC ERROR: torch module not implemented for variable '//trim(var))
    end if
-   call t_stopf ('mltbc_unified_model_forward')
+   call t_stopf ('mltbc_scalar_model_forward')
 
    call out_tensor%to_array(xout)
    !ibdim is the batch dimension location 
