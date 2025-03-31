@@ -2467,7 +2467,7 @@ contains
                            get_horiz_grid_d, get_dyn_grid_parm_real1d
    use time_manager, only: get_nstep, get_curr_calday
    use cam_history,  only: outfld
-   use physconst,    only: cpair, gravit, rga
+   use physconst,    only: cpair, gravit, rga, pi
    use phys_grid,    only: get_rlat_all_p, get_rlon_all_p
    use parallel_mod, only: par
    use orbit,        only: zenith
@@ -2510,6 +2510,7 @@ contains
    real(r8) :: clat(pcols) ! current latitudes(radians)
    real(r8) :: clon(pcols) ! current longitudes(radians)
    real(r8) :: coszrs(pcols)  ! Cosine solar zenith angle
+   real(r8) :: xwgt(mltbc_nstep+1)
 
    nstep = get_nstep()
 
@@ -2520,7 +2521,7 @@ contains
    else
      Update_MLTBC = .false.
    end if
-
+   
    ! Check if mltbc_istep is updated in correct way 
    !---------------------------------
    if(mltbc_istep > mltbc_nstep ) then
@@ -2735,7 +2736,34 @@ contains
         case ('STEP')
            mltbc_wgtstep = 1.0_r8
         case ('Linear')
-           mltbc_wgtstep = min((real(mltbc_istep,kind=r8)+1.0_r8)/real(mltbc_nstep,kind=r8),1.0_r8)
+           mltbc_wgtstep = 1.0_r8 / real(mltbc_nstep,kind=r8)
+        case ('Linear_hat')
+           m = int(mltbc_nstep / 2)
+           k = 0  
+           do i = 1,m
+              k = k + 2*i  
+           end do 
+           if (mltbc_istep <= m) then
+              mltbc_wgtstep = (mltbc_istep * 1.0_r8) / real(k,kind=r8)
+           else
+              mltbc_wgtstep = (mltbc_nstep - mltbc_istep + 1.0_r8) / real(k,kind=r8)
+           end if
+        case ('Linear_dcw')
+           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+           !derive Dolph–Chebyshev weight (Lynch 1997)
+           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+           m = int((mltbc_nstep+1)/2)
+           do i = 1,2*m+1
+              n = i - m - 1
+              if ( n == 0  ) then
+                 xwgt(i) = 1.0_r8/m
+              else if ( abs(n) > m ) then
+                 xwgt(i) = 0.0
+              else
+                 xwgt(i) = sin(n*pi/(m+1))* (m+1)/(n*pi) * sin(n*pi/m)/(n*pi)
+              end if
+           end do
+           mltbc_wgtstep = xwgt(mltbc_istep+1) / sum(xwgt(:))
         case default
            write(iulog,*) 'ERROR: Unknown Input MLTBC Method'
            call endrun('mltbc_timestep_init: bad input mltbc_method')
