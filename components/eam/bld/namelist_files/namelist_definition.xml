@@ -487,7 +487,7 @@
        Default: 0
        </entry>
 
-<entry id="mltbc_method" type="char*80" category="nudging"
+<entry id="mltbc_step_method" type="char*80" category="nudging"
        group="nudging_nl" valid_values="" >
        Method to perform Nudging analyses.
        1. Step: the machine learning correction tendency is applied with same values 

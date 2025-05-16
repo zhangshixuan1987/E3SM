@@ -471,6 +471,8 @@ module nudging
   private:: mltbc_global_to_patch
   private:: mltbc_global_to_latlon
   private:: mltbc_latlon_to_global
+  private:: mltbc_load_model
+  private:: mltbc_compute_weights
 
   ! Nudging Parameters
   !--------------------
