@@ -616,12 +616,13 @@ module nudging
   real(r8), allocatable :: Model_rlat(:)       !(Nudge_ncol)
   real(r8), allocatable :: Model_rlon(:)       !(Nudge_ncol)
 
-  real(r8), allocatable :: mltbc_patch_lon(:)      !(mltbc_patch_nxy)
-  real(r8), allocatable :: mltbc_patch_lat(:)      !(mltbc_patch_nxy)
+  real(r8), allocatable :: mltbc_patch_lon(:)       !(mltbc_patch_nxy)
+  real(r8), allocatable :: mltbc_patch_lat(:)       !(mltbc_patch_nxy)
   integer,  allocatable :: mltbc_se2latlon_ind(:,:) !(mltbc_patch_nxy,5)
   integer,  allocatable :: mltbc_latlon2se_ind(:,:) !(Nudge_ncol,4)
   real(r8), allocatable :: mltbc_se2latlon_wgt(:,:) !(mltbc_patch_nxy,5)
   real(r8), allocatable :: mltbc_latlon2se_wgt(:,:) !(Nudge_ncol,4)
+  real(r8), allocatable :: mltbc_step_weight(:)     !(mltbc_nstep)
 
 !Variables for surface nudging 
   real(r8), allocatable :: Target_U10(:,:)     !(pcols,begchunk:endchunk)
@@ -690,7 +691,7 @@ module nudging
   real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
 
   !Parameters for machine learning bias correction 
-  character(len=10)  :: mltbc_method      ! method to apply ml bias correction 
+  character(len=10)  :: mltbc_step_method      
   logical  :: mltbc_nudge        = .false.
   logical  :: mltbc_patch_model  = .false.
   logical  :: mltbc_patch_bilerp = .false.
@@ -792,7 +793,7 @@ contains
                          Nudge_Balance_Constrain,                      & 
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
-                         mltbc_ibatch, mltbc_nstep, mltbc_method,      & 
+                         mltbc_ibatch, mltbc_nstep, mltbc_step_method,      & 
                          mltbc_patch_bilerp, mltbc_bilerp_test
   
    ! Nudging is NOT initialized yet, For now
@@ -881,7 +882,7 @@ contains
    
    ! Set Default values for machine learing 
    !-----------------------------
-   mltbc_method         = 'Step'
+   mltbc_step_method    = 'Step'
    mltbc_nudge          = .false.
    mltbc_patch_bilerp   = .false.
    mltbc_bilerp_test    = .false.
@@ -1075,7 +1076,7 @@ contains
    call mpibcast(Nudge_NO_PBL_UV         , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T          , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q          , 1, mpiint, 0, mpicom)
-   call mpibcast(mltbc_method            ,len(mltbc_method),        mpichar,0,mpicom) 
+   call mpibcast(mltbc_step_method       ,len(mltbc_step_method),   mpichar,0,mpicom) 
    call mpibcast(mltbc_model_path        ,len(mltbc_model_path),    mpichar,0,mpicom)
    call mpibcast(mltbc_file_template     ,len(mltbc_file_template), mpichar,0,mpicom)     
    call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
@@ -1597,7 +1598,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_UV     =',Nudge_NO_PBL_UV
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_T      =',Nudge_NO_PBL_T
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
-     write(iulog,*) 'NUDGING: mltbc_method        =',mltbc_method 
+     write(iulog,*) 'NUDGING: mltbc_step_method   =',mltbc_step_method 
      write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
      write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
@@ -1897,7 +1898,9 @@ contains
            call alloc_err(istat,'Machine Learning NUDGING','Model_OFRML',Nudge_ncol)
            allocate(Model_COZML(Nudge_ncol,1,1),stat=istat)
            call alloc_err(istat,'Machine Learning NUDGING','Model_COZML',Nudge_ncol)
-           
+           allocate(mltbc_step_weight(mltbc_nstep),stat=istat)
+           call alloc_err(istat,'Machine Learning NUDGING','mltbc_nstep',mltbc_nstep)
+
            !extract the lat/lon/weight info            
            call get_horiz_grid_d(Nudge_ncol,clat_d_out=Model_rlat, & 
                                  clon_d_out=Model_rlon,area_d_out=Model_area)
@@ -1998,7 +2001,8 @@ contains
 
            !load machine learning model (only need to call once at initial time)
            call mltbc_load_model(mltbc_patch_model,mltbc_option)
-           
+           call mltbc_compute_weights(mltbc_nstep, mltbc_step_method, mltbc_step_weight)
+
       case default
            call endrun('nudging_init error: nudge method should &
                        &be either Step, Linear , IMT or MLTBC...')
@@ -2446,6 +2450,90 @@ contains
    !------------
    return
   end subroutine ! mltbc_load_model
+  !================================================================
+
+  subroutine mltbc_compute_weights(nstep, method, weights)
+   !
+   ! mltbc_compute_weights:
+   !    Construct weighting function for ML-predicted tendency application.
+   !
+   ! Input:
+   !   - nstep : number of steps to apply nudging
+   !   - method: type of weighting method
+   !
+   ! Output:
+   !   - weights(nstep): computed weight array (normalized)
+   !
+   !===============================================================
+   integer, intent(in)                :: nstep
+   character(len=*), intent(in)       :: method
+   real(r8), intent(inout)            :: weights(nstep)
+   
+   ! Local variables
+   integer :: m, i, n, kstart, kcenter 
+   real(r8) :: pi, norm
+   real(r8), allocatable :: xwgt(:)
+  
+   pi = 4.0_r8 * atan(1.0_r8)
+   weights(:) = 0.0_r8
+
+   select case (trim(method))
+      case ('STEP')
+         weights(:) = 1.0_r8
+
+      case ('IMT', 'IMT1')
+         weights(1) = 1.0_r8
+
+      case ('Linear')
+         weights(:) = 1.0_r8 / real(nstep, r8)
+
+      case ('TopHat')
+         m = int(nstep / 2)
+         norm = 0.0_r8
+         do i = 1, nstep
+           if (i <= m) then
+              weights(i) = real(i, r8)
+           else
+              weights(i) = real(nstep - i + 1, r8)
+           end if
+           norm = norm + weights(i)
+         end do
+         weights(:) = weights(:) / norm
+
+      case ('DolphChebyshev','DolphChebyshev1')
+         m = (nstep + 1) / 2
+         allocate(xwgt(2 * m + 1))
+         do i = 1, 2 * m + 1
+            n = i - m - 1
+            if (n == 0) then
+               xwgt(i) = 1.0_r8 / real(m, r8)
+            else if (abs(n) > m) then
+               xwgt(i) = 0.0_r8
+            else
+               xwgt(i) = sin(n * pi / real(m + 1, r8)) * (m + 1) / (n * pi) * &
+                         sin(n * pi / real(m, r8)) / (n * pi)
+            end if
+         end do
+         norm = sum(xwgt)
+         ! Extract centered nstep weights
+         kcenter = (2 * m + 1 + 1) / 2          ! central index
+         kstart = kcenter - (nstep - 1) / 2      ! ensure symmetric center
+         weights(:) = xwgt(kstart : kstart + nstep - 1) / norm
+         deallocate(xwgt)
+
+      case default
+         write(iulog,*) 'ERROR: Unknown method to derive weight = ', trim(method)
+         call endrun('mltbc_compute_weights: bad input method')
+
+   end select
+
+   ! Optionally re-normalize or amplify weights for special method variants
+   if ( trim(method) == 'IMT1' .or. trim(method) == 'DolphChebyshev1' ) then
+      ! Re-scale the weight: assume base weight was normalized across n steps
+      weights(:) = weights(:) * nstep
+   end if
+
+  end subroutine !mltbc_compute_weights
 
   !================================================================
   subroutine mltbc_timestep_init(state,pbuf2d,cam_in,dtime)
@@ -2684,97 +2772,54 @@ contains
                             Nudge_PSstep,Nudge_Ustep,Nudge_Vstep, & !out 
                             Nudge_Tstep,Nudge_Qstep) !out 
 
-     else  ! extract from pbuf 
-       !obtain pbuf index for nuding tendency 
-       nudge_u_idx  = pbuf_get_index('NUDGE_U')
-       nudge_v_idx  = pbuf_get_index('NUDGE_V')
-       nudge_t_idx  = pbuf_get_index('NUDGE_T')
-       nudge_q_idx  = pbuf_get_index('NUDGE_Q')
-       nudge_ps_idx = pbuf_get_index('NUDGE_PS')
-       itim_old     = pbuf_old_tim_idx()
-       !use previous ml predicted nudging tendency       
-       do lchnk = begchunk, endchunk
-         ncol = state(lchnk)%ncol
-         phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
-         if (Nudge_PSprof .ne. 0) then
-           call pbuf_get_field(phys_buffer_chunk,nudge_ps_idx,nudge_dum1, &
-                               start=(/1,itim_old/),kount=(/pcols,1/))
-           Nudge_PSstep(1:ncol,lchnk) = nudge_dum1(1:ncol)
-         end if 
-         if (Nudge_Uprof .ne. 0 ) then
-           call pbuf_get_field(phys_buffer_chunk,nudge_u_idx,nudge_dum2, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Ustep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-         end if
-         if (Nudge_Vprof .ne. 0 ) then
-           call pbuf_get_field(phys_buffer_chunk,nudge_v_idx,nudge_dum2, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Vstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-         end if
-         if (Nudge_Tprof .ne. 0 ) then
-           call pbuf_get_field(phys_buffer_chunk,nudge_t_idx,nudge_dum2, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Tstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-         end if
-         if (Nudge_Qprof .ne. 0 ) then
-            call pbuf_get_field(phys_buffer_chunk,nudge_q_idx,nudge_dum2, &
-                               start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
-           Nudge_Qstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
-         end if
-       end do
-
      end if 
 
-     !Options to apply ML predicted nudging tendency 
-     select case (mltbc_method)
-        case ('IMT')
-           if (Update_MLTBC) then
-             mltbc_wgtstep = 1.0_r8
-           else
-             mltbc_wgtstep = 0.0_r8
-           end if
-        case ('STEP')
-           mltbc_wgtstep = 1.0_r8
-        case ('Linear')
-           mltbc_wgtstep = 1.0_r8 / real(mltbc_nstep,kind=r8)
-        case ('Linear_hat')
-           m = int(mltbc_nstep / 2)
-           k = 0  
-           do i = 1,m
-              k = k + 2*i  
-           end do 
-           if (mltbc_istep <= m) then
-              mltbc_wgtstep = (mltbc_istep * 1.0_r8) / real(k,kind=r8)
-           else
-              mltbc_wgtstep = (mltbc_nstep - mltbc_istep + 1.0_r8) / real(k,kind=r8)
-           end if
-        case ('Linear_dcw')
-           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-           !derive Dolph–Chebyshev weight (Lynch 1997)
-           !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-           m = int((mltbc_nstep+1)/2)
-           do i = 1,2*m+1
-              n = i - m - 1
-              if ( n == 0  ) then
-                 xwgt(i) = 1.0_r8/m
-              else if ( abs(n) > m ) then
-                 xwgt(i) = 0.0
-              else
-                 xwgt(i) = sin(n*pi/(m+1))* (m+1)/(n*pi) * sin(n*pi/m)/(n*pi)
-              end if
-           end do
-           mltbc_wgtstep = xwgt(mltbc_istep+1) / sum(xwgt(:))
-        case default
-           write(iulog,*) 'ERROR: Unknown Input MLTBC Method'
-           call endrun('mltbc_timestep_init: bad input mltbc_method')
-     end select
+     !Extract predicted tendency terms 
+     !Obtain pbuf index for nuding tendency 
+     nudge_u_idx  = pbuf_get_index('NUDGE_U')
+     nudge_v_idx  = pbuf_get_index('NUDGE_V')
+     nudge_t_idx  = pbuf_get_index('NUDGE_T')
+     nudge_q_idx  = pbuf_get_index('NUDGE_Q')
+     nudge_ps_idx = pbuf_get_index('NUDGE_PS')
+     itim_old     = pbuf_old_tim_idx()
 
-     !modify nudging tendency 
-     Nudge_PSstep(:,:)  = Nudge_PSstep(:,:)  * mltbc_wgtstep
-     Nudge_Ustep(:,:,:) = Nudge_Ustep(:,:,:) * mltbc_wgtstep
-     Nudge_Vstep(:,:,:) = Nudge_Vstep(:,:,:) * mltbc_wgtstep
-     Nudge_Tstep(:,:,:) = Nudge_Tstep(:,:,:) * mltbc_wgtstep
-     Nudge_Qstep(:,:,:) = Nudge_Qstep(:,:,:) * mltbc_wgtstep
+     !Use previous ml predicted nudging tendency       
+     do lchnk = begchunk, endchunk
+       ncol = state(lchnk)%ncol
+       phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
+       if (Nudge_PSprof .ne. 0) then
+         call pbuf_get_field(phys_buffer_chunk,nudge_ps_idx,nudge_dum1, &
+                             start=(/1,itim_old/),kount=(/pcols,1/))
+         Nudge_PSstep(1:ncol,lchnk) = nudge_dum1(1:ncol)
+       end if 
+       if (Nudge_Uprof .ne. 0 ) then
+         call pbuf_get_field(phys_buffer_chunk,nudge_u_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         Nudge_Ustep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+       if (Nudge_Vprof .ne. 0 ) then
+         call pbuf_get_field(phys_buffer_chunk,nudge_v_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         Nudge_Vstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+       if (Nudge_Tprof .ne. 0 ) then
+         call pbuf_get_field(phys_buffer_chunk,nudge_t_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         Nudge_Tstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+       if (Nudge_Qprof .ne. 0 ) then
+          call pbuf_get_field(phys_buffer_chunk,nudge_q_idx,nudge_dum2, &
+                             start=(/1,1,itim_old/),kount=(/pcols,pver,1/))
+         Nudge_Qstep(1:ncol,1:pver,lchnk) = nudge_dum2(1:ncol,1:pver)
+       end if
+     end do
+
+     !Modify ML nudging tendency with weighting functions at current step 
+     Nudge_PSstep(:,:)  = Nudge_PSstep(:,:)  * mltbc_step_weight(mltbc_istep+1)
+     Nudge_Ustep(:,:,:) = Nudge_Ustep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
+     Nudge_Vstep(:,:,:) = Nudge_Vstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
+     Nudge_Tstep(:,:,:) = Nudge_Tstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
+     Nudge_Qstep(:,:,:) = Nudge_Qstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
 
      !Apply scaling or constrains on nudging strength
      do lchnk=begchunk,endchunk
