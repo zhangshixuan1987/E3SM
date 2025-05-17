@@ -693,7 +693,7 @@ module nudging
   real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
 
   !Parameters for machine learning bias correction 
-  character(len=10)  :: mltbc_step_method      
+  character(len=cl)  :: mltbc_step_method      
   logical  :: mltbc_nudge        = .false.
   logical  :: mltbc_patch_model  = .false.
   logical  :: mltbc_patch_bilerp = .false.
