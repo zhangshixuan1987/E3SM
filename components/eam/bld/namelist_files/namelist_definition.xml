@@ -469,6 +469,24 @@
        Default: FALSE
        </entry>
 
+<entry id="Nudge_UV_Prelx" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude UV nudging tendency at upper layer 
+       Default: 1.0
+       </entry>
+
+<entry id="Nudge_T_Prelx" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude T nudging tendency at upper layer
+       Default: 1.0
+       </entry> 
+
+<entry id="Nudge_Q_Prelx" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Option to exclude Q nudging tendency at upper layer
+       Default: 1.0
+       </entry> 
+
 <entry id="Nudge_NO_PBL_UV" type="integer" category="nudging"
        group="nudging_nl" valid_values="" >
        Option to exclude UV nudging tendency below PBL

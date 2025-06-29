@@ -672,6 +672,9 @@ module nudging
   integer  :: Nudge_NO_PBL_UV ! option for excluding UV nudging within PBL 
   integer  :: Nudge_NO_PBL_T  ! option for excluding T nudging within PBL 
   integer  :: Nudge_NO_PBL_Q  ! option for excluding Q nudging within PBL 
+  real(r8) :: Nudge_UV_Prelx  ! option for excluding UV nudging at upper layer 
+  real(r8) :: Nudge_T_Prelx   ! option for excluding T nudging at upper layer 
+  real(r8) :: Nudge_Q_Prelx   ! option for excluding Q nudging at upper layer 
 
   !For surface flux nudging 
   integer  :: prec_dp_idx  = 0
@@ -784,6 +787,7 @@ contains
                          Nudge_CurrentStep, Nudge_File_Ntime,          & 
                          Nudge_NO_PBL_UV, Nudge_NO_PBL_T,              &
                          Nudge_NO_PBL_Q, Nudge_Pdep_Weight_On,         &
+                         Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx, & 
                          Nudge_Lin_Relax_On, Nudge_PS_OPT,             & 
                          Nudge_UV_OPT, Nudge_T_OPT, Nudge_Q_OPT,       &
                          Nudge_PS_Adjust_On, Nudge_Q_Adjust_On,        & 
@@ -881,7 +885,11 @@ contains
    Nudge_NO_PBL_UV    = 0 
    Nudge_NO_PBL_T     = 0 
    Nudge_NO_PBL_Q     = 0
-   
+
+   Nudge_UV_Prelx     = 1.0_r8 
+   Nudge_T_Prelx      = 1.0_r8 
+   Nudge_Q_Prelx      = 1.0_r8 
+
    ! Set Default values for machine learing 
    !-----------------------------
    mltbc_step_method    = 'Step'
@@ -1078,6 +1086,9 @@ contains
    call mpibcast(Nudge_NO_PBL_UV         , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T          , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q          , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_UV_Prelx          , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_T_Prelx           , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_Q_Prelx           , 1, mpir8 , 0, mpicom)
    call mpibcast(mltbc_step_method       ,len(mltbc_step_method),   mpichar,0,mpicom) 
    call mpibcast(mltbc_model_path        ,len(mltbc_model_path),    mpichar,0,mpicom)
    call mpibcast(mltbc_file_template     ,len(mltbc_file_template), mpichar,0,mpicom)     
@@ -1600,6 +1611,9 @@ contains
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_UV     =',Nudge_NO_PBL_UV
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_T      =',Nudge_NO_PBL_T
      write(iulog,*) 'NUDGING: Nudge_NO_PBL_Q      =',Nudge_NO_PBL_Q
+     write(iulog,*) 'NUDGING: Nudge_UV_Prelx      =',Nudge_UV_Prelx
+     write(iulog,*) 'NUDGING: Nudge_T_Prelx       =',Nudge_T_Prelx
+     write(iulog,*) 'NUDGING: Nudge_Q_Prelx       =',Nudge_Q_Prelx
      write(iulog,*) 'NUDGING: mltbc_step_method   =',mltbc_step_method 
      write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
      write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
@@ -1661,6 +1675,9 @@ contains
    call mpibcast(Nudge_NO_PBL_UV     , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_T      , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_NO_PBL_Q      , 1, mpiint, 0, mpicom)
+   call mpibcast(Nudge_UV_Prelx      , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_T_Prelx       , 1, mpir8 , 0, mpicom)
+   call mpibcast(Nudge_Q_Prelx       , 1, mpir8 , 0, mpicom)
    call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_patch_model   , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
@@ -2827,6 +2844,7 @@ contains
      do lchnk=begchunk,endchunk
        phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
        call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
+                              Nudge_UV_Prelx, Nudge_T_Prelax, Nudge_Q_Prelax, &
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
                               Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, Nudge_Balance_Constrain, & !in 
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
@@ -2992,7 +3010,9 @@ contains
   ! SZ - 10/13/2024: The main subrutine to modify the predicted nudging tendency 
   !                  profiles from machine learning model 
   !===========================================================================
-  subroutine mltbc_update_prof(pbuf,state,dtime,use_upp_relx,no_pbl_uv,no_pbl_t,no_pbl_q, &
+  subroutine mltbc_update_prof(pbuf,state,dtime, & 
+                               use_upp_relx, p_uv_relax, p_t_relax, p_q_relax, &
+                               no_pbl_uv,no_pbl_t,no_pbl_q, &
                                ndg_uv_opt,ndg_t_opt,ndg_q_opt, use_hydro_constrain, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
@@ -3317,7 +3337,6 @@ contains
        call endrun('nudging_tend error: invalid option for no_pbl_q nudging')
   end select
 
-  ! Add a linear relexation of the nudging tendency on the upper layer 
   if (use_upp_relx) then
     do i = 1, ncol
       do k = pver, 1, -1
