@@ -402,6 +402,7 @@ module nudging
   public:: Nudge_Pdep_Weight_On
   public:: Nudge_Lin_Relax_On
   public:: Nudge_Balance_Constrain
+  public:: Nudge_Vertical_Smooth
   public:: Nudge_PS_Adjust_On
   public:: Nudge_PS_On
   public:: Nudge_Q_Adjust_On
@@ -420,6 +421,7 @@ module nudging
   public:: nudging_update_land_surface
   public:: nudging_update_srf_flux
   public:: Nudge_Loc_PhysOut
+  private::smooth_nudge_uv_dlnp
   private::se2latlon_interp_init
   private::latlon2se_interp_init
   private::dist_latlon_2pts 
@@ -489,6 +491,7 @@ module nudging
   logical::         Nudge_SRF_State_On   = .false. 
   logical::         Nudge_Lin_Relax_On   = .false.
   logical::         Nudge_Balance_Constrain = .false.
+  logical::         Nudge_Vertical_Smooth = .false.
   logical::         Nudge_PS_Adjust_On   = .false.
   logical::         Nudge_PS_On          = .false.
   logical::         Nudge_Q_Adjust_On    = .false.
@@ -797,6 +800,7 @@ contains
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
                          Nudge_Balance_Constrain,                      & 
+                         Nudge_Vertical_Smooth,                        &
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
                          mltbc_ibatch, mltbc_nstep, mltbc_step_method,      & 
@@ -823,6 +827,7 @@ contains
    Nudge_Pdep_Weight_On = .false.
    Nudge_Lin_Relax_On   = .false.
    Nudge_Balance_Constrain = .false.
+   Nudge_Vertical_Smooth = .false.
    Nudge_PS_Adjust_On   = .false.
    Nudge_Q_Adjust_On    = .false.
    Nudge_Land           = .false.
@@ -886,9 +891,9 @@ contains
    Nudge_NO_PBL_T     = 0 
    Nudge_NO_PBL_Q     = 0
 
-   Nudge_UV_Prelx     = 1.0_r8 
-   Nudge_T_Prelx      = 1.0_r8 
-   Nudge_Q_Prelx      = 1.0_r8 
+   Nudge_UV_Prelx     = 30.0_r8 
+   Nudge_T_Prelx      = 10.0_r8 
+   Nudge_Q_Prelx      = 100.0_r8 
 
    ! Set Default values for machine learing 
    !-----------------------------
@@ -1020,6 +1025,7 @@ contains
    call mpibcast(Nudge_Pdep_Weight_On    , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Lin_Relax_On      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Balance_Constrain , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On             , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Q_Adjust_On       , 1, mpilog, 0, mpicom)
@@ -1542,6 +1548,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
      write(iulog,*) 'NUDGING: Nudge_Lin_Relax_On=', Nudge_Lin_Relax_On
      write(iulog,*) 'NUDGING: Nudge_Balance_Constrain=', Nudge_Balance_Constrain
+     write(iulog,*) 'NUDGING: Nudge_Vertical_Smooth=',Nudge_Vertical_Smooth
      write(iulog,*) 'NUDGING: Nudge_PS_On=',Nudge_PS_On
      write(iulog,*) 'NUDGING: Nudge_Q_Adjust_On=',Nudge_Q_Adjust_On
      write(iulog,*) 'NUDGING: Nudge_PS_Adjust_On=',Nudge_PS_Adjust_On
@@ -1647,6 +1654,7 @@ contains
    call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
    call mpibcast(Nudge_Lin_Relax_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Balance_Constrain, 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On         , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Q_Adjust_On   , 1, mpilog, 0, mpicom)
@@ -2844,9 +2852,10 @@ contains
      do lchnk=begchunk,endchunk
        phys_buffer_chunk => pbuf_get_chunk(pbuf2d, lchnk)
        call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
-                              Nudge_UV_Prelx, Nudge_T_Prelax, Nudge_Q_Prelax, &
+                              Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx, &
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
-                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, Nudge_Balance_Constrain, & !in 
+                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in 
+                              Nudge_Balance_Constrain, Nudge_Vertical_Smooth, & !in 
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
                               Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
@@ -3011,9 +3020,10 @@ contains
   !                  profiles from machine learning model 
   !===========================================================================
   subroutine mltbc_update_prof(pbuf,state,dtime, & 
-                               use_upp_relx, p_uv_relax, p_t_relax, p_q_relax, &
+                               use_upp_relx, uv_prelx, t_prelx, q_prelx, &
                                no_pbl_uv,no_pbl_t,no_pbl_q, &
-                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, use_hydro_constrain, &
+                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, & 
+                               use_hydro_constrain, use_vertical_uv_smooth, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
@@ -3035,8 +3045,10 @@ contains
 
   logical,  intent(in)    :: use_upp_relx
   logical,  intent(in)    :: use_hydro_constrain
+  logical,  intent(in)    :: use_vertical_uv_smooth
   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
   integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
+  real(r8), intent(in)    :: uv_prelx, t_prelx, q_prelx
   real(r8), intent(in)    :: dtime
   real(r8), intent(inout) :: nudge_uprf(pcols,pver)
   real(r8), intent(inout) :: nudge_vprf(pcols,pver)
@@ -3100,6 +3112,8 @@ contains
   real(r8) :: wqprof(pcols,pver)
 
   real(r8), pointer :: pblh(:)
+
+  real(r8) :: qeff, teff, tveff, delta_lnp
 
   ! Load values at Current into the Model arrays
   !-----------------------------------------------
@@ -3340,27 +3354,28 @@ contains
   if (use_upp_relx) then
     do i = 1, ncol
       do k = pver, 1, -1
-        if ( pmid(i,k) < p_uv_relax ) then
-          wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid(i,k)/p_uv_relax)
-          wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid(i,k)/p_uv_relax)
-        end if
-        if ( pmid(i,k) < p_T_relax ) then
-          wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid(i,k)/p_T_relax)
-        end if
-        if ( pmid(i,k) < p_q_relax ) then
-          wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid(i,k)/p_q_relax)
-        end if
-        if ( pmid(i,k) < p_norelax ) then
+        if (pmid(i,k) < p_norelax) then
           wuprof(i,k) = 0._r8
           wvprof(i,k) = 0._r8
           wtprof(i,k) = 0._r8
           wqprof(i,k) = 0._r8
+        else
+          if (pmid(i,k) < uv_prelx) then
+            wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid(i,k)/uv_prelx)
+            wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid(i,k)/uv_prelx)
+          end if
+          if (pmid(i,k) < t_prelx) then
+            wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid(i,k)/t_prelx)
+          end if
+          if (pmid(i,k) < q_prelx) then
+            wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid(i,k)/q_prelx)
+          end if
         end if
       end do
     end do
   end if
 
-  ! finally apply the scaling on the nudging weighting function 
+  ! Apply the scaling on the nudging weighting function 
   do i = 1, ncol
     do k = pver, 1, -1
       nudge_uprf(i,k) = nudge_uprf(i,k) * wuprof(i,k)
@@ -3370,7 +3385,7 @@ contains
     end do
   end do
 
-  ! finally apply weighting function on the nudging tendency
+  ! Apply weighting function on the nudging tendency
   do i = 1, ncol
     do k = pver, 1, -1
       nudge_u(i,k) = nudge_uprf(i,k) * nudge_u(i,k)
@@ -3380,6 +3395,10 @@ contains
     end do
     nudge_ps(i) = nudge_psprf(i) * nudge_ps(i)
   end do
+
+  if (use_vertical_uv_smooth) then
+    call smooth_nudge_uv_dlnp(ncol, pver, lnpint, nudge_u, nudge_v)
+  end if 
 
   !use hydrostatic balance to constrain the ml predicted nudging tendency of temperature and humidity
   if (use_hydro_constrain) then 
@@ -3396,30 +3415,89 @@ contains
     !derive the dlogp and dz before and after correction 
     do k = 1, pver
       do i = 1, ncol
-        tvcur(i,k)  = - gravit * (zi(i,k+1) - zi(i,k)) / (lnpint(i,k+1) - lnpint(i,k)) / rair
-        tvtp1(i,k)  = - gravit * (zitp1(i,k+1) - zitp1(i,k)) / (lnpint(i,k+1) - lnpint(i,k)) / rair
+         if (abs(tcur(i,k)) > 100.0_r8 .and. abs(ttp1(i,k)) > 100.0_r8) then
+           delta_lnp = lnpint(i,k+1) - lnpint(i,k)
+           if (abs(delta_lnp) > 1.0e-6_r8) then
+             tvcur(i,k)  = -gravit * (zi(i,k+1) - zi(i,k)) / delta_lnp / rair
+             tvtp1(i,k)  = -gravit * (zitp1(i,k+1) - zitp1(i,k)) / delta_lnp / rair
+             if ( Nudge_Tprof .ne. 0 ) then
+               qeff = 0.5_r8 * (qcur(i,k) + qtp1(i,k))
+               nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime / (1.0_r8 + zvir * qeff)
+             end if 
+             if ( Nudge_Qprof .ne. 0  ) then
+               teff = 0.5_r8 * (tcur(i,k) + ttp1(i,k))
+               tveff = 0.5_r8 * (tvcur(i,k) + tvtp1(i,k))
+               nudge_q(i,k) = (teff / tveff - 1.0_r8) / dtime / zvir
+             end if 
+           else 
+             nudge_t(i,k) = 0.0_r8
+             nudge_q(i,k) = 0.0_r8
+           end if
+         else
+           nudge_t(i,k) = 0.0_r8
+           nudge_q(i,k) = 0.0_r8
+         end if 
       end do
     end do
 
-    if ( Nudge_Tprof .ne. 0  ) then
-      do k = 1, pver
-        do i = 1, ncol
-          nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime &
-                         / (1.0_r8 + zvir * qcur(i,k))
-        end do
-      end do 
-    end if
-    if ( Nudge_Qprof .ne. 0  ) then
-      do k = 1, pver
-        do i = 1, ncol
-          nudge_q(i,k) = (tvtp1(i,k)/ttp1(i,k) - tvcur(i,k)/tcur(i,k)) / dtime / zvir 
-        end do
-      end do    
-    end if
   end if 
 
   return
   end subroutine  !mltbc_update_prof
+
+  !===========================================================================
+  ! function to apply a 3-point vertical smoothings to reduce the noise of the 
+  ! machine learning predicted nudging tendencies
+  !===========================================================================
+  subroutine smooth_nudge_uv_dlnp(ncol, pver, lnpint, nudge_u, nudge_v)
+    integer, intent(in) :: ncol, pver
+    real(kind=r8), intent(in) :: lnpint(ncol, pver+1)
+    real(kind=r8), intent(inout) :: nudge_u(ncol, pver), nudge_v(ncol, pver)
+
+    integer :: i, k
+    real(kind=r8) :: dlnp_km1, dlnp_kp1, dlnp_sum
+    real(kind=r8), allocatable :: tmp_u(:,:), tmp_v(:,:)
+
+    ! Allocate temporary arrays
+    allocate(tmp_u(ncol, pver))
+    allocate(tmp_v(ncol, pver))
+
+    ! === Interior levels: 3-point smoother
+    do k = 2, pver - 1
+      do i = 1, ncol
+        dlnp_km1 = lnpint(i,k) - lnpint(i,k-1)
+        dlnp_kp1 = lnpint(i,k+1) - lnpint(i,k)
+        dlnp_sum = dlnp_km1 + dlnp_kp1
+        if (dlnp_sum > 1.0e-6_r8) then
+          tmp_u(i,k) = (nudge_u(i,k-1) * dlnp_km1 + nudge_u(i,k+1) * dlnp_kp1) / dlnp_sum
+          tmp_v(i,k) = (nudge_v(i,k-1) * dlnp_km1 + nudge_v(i,k+1) * dlnp_kp1) / dlnp_sum
+        else
+          tmp_u(i,k) = nudge_u(i,k)
+          tmp_v(i,k) = nudge_v(i,k)
+        end if
+      end do
+    end do
+
+    ! === Bottom level
+    do i = 1, ncol
+      tmp_u(i,1) = 0.5_r8 * (nudge_u(i,1) + nudge_u(i,2))
+      tmp_v(i,1) = 0.5_r8 * (nudge_v(i,1) + nudge_v(i,2))
+    end do
+
+    ! === Top level
+    do i = 1, ncol
+      tmp_u(i,pver) = 0.5_r8 * (nudge_u(i,pver-1) + nudge_u(i,pver))
+      tmp_v(i,pver) = 0.5_r8 * (nudge_v(i,pver-1) + nudge_v(i,pver))
+    end do
+
+    ! === Copy back smoothed results
+    nudge_u(:,:) = tmp_u(:,:)
+    nudge_v(:,:) = tmp_v(:,:)
+
+    ! === Clean up
+    deallocate(tmp_u, tmp_v)
+
+  end subroutine !smooth_nudge_uv_dlnp
 
   !===========================================================================
   ! JS - 11/05/2019: Based on Shixuan Zhang's suggestion, the calculation of 

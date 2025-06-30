@@ -462,6 +462,12 @@
        Default: FALSE
        </entry>
 
+<entry id="Nudge_Vertical_Smooth" type="logical" category="nudging"
+       group="nudging_nl" valid_values="" >
+       If TRUE, using 3-point mass weighted smoothing on nudging tendency for zonal and meridional wind 
+       Default: FALSE
+       </entry>
+
 <entry id="Nudge_Lin_Relax_On" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
        If TRUE, Linear relex the nudging strength coefficient to zero by pressure
@@ -472,19 +478,19 @@
 <entry id="Nudge_UV_Prelx" type="real" category="nudging"
        group="nudging_nl" valid_values="" >
        Option to exclude UV nudging tendency at upper layer 
-       Default: 1.0
+       Default: 30.0
        </entry>
 
 <entry id="Nudge_T_Prelx" type="real" category="nudging"
        group="nudging_nl" valid_values="" >
        Option to exclude T nudging tendency at upper layer
-       Default: 1.0
+       Default: 10.0
        </entry> 
 
 <entry id="Nudge_Q_Prelx" type="real" category="nudging"
        group="nudging_nl" valid_values="" >
        Option to exclude Q nudging tendency at upper layer
-       Default: 1.0
+       Default: 100.0
        </entry> 
 
 <entry id="Nudge_NO_PBL_UV" type="integer" category="nudging"
