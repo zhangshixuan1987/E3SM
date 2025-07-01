@@ -3019,8 +3019,8 @@ contains
   ! SZ - 10/13/2024: The main subrutine to modify the predicted nudging tendency 
   !                  profiles from machine learning model 
   !===========================================================================
-  subroutine mltbc_update_prof(pbuf,state,dtime, & 
-                               use_upp_relx, uv_prelx, t_prelx, q_prelx, &
+  subroutine mltbc_update_prof(pbuf,state,dtime, use_upp_relx, & 
+                               uv_prelx, t_prelx, q_prelx, &
                                no_pbl_uv,no_pbl_t,no_pbl_q, &
                                ndg_uv_opt,ndg_t_opt,ndg_q_opt, & 
                                use_hydro_constrain, use_vertical_uv_smooth, &
@@ -3113,7 +3113,7 @@ contains
 
   real(r8), pointer :: pblh(:)
 
-  real(r8) :: qeff, teff, tveff, delta_lnp
+  real(r8) :: qeff, teff, tveff, tvdt, tdt, dlnp
 
   ! Load values at Current into the Model arrays
   !-----------------------------------------------
@@ -3416,18 +3416,20 @@ contains
     do k = 1, pver
       do i = 1, ncol
          if (abs(tcur(i,k)) > 100.0_r8 .and. abs(ttp1(i,k)) > 100.0_r8) then
-           delta_lnp = lnpint(i,k+1) - lnpint(i,k)
-           if (abs(delta_lnp) > 1.0e-6_r8) then
-             tvcur(i,k)  = -gravit * (zi(i,k+1) - zi(i,k)) / delta_lnp / rair
-             tvtp1(i,k)  = -gravit * (zitp1(i,k+1) - zitp1(i,k)) / delta_lnp / rair
+           dlnp = lnpint(i,k+1) - lnpint(i,k)
+           if (abs(dlnp) > 1.0e-6_r8) then
+             tvcur(i,k)  = -gravit * (zi(i,k+1) - zi(i,k)) / dlnp / rairv(i,k)
+             tvtp1(i,k)  = -gravit * (zitp1(i,k+1) - zitp1(i,k)) / dlnp / rairv(i,k)
              if ( Nudge_Tprof .ne. 0 ) then
                qeff = 0.5_r8 * (qcur(i,k) + qtp1(i,k))
-               nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime / (1.0_r8 + zvir * qeff)
+               nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime / (1.0_r8 + zvirv(i,k) * qeff)
              end if 
              if ( Nudge_Qprof .ne. 0  ) then
                teff = 0.5_r8 * (tcur(i,k) + ttp1(i,k))
                tveff = 0.5_r8 * (tvcur(i,k) + tvtp1(i,k))
-               nudge_q(i,k) = (teff / tveff - 1.0_r8) / dtime / zvir
+               tvdt = (tvtp1(i,k) - tvcur(i,k)) / dtime
+               tdt = (ttp1(i,k)  - tcur(i,k))  / dtime
+               nudge_q(i,k) = (tvdt * teff - tveff * tdt) / (zvirv(i,k) * teff * teff)
              end if 
            else 
              nudge_t(i,k) = 0.0_r8
@@ -3465,8 +3467,8 @@ contains
     ! === Interior levels: 3-point smoother
     do k = 2, pver - 1
       do i = 1, ncol
-        dlnp_km1 = lnpint(i,k) - lnpint(i,k-1)
-        dlnp_kp1 = lnpint(i,k+1) - lnpint(i,k)
+        dlnp_km1 = abs(lnpint(i,k) - lnpint(i,k-1))
+        dlnp_kp1 = abs(lnpint(i,k+1) - lnpint(i,k))
         dlnp_sum = dlnp_km1 + dlnp_kp1
         if (dlnp_sum > 1.0e-6_r8) then
           tmp_u(i,k) = (nudge_u(i,k-1) * dlnp_km1 + nudge_u(i,k+1) * dlnp_kp1) / dlnp_sum
@@ -3478,13 +3480,13 @@ contains
       end do
     end do
 
-    ! === Bottom level
+    ! === Top level
     do i = 1, ncol
       tmp_u(i,1) = 0.5_r8 * (nudge_u(i,1) + nudge_u(i,2))
       tmp_v(i,1) = 0.5_r8 * (nudge_v(i,1) + nudge_v(i,2))
     end do
 
-    ! === Top level
+    ! === Bottom level
     do i = 1, ncol
       tmp_u(i,pver) = 0.5_r8 * (nudge_u(i,pver-1) + nudge_u(i,pver))
       tmp_v(i,pver) = 0.5_r8 * (nudge_v(i,pver-1) + nudge_v(i,pver))
