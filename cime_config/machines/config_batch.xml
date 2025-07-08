@@ -478,6 +478,16 @@
     </queues>
    </batch_system>
 
+   <batch_system MACH="acess-anvil" type="slurm">
+    <queues>
+      <queue walltimemax="02:00:00" strict="true" nodemin="1" nodemax="2" default="true">debug</queue>
+      <queue walltimemax="96:00:00" strict="true" nodemin="1" nodemax="1" default="true">shared</queue>
+      <queue walltimemax="48:00:00" strict="true" nodemin="1" nodemax="1" default="true">highmem</queue>
+      <queue walltimemax="96:00:00" strict="true" nodemin="1" nodemax="16" default="true">wholenode</queue>
+      <queue walltimemax="12:00:00" nodemin="1" nodemax="56">wide</queue>
+    </queues>
+   </batch_system>
+
    <batch_system MACH="tahoma" type="slurm">
     <queues>
       <queue walltimemax="02:00:00" strict="true" nodemin="1" nodemax="36" default="true">normal</queue>

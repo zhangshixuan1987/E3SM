@@ -56,6 +56,99 @@
 
   -->
 
+  <machine MACH="acess-anvil">
+    <DESC>ACESS-ANVIL experimental/evaluation cluster</DESC>
+    <NODENAME_REGEX>.*anvil.*</NODENAME_REGEX>
+    <OS>LINUX</OS>
+    <COMPILERS>intel</COMPILERS>
+    <MPILIBS>openmpi</MPILIBS>
+    <SAVE_TIMING_DIR>/anvil</SAVE_TIMING_DIR>
+    <SAVE_TIMING_DIR_PROJECTS>.*</SAVE_TIMING_DIR_PROJECTS>
+    <CIME_OUTPUT_ROOT>/anvil/scratch/$USER/e3sm_scratch</CIME_OUTPUT_ROOT>
+    <DIN_LOC_ROOT>/anvil/scratch/$USER/inputdata</DIN_LOC_ROOT>
+    <DIN_LOC_ROOT_CLMFORC>/anvil/scratch/$USER/inputdata/atm/datm7</DIN_LOC_ROOT_CLMFORC>
+    <DOUT_S_ROOT>/anvil/scratch/$USER/e3sm_scratch/archive/$CASE</DOUT_S_ROOT>
+    <BASELINE_ROOT>/anvil/scratch/e3sm_baselines/$COMPILER</BASELINE_ROOT>
+    <CCSM_CPRNC>/anvil/scratch/e3sm_baselines/cprnc/cprnc</CCSM_CPRNC>
+    <GMAKE_J>8</GMAKE_J>
+    <TESTS>e3sm_developer</TESTS>
+    <NTEST_PARALLEL_JOBS>4</NTEST_PARALLEL_JOBS>
+    <BATCH_SYSTEM>slurm</BATCH_SYSTEM>
+    <SUPPORTED_BY>shixuan.zhang -at- pnnl.gov</SUPPORTED_BY>
+    <MAX_TASKS_PER_NODE>128</MAX_TASKS_PER_NODE>
+    <MAX_MPITASKS_PER_NODE>128</MAX_MPITASKS_PER_NODE>
+    <PROJECT_REQUIRED>FALSE</PROJECT_REQUIRED>
+    <mpirun mpilib="openmpi">
+      <executable>srun</executable>
+      <arguments>
+        <arg name="pmi_layer"> --mpi=pmi2</arg>
+        <arg name="label"> --label</arg>
+        <arg name="num_tasks"> -n {{ total_tasks }} -N {{ num_nodes }}</arg>
+        <arg name="thread_count">-c $SHELL{echo `./xmlquery --value MAX_TASKS_PER_NODE`/ {{ tasks_per_node }} |bc}</arg>
+        <arg name="binding"> $SHELL{if [ `./xmlquery --value MAX_TASKS_PER_NODE` -ge `./xmlquery --value MAX_MPITASKS_PER_NODE` ]; then echo "--cpu_bind=cores"; else echo "--cpu_bind=threads";fi;} </arg>
+        <arg name="placement">-m plane={{ tasks_per_node }}</arg>
+      </arguments>
+    </mpirun>
+    <module_system type="module" allow_error="true">
+      <init_path lang="perl">/opt/lmod/lmod/init/perl</init_path>
+      <init_path lang="python">/opt/lmod/lmod/init/env_modules_python.py</init_path>
+      <init_path lang="sh">/opt/lmod/lmod/init/sh</init_path>
+      <init_path lang="csh">/opt/lmod/lmod/init/csh</init_path>
+      <cmd_path lang="perl">/opt/lmod/lmod/libexec/lmod perl</cmd_path>
+      <cmd_path lang="python">/opt/lmod/lmod/libexec/lmod python</cmd_path>
+      <cmd_path lang="sh">module</cmd_path>
+      <cmd_path lang="csh">module</cmd_path>
+      <modules>
+        <command name="load">cmake/3.20.0</command>
+      </modules>
+      <modules compiler="intel">
+        <command name="load">gcc/11.2.0</command>
+        <command name="load">intel/19.0.5.281</command>
+        <command name="load">intel-mkl/2019.5.281</command>
+      </modules>
+      <modules compiler="intel" mpilib="openmpi">
+        <command name="load">openmpi/4.0.6</command>
+        <command name="load">netcdf-c/4.7.4</command>
+        <command name="load">netcdf-cxx4/4.3.1</command>
+        <command name="load">netcdf-fortran/4.5.3</command>
+        <command name="load">parallel-netcdf/1.11.2</command>
+      </modules>
+      <modules compiler="gnu">
+        <command name="load">gcc/11.2.0</command>
+        <command name="load">intel-mkl/2019.5.281</command>
+      </modules>
+      <modules compiler="gnu" mpilib="openmpi">
+        <command name="load">openmpi/4.0.6</command>
+        <command name="load">netcdf-c/4.7.4</command>
+        <command name="load">netcdf-cxx4/4.3.1</command>
+        <command name="load">netcdf-fortran/4.5.3</command>
+        <command name="load">parallel-netcdf/1.11.2</command>
+      </modules>
+    </module_system>
+    <RUNDIR>$CIME_OUTPUT_ROOT/$CASE/run</RUNDIR>
+    <EXEROOT>$CIME_OUTPUT_ROOT/$CASE/bld</EXEROOT>
+    <TEST_TPUT_TOLERANCE>0.1</TEST_TPUT_TOLERANCE>
+    <MAX_GB_OLD_TEST_DATA>1000</MAX_GB_OLD_TEST_DATA>
+    <environment_variables>
+      <env name="NETCDF_C_PATH">$SHELL{dirname $(dirname $(which nc-config))}</env>
+      <env name="NETCDF_FORTRAN_PATH">$SHELL{dirname $(dirname $(which nf-config))}</env>
+      <env name="PNETCDF_PATH">$SHELL{dirname $(dirname $(which pnetcdf_version))}</env>
+      <env name="PATH">/lcrc/group/e3sm/soft/perl/5.26.0/bin:$ENV{PATH}</env>
+    </environment_variables>
+    <environment_variables SMP_PRESENT="TRUE">
+      <env name="OMP_STACKSIZE">128M</env>
+    </environment_variables>
+    <!--
+    <environment_variables SMP_PRESENT="TRUE" compiler="intel">
+      <env name="KMP_AFFINITY">granularity=core,balanced</env>
+      <env name="KMP_HOT_TEAMS_MODE">1</env>
+    </environment_variables>
+    <environment_variables SMP_PRESENT="TRUE" compiler="gnu">
+      <env name="OMP_PLACES">cores</env>
+    </environment_variables>
+    -->
+  </machine>
+
   <machine MACH="miller">
     <DESC> ORNL AF cluster 800-node AMD Epyc 2-sockets 64-cores per node</DESC>
     <OS>CNL</OS>
