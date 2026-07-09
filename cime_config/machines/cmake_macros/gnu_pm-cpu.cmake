@@ -18,9 +18,15 @@ if (NOT DEBUG)
 endif()
 string(APPEND CXX_LIBS " -lstdc++")
 string(APPEND CXXFLAGS " -D_GLIBCXX_USE_CXX11_ABI=1")
-string(APPEND FFLAGS " -I$ENV{TORCH_DIR}/torch/include -L$ENV{TORCH_DIR}/torch/lib -I$ENV{TORCH_DIR}/torch/include/mod_files -L$ENV{TORCH_DIR}/torch/lib -lpytorch_proxy -lpytorch_fort_proxy")
-string(APPEND SLIBS  " -I$ENV{TORCH_DIR}/torch/include -L$ENV{TORCH_DIR}/torch/lib -I$ENV{TORCH_DIR}/torch/include/mod_files -L$ENV{TORCH_DIR}/torch/lib -lpytorch_proxy -lpytorch_fort_proxy")
-string(APPEND LDFLAGS " -I$ENV{TORCH_DIR}/torch/include -L$ENV{TORCH_DIR}/torch/lib -I$ENV{TORCH_DIR}/torch/include/mod_files -L$ENV{TORCH_DIR}/torch/lib -lpytorch_proxy -lpytorch_fort_proxy")
+string(APPEND FFLAGS
+  " -I$ENV{TORCH_DIR}/torch/include"
+  " -I$ENV{TORCH_DIR}/torch/include/mod_files"
+)
+string(APPEND SLIBS
+  " -L$ENV{TORCH_DIR}/torch/lib"
+  " -lpytorch_fort_proxy"
+  " -lpytorch_proxy"
+)
 set(MPICC "cc")
 set(MPICXX "CC")
 set(MPIFC "ftn")
