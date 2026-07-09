@@ -60,6 +60,11 @@
   </compset>	  
 
   <compset>
+    <alias>I20TRELM_DZ</alias>
+    <lname>20TR_DATM%QIA_ELM%SP_SICE_SOCN_SROF_SGLC_SWAV</lname>
+  </compset>
+
+  <compset>
     <alias>I20TRELM</alias>
     <lname>20TR_DATM%QIA_ELM%SP_SICE_SOCN_MOSART_SGLC_SWAV</lname>
   </compset> 
