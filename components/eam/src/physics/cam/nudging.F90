@@ -760,6 +760,7 @@ contains
    use ppgrid        ,only: pver
    use namelist_utils,only:find_group_name
    use units         ,only:getunit,freeunit
+   use infnan        ,only:isnan,isinf
    !
    ! Arguments
    !-------------
@@ -1114,6 +1115,16 @@ contains
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test       , 1, mpilog, 0, mpicom)
 #endif
+
+   if (Nudge_Lin_Relax_On) then
+     if (isnan(Nudge_UV_Prelx) .or. isinf(Nudge_UV_Prelx) .or. &
+         isnan(Nudge_T_Prelx)  .or. isinf(Nudge_T_Prelx)  .or. &
+         isnan(Nudge_Q_Prelx)  .or. isinf(Nudge_Q_Prelx)  .or. &
+         Nudge_UV_Prelx <= p_norelax .or. Nudge_T_Prelx <= p_norelax .or. &
+         Nudge_Q_Prelx <= p_norelax) then
+       call endrun('nudging_readnl: upper taper pressures must be finite and exceed p_norelax')
+     end if
+   end if
 
    if ( Nudge_ON .and. (Nudge_File_Ntime .ne. Nudge_Times_Per_Day) .and. (Nudge_File_Ntime .ne. 1) ) then
      write(iulog,*) 'NUDGING: Nudge_File_Ntime=',Nudge_File_Ntime
@@ -2524,7 +2535,7 @@ contains
    !   - weights(nstep): scaled weights whose sum equals nstep*weight_scale
    !
    !===============================================================
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use infnan, only: isnan, isinf
 
    integer, intent(in)                :: nstep
    character(len=*), intent(in)       :: method
@@ -2540,7 +2551,7 @@ contains
    pi = 4.0_r8 * atan(1.0_r8)
    weights(:) = 0.0_r8
 
-   if (.not. ieee_is_finite(weight_scale) .or. weight_scale < 0.0_r8) then
+   if (isnan(weight_scale) .or. isinf(weight_scale) .or. weight_scale < 0.0_r8) then
       call endrun('mltbc_compute_weights: weight scale must be finite and nonnegative')
    end if
 
@@ -2583,7 +2594,7 @@ contains
          if (nstep == 1) then
             weights(1) = 1.0_r8
          else
-            if (.not. ieee_is_finite(atten_db) .or. atten_db <= 0.0_r8) then
+            if (isnan(atten_db) .or. isinf(atten_db) .or. atten_db <= 0.0_r8) then
                call endrun('mltbc_compute_weights: DolphChebyshev attenuation must be finite and positive')
             end if
 
@@ -2645,11 +2656,11 @@ contains
    ! Before applying weight_scale, make every temporal weighting method
    ! integrate to nstep model timesteps.
    norm = sum(weights)
-   if (.not. ieee_is_finite(norm) .or. abs(norm) < epsilon(1.0_r8)) then
+   if (isnan(norm) .or. isinf(norm) .or. abs(norm) < epsilon(1.0_r8)) then
       call endrun('mltbc_compute_weights: invalid weight normalization')
    end if
    weights(:) = weights(:) * real(nstep, r8) * weight_scale / norm
-   if (.not. all(ieee_is_finite(weights))) then
+   if (any(isnan(weights)) .or. any(isinf(weights))) then
       call endrun('mltbc_compute_weights: non-finite scaled weights')
    end if
 
@@ -3464,9 +3475,6 @@ contains
   end select
 
   if (use_upp_relx) then
-    if (uv_prelx <= p_norelax .or. t_prelx <= p_norelax .or. q_prelx <= p_norelax) then
-      call endrun('mltbc_update_prof: upper taper pressures must exceed p_norelax')
-    end if
     do i = 1, ncol
       do k = pver, 1, -1
         wuprof(i,k) = wuprof(i,k) * nudge_upper_taper(pmid(i,k), uv_prelx)
@@ -8378,9 +8386,6 @@ contains
    
   ! Add a linear relexation of the nudging tendency on the upper layer 
   if (use_upp_lrelx) then
-    if (uv_prelx <= p_norelax .or. t_prelx <= p_norelax .or. q_prelx <= p_norelax) then
-      call endrun('update_nudge_prof: upper taper pressures must exceed p_norelax')
-    end if
     do i = 1, ncol
       do k = pver, 1, -1
         ufac(i,k) = ufac(i,k) * nudge_upper_taper(pmid_mod(i,k), uv_prelx)
