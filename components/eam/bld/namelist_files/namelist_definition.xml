@@ -511,6 +511,35 @@
        Default: 0
        </entry>
 
+<entry id="mltbc_atten_db" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Sidelobe attenuation in decibels for the Dolph-Chebyshev temporal window.
+       Higher values concentrate more weight near the middle of the nudging window,
+       while lower values produce a flatter temporal window. The weights are
+       normalized so that the total integrated correction is unchanged.
+       This parameter is only used when MLTBC_Step_Method='DolphChebyshev'
+       and has no effect for other methods.
+       30 dB: sidelobe amplitude ratio is about 0.0316 and produces a flatter window.
+       40 dB: sidelobe amplitude ratio is 0.01 and produces moderate center concentration.
+       60 dB: sidelobe amplitude ratio is 0.001 and produces the strongest center concentration.
+       Default: 40.0
+       </entry>
+
+<entry id="mltbc_weight_scale" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Overall scaling factor for the machine learning correction tendency.
+       After constructing the temporal weights, the weights are normalized so that
+       their sum is equal to mltbc_nstep multiplied by mltbc_weight_scale.
+       0.0: disables the machine learning correction.
+       0.5: applies half-strength correction.
+       1.0: applies the original trained mean correction tendency.
+       1.5: applies 1.5 times the correction.
+       2.0: applies double-strength correction.
+       For mltbc_nstep=6, the corresponding sums of the weights are
+       0, 3, 6, 9, and 12, respectively.
+       Default: 1.0
+       </entry>
+
 <entry id="mltbc_step_method" type="char*80" category="nudging"
        group="nudging_nl" valid_values="" >
        Method to perform Nudging analyses.
