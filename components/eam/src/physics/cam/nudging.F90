@@ -897,7 +897,7 @@ contains
 
    ! Set Default values for machine learing 
    !-----------------------------
-   mltbc_step_method    = 'Step'
+   mltbc_step_method    = 'STEP'
    mltbc_nudge          = .false.
    mltbc_patch_bilerp   = .false.
    mltbc_bilerp_test    = .false.
@@ -2557,8 +2557,7 @@ contains
    end select
 
    ! Optionally re-normalize or amplify weights for special method variants
-   if (trim(method) == 'IMT1' .or. trim(method) == 'Lanczos1' .or. &
-       trim(method) == 'DolphChebyshev1') then
+   if (trim(method) == 'IMT1' .or. trim(method) == 'Lanczos1') then
       ! Re-scale the weight: assume base weight was normalized across n steps
       weights(:) = weights(:) * nstep
    end if
@@ -2628,8 +2627,6 @@ contains
    real(r8) :: clat(pcols) ! current latitudes(radians)
    real(r8) :: clon(pcols) ! current longitudes(radians)
    real(r8) :: coszrs(pcols)  ! Cosine solar zenith angle
-   real(r8) :: xwgt(mltbc_nstep+1)
-
    nstep = get_nstep()
 
    !determine frequency of the ML call
@@ -2640,14 +2637,6 @@ contains
      Update_MLTBC = .false.
    end if
    
-   ! Check if mltbc_istep is updated in correct way 
-   !---------------------------------
-   if(mltbc_istep > mltbc_nstep ) then
-     write(iulog,*) 'mltbc_timestep_init: mltbc_istep = ', mltbc_istep 
-     write(iulog,*) 'mltbc_timestep_init: mltbc_nstep = ', mltbc_nstep
-     call endrun('mltbc_timestep_init:: mltbc_istep > mltbc_nstep')
-   end if 
-
    ! Check if Nudging is initialized
    !---------------------------------
    if(.not.Nudge_Initialized) then
