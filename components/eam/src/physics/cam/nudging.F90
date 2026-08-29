@@ -475,6 +475,7 @@ module nudging
   private:: mltbc_latlon_to_global
   private:: mltbc_load_model
   private:: mltbc_compute_weights
+  private:: nudge_upper_taper
 
   ! Nudging Parameters
   !--------------------
@@ -894,9 +895,9 @@ contains
    Nudge_NO_PBL_T     = 0 
    Nudge_NO_PBL_Q     = 0
 
-   Nudge_UV_Prelx     = 30.0_r8 
-   Nudge_T_Prelx      = 10.0_r8 
-   Nudge_Q_Prelx      = 100.0_r8 
+   Nudge_UV_Prelx     = p_uv_relax
+   Nudge_T_Prelx      = p_T_relax
+   Nudge_Q_Prelx      = p_q_relax
 
    ! Set Default values for machine learing 
    !-----------------------------
@@ -2497,6 +2498,17 @@ contains
   end subroutine ! mltbc_load_model
   !================================================================
 
+  real(r8) function nudge_upper_taper(pmid, prelx)
+   ! Continuous linear upper-atmosphere taper: full strength at and
+   ! below prelx, decreasing to zero at p_norelax.
+   real(r8), intent(in) :: pmid, prelx
+
+   nudge_upper_taper = max(0.0_r8, min(1.0_r8, &
+                        (pmid - p_norelax) / (prelx - p_norelax)))
+  end function nudge_upper_taper
+
+  !================================================================
+
   subroutine mltbc_compute_weights(nstep, method, atten_db, weight_scale, weights)
    !
    ! mltbc_compute_weights:
@@ -3452,25 +3464,15 @@ contains
   end select
 
   if (use_upp_relx) then
+    if (uv_prelx <= p_norelax .or. t_prelx <= p_norelax .or. q_prelx <= p_norelax) then
+      call endrun('mltbc_update_prof: upper taper pressures must exceed p_norelax')
+    end if
     do i = 1, ncol
       do k = pver, 1, -1
-        if (pmid(i,k) < p_norelax) then
-          wuprof(i,k) = 0._r8
-          wvprof(i,k) = 0._r8
-          wtprof(i,k) = 0._r8
-          wqprof(i,k) = 0._r8
-        else
-          if (pmid(i,k) < uv_prelx) then
-            wuprof(i,k) = wuprof(i,k) * max(0.01_r8, pmid(i,k)/uv_prelx)
-            wvprof(i,k) = wvprof(i,k) * max(0.01_r8, pmid(i,k)/uv_prelx)
-          end if
-          if (pmid(i,k) < t_prelx) then
-            wtprof(i,k) = wtprof(i,k) * max(0.01_r8, pmid(i,k)/t_prelx)
-          end if
-          if (pmid(i,k) < q_prelx) then
-            wqprof(i,k) = wqprof(i,k) * max(0.01_r8, pmid(i,k)/q_prelx)
-          end if
-        end if
+        wuprof(i,k) = wuprof(i,k) * nudge_upper_taper(pmid(i,k), uv_prelx)
+        wvprof(i,k) = wvprof(i,k) * nudge_upper_taper(pmid(i,k), uv_prelx)
+        wtprof(i,k) = wtprof(i,k) * nudge_upper_taper(pmid(i,k), t_prelx)
+        wqprof(i,k) = wqprof(i,k) * nudge_upper_taper(pmid(i,k), q_prelx)
       end do
     end do
   end if
@@ -8376,24 +8378,15 @@ contains
    
   ! Add a linear relexation of the nudging tendency on the upper layer 
   if (use_upp_lrelx) then
+    if (uv_prelx <= p_norelax .or. t_prelx <= p_norelax .or. q_prelx <= p_norelax) then
+      call endrun('update_nudge_prof: upper taper pressures must exceed p_norelax')
+    end if
     do i = 1, ncol
       do k = pver, 1, -1
-        if ( pmid_mod(i,k) < uv_prelx ) then
-          ufac(i,k) = ufac(i,k) * max(0.01_r8, pmid_mod(i,k)/uv_prelx)
-          vfac(i,k) = vfac(i,k) * max(0.01_r8, pmid_mod(i,k)/uv_prelx)
-        end if
-        if ( pmid_mod(i,k) < t_prelx ) then
-          tfac(i,k) = tfac(i,k) * max(0.01_r8, pmid_mod(i,k)/t_prelx)
-        end if
-        if ( pmid_mod(i,k) < q_prelx ) then
-          qfac(i,k) = qfac(i,k) * max(0.01_r8, pmid_mod(i,k)/q_prelx)
-        end if
-        if ( pmid_mod(i,k) < p_norelax ) then
-          ufac(i,k) = 0._r8
-          vfac(i,k) = 0._r8
-          tfac(i,k) = 0._r8
-          qfac(i,k) = 0._r8
-        end if
+        ufac(i,k) = ufac(i,k) * nudge_upper_taper(pmid_mod(i,k), uv_prelx)
+        vfac(i,k) = vfac(i,k) * nudge_upper_taper(pmid_mod(i,k), uv_prelx)
+        tfac(i,k) = tfac(i,k) * nudge_upper_taper(pmid_mod(i,k), t_prelx)
+        qfac(i,k) = qfac(i,k) * nudge_upper_taper(pmid_mod(i,k), q_prelx)
       end do
     end do
   end if
