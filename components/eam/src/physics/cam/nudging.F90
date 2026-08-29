@@ -899,7 +899,7 @@ contains
 
    ! Set Default values for machine learing 
    !-----------------------------
-   mltbc_step_method    = 'Uniform'
+   mltbc_step_method    = 'IMT'
    mltbc_nudge          = .false.
    mltbc_patch_bilerp   = .false.
    mltbc_bilerp_test    = .false.
