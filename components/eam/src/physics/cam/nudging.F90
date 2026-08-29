@@ -712,6 +712,7 @@ module nudging
   integer  :: mltbc_patch_nxy
   real(r8) :: mltbc_patch_dx
   real(r8) :: mltbc_patch_dy
+  real(r8) :: mltbc_atten_db
 
   !module for machine learning model 
   public :: torch_umod
@@ -803,7 +804,8 @@ contains
                          Nudge_Vertical_Smooth,                        &
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
-                         mltbc_ibatch, mltbc_nstep, mltbc_step_method,      & 
+                         mltbc_ibatch, mltbc_nstep, mltbc_step_method, &
+                         mltbc_atten_db,                              &
                          mltbc_patch_bilerp, mltbc_bilerp_test
   
    ! Nudging is NOT initialized yet, For now
@@ -897,12 +899,13 @@ contains
 
    ! Set Default values for machine learing 
    !-----------------------------
-   mltbc_step_method    = 'STEP'
+   mltbc_step_method    = 'Uniform'
    mltbc_nudge          = .false.
    mltbc_patch_bilerp   = .false.
    mltbc_bilerp_test    = .false.
    mltbc_patch_model    = .false.
    mltbc_nstep          = 1 
+   mltbc_atten_db       = 40.0_r8
    mltbc_ibatch         = 2
    mltbc_option         = 0
    mltbc_patch_nlon     = 1
@@ -1101,6 +1104,7 @@ contains
    call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_patch_model       , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_atten_db          , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_ibatch            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
@@ -1625,6 +1629,7 @@ contains
      write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
      write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
+     write(iulog,*) 'NUDGING: mltbc_atten_db      =',mltbc_atten_db
      write(iulog,*) 'NUDGING: mltbc_ibatch        =',mltbc_ibatch
      write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
      write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
@@ -1689,6 +1694,7 @@ contains
    call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_patch_model   , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_atten_db      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_ibatch        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
@@ -2033,7 +2039,8 @@ contains
 
            !load machine learning model (only need to call once at initial time)
            call mltbc_load_model(mltbc_patch_model,mltbc_option)
-           call mltbc_compute_weights(mltbc_nstep, mltbc_step_method, mltbc_step_weight)
+           call mltbc_compute_weights(mltbc_nstep, mltbc_step_method, &
+                                      mltbc_atten_db, mltbc_step_weight)
 
       case default
            call endrun('nudging_init error: nudge method should &
@@ -2484,7 +2491,7 @@ contains
   end subroutine ! mltbc_load_model
   !================================================================
 
-  subroutine mltbc_compute_weights(nstep, method, weights)
+  subroutine mltbc_compute_weights(nstep, method, atten_db, weights)
    !
    ! mltbc_compute_weights:
    !    Construct weighting function for ML-predicted tendency application.
@@ -2492,45 +2499,42 @@ contains
    ! Input:
    !   - nstep : number of steps to apply nudging
    !   - method: type of weighting method
+   !   - atten_db: Dolph-Chebyshev sidelobe attenuation in decibels
    !
    ! Output:
-   !   - weights(nstep): computed weight array (normalized)
+   !   - weights(nstep): mean-one weights whose sum equals nstep
    !
    !===============================================================
    integer, intent(in)                :: nstep
    character(len=*), intent(in)       :: method
+   real(r8), intent(in)               :: atten_db
    real(r8), intent(inout)            :: weights(nstep)
    
    ! Local variables
-   integer :: m, i
-   real(r8) :: pi, norm, x
+   integer :: m, i, j, k, order, raw_idx
+   real(r8) :: pi, norm, x, ripple, beta, phase
+   real(r8), allocatable :: p(:), wraw(:)
   
    pi = 4.0_r8 * atan(1.0_r8)
    weights(:) = 0.0_r8
 
    select case (trim(method))
-      case ('STEP')
+      case ('Uniform')
          weights(:) = 1.0_r8
 
       case ('IMT')
          ! Apply the predicted tendency at the end of the forecast window.
          weights(nstep) = 1.0_r8
 
-      case ('Linear')
-         weights(:) = 1.0_r8 / real(nstep, r8)
-
       case ('TopHat')
          m = int(nstep / 2)
-         norm = 0.0_r8
          do i = 1, nstep
            if (i <= m) then
               weights(i) = real(i, r8)
            else
               weights(i) = real(nstep - i + 1, r8)
            end if
-           norm = norm + weights(i)
          end do
-         weights(:) = weights(:) / norm
 
       case ('Lanczos')
          m = (nstep + 1) / 2
@@ -2545,17 +2549,80 @@ contains
                             sin(x * pi / real(m, r8)) / (x * pi)
             end if
          end do
-         norm = sum(weights)
-         if (abs(norm) < epsilon(1.0_r8)) then
-            call endrun('mltbc_compute_weights: zero Lanczos normalization')
+
+      case ('DolphChebyshev')
+         ! Construct a true Dolph-Chebyshev window from Chebyshev
+         ! polynomial samples in frequency space. The parity-dependent
+         ! phase and reordering produce a symmetric time-domain window.
+         if (nstep == 1) then
+            weights(1) = 1.0_r8
+         else
+            if (atten_db <= 0.0_r8) then
+               call endrun('mltbc_compute_weights: DolphChebyshev attenuation must be positive')
+            end if
+
+            order = nstep - 1
+            ripple = 10.0_r8**(atten_db / 20.0_r8)
+            beta = cosh(acosh(ripple) / real(order, r8))
+            allocate(p(0:nstep-1), wraw(0:nstep-1))
+
+            do k = 0, nstep - 1
+               x = beta * cos(pi * real(k, r8) / real(nstep, r8))
+               if (x > 1.0_r8) then
+                  p(k) = cosh(real(order, r8) * acosh(x))
+               else if (x < -1.0_r8) then
+                  p(k) = (-1.0_r8)**order * cosh(real(order, r8) * acosh(-x))
+               else
+                  p(k) = cos(real(order, r8) * acos(x))
+               end if
+            end do
+
+            do j = 0, nstep - 1
+               wraw(j) = 0.0_r8
+               do k = 0, nstep - 1
+                  if (mod(nstep, 2) == 0) then
+                     phase = 2.0_r8 * pi * real(k, r8) * &
+                             (real(j, r8) + 0.5_r8) / real(nstep, r8)
+                  else
+                     phase = 2.0_r8 * pi * real(k * j, r8) / real(nstep, r8)
+                  end if
+                  wraw(j) = wraw(j) + p(k) * cos(phase)
+               end do
+            end do
+
+            if (mod(nstep, 2) == 0) then
+               do i = 1, nstep
+                  if (i <= nstep / 2) then
+                     raw_idx = nstep / 2 - i + 1
+                  else
+                     raw_idx = i - nstep / 2
+                  end if
+                  weights(i) = wraw(raw_idx)
+               end do
+            else
+               do i = 1, nstep
+                  raw_idx = abs(i - (nstep + 1) / 2)
+                  weights(i) = wraw(raw_idx)
+               end do
+            end if
+
+            deallocate(p, wraw)
          end if
-         weights(:) = weights(:) / norm
 
       case default
          write(iulog,*) 'ERROR: Unknown method to derive weight = ', trim(method)
          call endrun('mltbc_compute_weights: bad input method')
 
    end select
+
+   ! The ML output is a mean tendency over the nstep forecast window.
+   ! Preserve that mean tendency by making every temporal weighting method
+   ! integrate to nstep model timesteps.
+   norm = sum(weights)
+   if (abs(norm) < epsilon(1.0_r8)) then
+      call endrun('mltbc_compute_weights: zero weight normalization')
+   end if
+   weights(:) = weights(:) * real(nstep, r8) / norm
 
   end subroutine !mltbc_compute_weights
 
