@@ -1899,6 +1899,11 @@ contains
       case ('MLTBC')
            ! use Xanal directly, no interpolation is needed
            !-----------------------------------------------
+           if (mltbc_nstep < 1) then
+             write(iulog,*) 'ERROR: mltbc_nstep must be greater than zero; got ', mltbc_nstep
+             call endrun('nudging_init: invalid mltbc_nstep')
+           end if
+
            allocate(Model_rlat(Nudge_ncol),stat=istat)
            call alloc_err(istat,'Machine Learning NUDGING','Model_rlat',Nudge_ncol)
            allocate(Model_rlon(Nudge_ncol),stat=istat)
