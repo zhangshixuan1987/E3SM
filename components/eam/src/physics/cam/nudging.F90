@@ -713,6 +713,7 @@ module nudging
   real(r8) :: mltbc_patch_dx
   real(r8) :: mltbc_patch_dy
   real(r8) :: mltbc_atten_db
+  real(r8) :: mltbc_weight_scale
 
   !module for machine learning model 
   public :: torch_umod
@@ -805,7 +806,7 @@ contains
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
                          mltbc_ibatch, mltbc_nstep, mltbc_step_method, &
-                         mltbc_atten_db,                              &
+                         mltbc_atten_db, mltbc_weight_scale,          &
                          mltbc_patch_bilerp, mltbc_bilerp_test
   
    ! Nudging is NOT initialized yet, For now
@@ -906,6 +907,7 @@ contains
    mltbc_patch_model    = .false.
    mltbc_nstep          = 1 
    mltbc_atten_db       = 40.0_r8
+   mltbc_weight_scale   = 1.0_r8
    mltbc_ibatch         = 2
    mltbc_option         = 0
    mltbc_patch_nlon     = 1
@@ -1105,6 +1107,7 @@ contains
    call mpibcast(mltbc_patch_model       , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db          , 1, mpir8,  0, mpicom)
+   call mpibcast(mltbc_weight_scale      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_ibatch            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
@@ -1630,6 +1633,7 @@ contains
      write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
      write(iulog,*) 'NUDGING: mltbc_atten_db      =',mltbc_atten_db
+     write(iulog,*) 'NUDGING: mltbc_weight_scale  =',mltbc_weight_scale
      write(iulog,*) 'NUDGING: mltbc_ibatch        =',mltbc_ibatch
      write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
      write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
@@ -1695,6 +1699,7 @@ contains
    call mpibcast(mltbc_patch_model   , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db      , 1, mpir8,  0, mpicom)
+   call mpibcast(mltbc_weight_scale  , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_ibatch        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
@@ -2040,7 +2045,8 @@ contains
            !load machine learning model (only need to call once at initial time)
            call mltbc_load_model(mltbc_patch_model,mltbc_option)
            call mltbc_compute_weights(mltbc_nstep, mltbc_step_method, &
-                                      mltbc_atten_db, mltbc_step_weight)
+                                      mltbc_atten_db, mltbc_weight_scale, &
+                                      mltbc_step_weight)
 
       case default
            call endrun('nudging_init error: nudge method should &
@@ -2491,7 +2497,7 @@ contains
   end subroutine ! mltbc_load_model
   !================================================================
 
-  subroutine mltbc_compute_weights(nstep, method, atten_db, weights)
+  subroutine mltbc_compute_weights(nstep, method, atten_db, weight_scale, weights)
    !
    ! mltbc_compute_weights:
    !    Construct weighting function for ML-predicted tendency application.
@@ -2500,16 +2506,20 @@ contains
    !   - nstep : number of steps to apply nudging
    !   - method: type of weighting method
    !   - atten_db: Dolph-Chebyshev sidelobe attenuation in decibels
+   !   - weight_scale: dimensionless multiplier for correction strength
    !
    ! Output:
-   !   - weights(nstep): mean-one weights whose sum equals nstep
+   !   - weights(nstep): scaled weights whose sum equals nstep*weight_scale
    !
    !===============================================================
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
    integer, intent(in)                :: nstep
    character(len=*), intent(in)       :: method
    real(r8), intent(in)               :: atten_db
+   real(r8), intent(in)               :: weight_scale
    real(r8), intent(inout)            :: weights(nstep)
-   
+
    ! Local variables
    integer :: m, i, j, k, order, raw_idx
    real(r8) :: pi, norm, x, ripple, beta, phase
@@ -2517,6 +2527,10 @@ contains
   
    pi = 4.0_r8 * atan(1.0_r8)
    weights(:) = 0.0_r8
+
+   if (.not. ieee_is_finite(weight_scale) .or. weight_scale < 0.0_r8) then
+      call endrun('mltbc_compute_weights: weight scale must be finite and nonnegative')
+   end if
 
    select case (trim(method))
       case ('Uniform')
@@ -2557,8 +2571,8 @@ contains
          if (nstep == 1) then
             weights(1) = 1.0_r8
          else
-            if (atten_db <= 0.0_r8) then
-               call endrun('mltbc_compute_weights: DolphChebyshev attenuation must be positive')
+            if (.not. ieee_is_finite(atten_db) .or. atten_db <= 0.0_r8) then
+               call endrun('mltbc_compute_weights: DolphChebyshev attenuation must be finite and positive')
             end if
 
             order = nstep - 1
@@ -2616,13 +2630,16 @@ contains
    end select
 
    ! The ML output is a mean tendency over the nstep forecast window.
-   ! Preserve that mean tendency by making every temporal weighting method
+   ! Before applying weight_scale, make every temporal weighting method
    ! integrate to nstep model timesteps.
    norm = sum(weights)
-   if (abs(norm) < epsilon(1.0_r8)) then
-      call endrun('mltbc_compute_weights: zero weight normalization')
+   if (.not. ieee_is_finite(norm) .or. abs(norm) < epsilon(1.0_r8)) then
+      call endrun('mltbc_compute_weights: invalid weight normalization')
    end if
-   weights(:) = weights(:) * real(nstep, r8) / norm
+   weights(:) = weights(:) * real(nstep, r8) * weight_scale / norm
+   if (.not. all(ieee_is_finite(weights))) then
+      call endrun('mltbc_compute_weights: non-finite scaled weights')
+   end if
 
   end subroutine !mltbc_compute_weights
 
