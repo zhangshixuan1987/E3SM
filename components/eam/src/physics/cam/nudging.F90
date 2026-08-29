@@ -2512,8 +2512,9 @@ contains
       case ('STEP')
          weights(:) = 1.0_r8
 
-      case ('IMT', 'IMT1')
-         weights(1) = 1.0_r8
+      case ('IMT')
+         ! Apply the predicted tendency at the end of the forecast window.
+         weights(nstep) = 1.0_r8
 
       case ('Linear')
          weights(:) = 1.0_r8 / real(nstep, r8)
@@ -2531,7 +2532,7 @@ contains
          end do
          weights(:) = weights(:) / norm
 
-      case ('Lanczos','Lanczos1')
+      case ('Lanczos')
          m = (nstep + 1) / 2
          do i = 1, nstep
             ! Center odd windows on zero and even windows between the
@@ -2555,12 +2556,6 @@ contains
          call endrun('mltbc_compute_weights: bad input method')
 
    end select
-
-   ! Optionally re-normalize or amplify weights for special method variants
-   if (trim(method) == 'IMT1' .or. trim(method) == 'Lanczos1') then
-      ! Re-scale the weight: assume base weight was normalized across n steps
-      weights(:) = weights(:) * nstep
-   end if
 
   end subroutine !mltbc_compute_weights
 
@@ -2618,7 +2613,7 @@ contains
    real(r8), pointer, dimension(:)   :: nudge_dum1  ! Nudging tendency(old) 1d 
 
    !temporary working arrays 
-   integer  :: itim_old, mltbc_istep
+   integer  :: itim_old, mltbc_istep, mltbc_iweight
    real(r8) :: mltbc_wgtstep
    real(r8) :: ftem(pcols,pver)
    real(r8) :: ftem2(pcols) ! temporary workspace
@@ -2631,6 +2626,10 @@ contains
 
    !determine frequency of the ML call
    mltbc_istep = mod(nstep,mltbc_nstep)
+   ! The prediction generated at a window boundary is applied during the
+   ! following window in chronological weight order. At a boundary, use the
+   ! final weight for the prediction generated one window earlier.
+   mltbc_iweight = modulo(nstep - 1, mltbc_nstep) + 1
    if ( mltbc_istep == 0 ) then
      Update_MLTBC = .true.
    else
@@ -2741,12 +2740,26 @@ contains
    Nudge_Qstep(:,:,:) = 0._r8
    Nudge_PSstep(:,:)  = 0._r8
 
-   if ((nstep > 0).and.(Before_End).and.((Update_Nudge).or.(Update_Model)).and.(mltbc_nudge)) then
+   if ((Before_End).and.(mltbc_nudge)) then
 
      if ( Update_MLTBC ) then 
        !#############################################################     
-       !gather data in chunks for machine learning model 
+       ! Refresh the current model state at the ML inference boundary.
+       ! MLTBC advances every model timestep and must not depend on the
+       ! slower legacy Model_Times_Per_Day update clock.
        !##############################################################
+       call cnst_get_ind('Q',indw)
+       do lchnk=begchunk,endchunk
+         ncol=state(lchnk)%ncol
+         Model_U(:ncol,:pver,lchnk)=state(lchnk)%u(:ncol,:pver)
+         Model_V(:ncol,:pver,lchnk)=state(lchnk)%v(:ncol,:pver)
+         Model_T(:ncol,:pver,lchnk)=state(lchnk)%t(:ncol,:pver)
+         Model_Q(:ncol,:pver,lchnk)=state(lchnk)%q(:ncol,:pver,indw)
+         Model_PS(:ncol,lchnk)=state(lchnk)%ps(:ncol)
+         Model_PHIS(:ncol,lchnk)=state(lchnk)%phis(:ncol)
+       end do
+
+       ! Gather the refreshed state for the machine-learning model.
        call mltbc_gather_data(Model_U,pver,Nudge_ncol,Model_UML)
        call mltbc_gather_data(Model_V,pver,Nudge_ncol,Model_VML)
        call mltbc_gather_data(Model_T,pver,Nudge_ncol,Model_TML)
@@ -2834,11 +2847,11 @@ contains
      end do
 
      !Modify ML nudging tendency with weighting functions at current step 
-     Nudge_PSstep(:,:)  = Nudge_PSstep(:,:)  * mltbc_step_weight(mltbc_istep+1)
-     Nudge_Ustep(:,:,:) = Nudge_Ustep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
-     Nudge_Vstep(:,:,:) = Nudge_Vstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
-     Nudge_Tstep(:,:,:) = Nudge_Tstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
-     Nudge_Qstep(:,:,:) = Nudge_Qstep(:,:,:) * mltbc_step_weight(mltbc_istep+1)
+     Nudge_PSstep(:,:)  = Nudge_PSstep(:,:)  * mltbc_step_weight(mltbc_iweight)
+     Nudge_Ustep(:,:,:) = Nudge_Ustep(:,:,:) * mltbc_step_weight(mltbc_iweight)
+     Nudge_Vstep(:,:,:) = Nudge_Vstep(:,:,:) * mltbc_step_weight(mltbc_iweight)
+     Nudge_Tstep(:,:,:) = Nudge_Tstep(:,:,:) * mltbc_step_weight(mltbc_iweight)
+     Nudge_Qstep(:,:,:) = Nudge_Qstep(:,:,:) * mltbc_step_weight(mltbc_iweight)
 
      !Apply scaling or constrains on nudging strength
      do lchnk=begchunk,endchunk
