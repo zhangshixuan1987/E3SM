@@ -2502,9 +2502,8 @@ contains
    real(r8), intent(inout)            :: weights(nstep)
    
    ! Local variables
-   integer :: m, i, n, kstart, kcenter 
-   real(r8) :: pi, norm
-   real(r8), allocatable :: xwgt(:)
+   integer :: m, i
+   real(r8) :: pi, norm, x
   
    pi = 4.0_r8 * atan(1.0_r8)
    weights(:) = 0.0_r8
@@ -2532,26 +2531,24 @@ contains
          end do
          weights(:) = weights(:) / norm
 
-      case ('DolphChebyshev','DolphChebyshev1')
+      case ('Lanczos','Lanczos1')
          m = (nstep + 1) / 2
-         allocate(xwgt(2 * m + 1))
-         do i = 1, 2 * m + 1
-            n = i - m - 1
-            if (n == 0) then
-               xwgt(i) = 1.0_r8 / real(m, r8)
-            else if (abs(n) > m) then
-               xwgt(i) = 0.0_r8
+         do i = 1, nstep
+            ! Center odd windows on zero and even windows between the
+            ! two middle samples so that both cases remain symmetric.
+            x = real(i, r8) - 0.5_r8 * real(nstep + 1, r8)
+            if (abs(x) < epsilon(1.0_r8)) then
+               weights(i) = 1.0_r8 / real(m, r8)
             else
-               xwgt(i) = sin(n * pi / real(m + 1, r8)) * (m + 1) / (n * pi) * &
-                         sin(n * pi / real(m, r8)) / (n * pi)
+               weights(i) = sin(x * pi / real(m + 1, r8)) * real(m + 1, r8) / (x * pi) * &
+                            sin(x * pi / real(m, r8)) / (x * pi)
             end if
          end do
-         norm = sum(xwgt)
-         ! Extract centered nstep weights
-         kcenter = (2 * m + 1 + 1) / 2          ! central index
-         kstart = kcenter - (nstep - 1) / 2      ! ensure symmetric center
-         weights(:) = xwgt(kstart : kstart + nstep - 1) / norm
-         deallocate(xwgt)
+         norm = sum(weights)
+         if (abs(norm) < epsilon(1.0_r8)) then
+            call endrun('mltbc_compute_weights: zero Lanczos normalization')
+         end if
+         weights(:) = weights(:) / norm
 
       case default
          write(iulog,*) 'ERROR: Unknown method to derive weight = ', trim(method)
@@ -2560,7 +2557,8 @@ contains
    end select
 
    ! Optionally re-normalize or amplify weights for special method variants
-   if ( trim(method) == 'IMT1' .or. trim(method) == 'DolphChebyshev1' ) then
+   if (trim(method) == 'IMT1' .or. trim(method) == 'Lanczos1' .or. &
+       trim(method) == 'DolphChebyshev1') then
       ! Re-scale the weight: assume base weight was normalized across n steps
       weights(:) = weights(:) * nstep
    end if
