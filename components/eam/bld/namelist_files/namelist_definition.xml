@@ -356,6 +356,8 @@
        group="nudging_nl" valid_values="" >
        If TRUE, apply the topography adjustment on surface pressure
        at the location of calculation of nudging tendency for surface pressure
+       Enable only when the input surface pressure has not already been adjusted
+       to model topography. Otherwise keep FALSE to avoid a double adjustment.
        Default: FALSE
        </entry>
 

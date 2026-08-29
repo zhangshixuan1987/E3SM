@@ -493,6 +493,8 @@ module nudging
   logical::         Nudge_Lin_Relax_On   = .false.
   logical::         Nudge_Balance_Constrain = .false.
   logical::         Nudge_Vertical_Smooth = .false.
+  ! Enable only when input PS has not already been adjusted to model
+  ! topography; otherwise keep false to avoid applying the adjustment twice.
   logical::         Nudge_PS_Adjust_On   = .false.
   logical::         Nudge_PS_On          = .false.
   logical::         Nudge_Q_Adjust_On    = .false.
