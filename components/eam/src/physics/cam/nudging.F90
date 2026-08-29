@@ -3203,6 +3203,9 @@ contains
   real(r8), pointer :: pblh(:)
 
   real(r8) :: qeff, teff, tveff, tvdt, tdt, dlnp
+  real(r8) :: pbl_mask, surface_mask, smooth_mask
+  real(r8), parameter :: pbl_transition_levels = 1.0_r8
+  real(r8), parameter :: surface_decay_levels = 1.0_r8
 
   ! Load values at Current into the Model arrays
   !-----------------------------------------------
@@ -3390,10 +3393,14 @@ contains
     case (2)
       do i = 1, ncol
         do k = pver, 1, -1
-          wuprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                        0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
-          wvprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                        0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
+          ! Smoothly suppress nudging within the PBL while retaining it
+          ! at the lowest model level. The smooth union remains in [0,1].
+          pbl_mask = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k)) / &
+                                             pbl_transition_levels))
+          surface_mask = exp(-(real(pver-k, r8) / surface_decay_levels)**2)
+          smooth_mask = 1.0_r8 - (1.0_r8 - pbl_mask) * (1.0_r8 - surface_mask)
+          wuprof(i,k) = smooth_mask
+          wvprof(i,k) = wuprof(i,k)
         end do 
       end do 
     case default
@@ -3412,8 +3419,10 @@ contains
      case (2)
        do i = 1, ncol
          do k = pver, 1, -1
-           wtprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                         0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
+           pbl_mask = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k)) / &
+                                              pbl_transition_levels))
+           surface_mask = exp(-(real(pver-k, r8) / surface_decay_levels)**2)
+           wtprof(i,k) = 1.0_r8 - (1.0_r8 - pbl_mask) * (1.0_r8 - surface_mask)
          end do 
        end do 
      case default
@@ -3432,8 +3441,10 @@ contains
      case (2)
        do i = 1, ncol
          do k = pver, 1, -1
-           wqprof(i,k) = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k))/0.1_r8)) + &
-                         0.5_r8 * (1.0_r8 + tanh((real(k+1)-real(pver))/0.1_r8))
+           pbl_mask = 0.5_r8 * (1.0_r8 + tanh((real(kpblt(i))-real(k)) / &
+                                              pbl_transition_levels))
+           surface_mask = exp(-(real(pver-k, r8) / surface_decay_levels)**2)
+           wqprof(i,k) = 1.0_r8 - (1.0_r8 - pbl_mask) * (1.0_r8 - surface_mask)
          end do 
        end do
      case default
