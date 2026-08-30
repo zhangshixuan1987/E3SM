@@ -562,12 +562,16 @@
 
 <entry id="mltbc_step_method" type="char*80" category="nudging"
        group="nudging_nl" valid_values="" >
-       Method to perform Nudging analyses.
-       1. Step: the machine learning correction tendency is applied with same values 
-	  within each nudging window (e.g., 3-hr).
-       2. IMT: the machine learning correction tendency is applied only at the time 
-	  step when machine learning prediction is issued.
-       Default: Step
+       Temporal weighting method used to distribute the machine-learning mean
+       correction tendency over each MLTBC prediction window.
+       Uniform: apply the same tendency at every timestep in the window.
+       IMT: apply the complete window-integrated correction at the final timestep.
+       TopHat: apply a symmetric triangular temporal window.
+       Lanczos: apply a symmetric Lanczos temporal window.
+       DolphChebyshev: apply a symmetric Dolph-Chebyshev window controlled by
+       mltbc_atten_db. Every method is normalized so its weight sum equals
+       mltbc_nstep multiplied by mltbc_weight_scale.
+       Default: IMT
        </entry>
 
 <entry id="mltbc_patch_model" type="logical" category="nudging"
