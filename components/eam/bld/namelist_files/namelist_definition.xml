@@ -470,7 +470,10 @@
 
 <entry id="Nudge_Vertical_Smooth" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
-       If TRUE, using 3-point mass weighted smoothing on nudging tendency for zonal and meridional wind 
+       If TRUE, apply a mass-conserving vertical diffusion pass to the ML
+       zonal- and meridional-wind tendencies. The top and bottom model levels
+       remain unchanged so the smoother does not undo boundary tapers. Its
+       strength is controlled by mltbc_smooth_strength.
        Default: FALSE
        </entry>
 
@@ -544,6 +547,17 @@
        For mltbc_nstep=6, the corresponding sums of the weights are
        0, 3, 6, 9, and 12, respectively.
        Default: 1.0
+       </entry>
+
+<entry id="mltbc_smooth_strength" type="real" category="nudging"
+       group="nudging_nl" valid_values="" >
+       Strength of the mass-conserving vertical diffusion applied when
+       Nudge_Vertical_Smooth is TRUE. A value of 0.0 disables smoothing;
+       0.5 is the strongest universally convex value and gives equal-mass
+       interior weights of (1/4, 1/2, 1/4). The conservative default of 0.15
+       gives equal-mass interior weights of (0.075, 0.85, 0.075), reducing
+       level-to-level noise while retaining most of the local ML signal.
+       Default: 0.15
        </entry>
 
 <entry id="mltbc_step_method" type="char*80" category="nudging"

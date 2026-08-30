@@ -421,7 +421,7 @@ module nudging
   public:: nudging_update_land_surface
   public:: nudging_update_srf_flux
   public:: Nudge_Loc_PhysOut
-  private::smooth_nudge_uv_dlnp
+  private:: smooth_nudge_uv_mass_conserving
   private::se2latlon_interp_init
   private::latlon2se_interp_init
   private::dist_latlon_2pts 
@@ -723,6 +723,7 @@ module nudging
   real(r8) :: mltbc_patch_dy
   real(r8) :: mltbc_atten_db
   real(r8) :: mltbc_weight_scale
+  real(r8) :: mltbc_smooth_strength
 
   !module for machine learning model 
   public :: torch_umod
@@ -817,6 +818,7 @@ contains
                          mltbc_option, mltbc_patch_model,              & 
                          mltbc_ibatch, mltbc_nstep, mltbc_step_method, &
                          mltbc_atten_db, mltbc_weight_scale,          &
+                         mltbc_smooth_strength,                       &
                          mltbc_patch_bilerp, mltbc_bilerp_test
   
    ! Nudging is NOT initialized yet, For now
@@ -918,6 +920,9 @@ contains
    mltbc_nstep          = 1 
    mltbc_atten_db       = 40.0_r8
    mltbc_weight_scale   = 1.0_r8
+   ! Conservative default: for equal layer masses, retain 85% of the local
+   ! tendency and draw 7.5% from each vertical neighbor in the interior.
+   mltbc_smooth_strength = 0.15_r8
    mltbc_ibatch         = 2
    mltbc_option         = 0
    mltbc_patch_nlon     = 1
@@ -1118,11 +1123,17 @@ contains
    call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db          , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale      , 1, mpir8,  0, mpicom)
+   call mpibcast(mltbc_smooth_strength   , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_ibatch            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test       , 1, mpilog, 0, mpicom)
 #endif
+
+   if (isnan(mltbc_smooth_strength) .or. isinf(mltbc_smooth_strength) .or. &
+       mltbc_smooth_strength < 0.0_r8 .or. mltbc_smooth_strength > 0.5_r8) then
+     call endrun('nudging_readnl: mltbc_smooth_strength must be finite and in [0, 0.5]')
+   end if
 
    if (Nudge_Lin_Relax_On) then
      if (isnan(Nudge_UV_Prelx) .or. isinf(Nudge_UV_Prelx) .or. &
@@ -1654,6 +1665,7 @@ contains
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
      write(iulog,*) 'NUDGING: mltbc_atten_db      =',mltbc_atten_db
      write(iulog,*) 'NUDGING: mltbc_weight_scale  =',mltbc_weight_scale
+     write(iulog,*) 'NUDGING: mltbc_smooth_strength=',mltbc_smooth_strength
      write(iulog,*) 'NUDGING: mltbc_ibatch        =',mltbc_ibatch
      write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
      write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
@@ -1720,6 +1732,7 @@ contains
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale  , 1, mpir8,  0, mpicom)
+   call mpibcast(mltbc_smooth_strength, 1, mpir8, 0, mpicom)
    call mpibcast(mltbc_ibatch        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
@@ -3512,7 +3525,7 @@ contains
   end do
 
   if (use_vertical_uv_smooth) then
-    call smooth_nudge_uv_dlnp(ncol, lnpint, nudge_u, nudge_v)
+    call smooth_nudge_uv_mass_conserving(ncol, pdel, nudge_u, nudge_v)
   end if 
 
   ! Repartition the weighted ML virtual-temperature target consistently
@@ -3673,62 +3686,67 @@ contains
   end subroutine mltbc_apply_tv_constraint
 
   !===========================================================================
-  ! function to apply a 3-point vertical smoothings to reduce the noise of the 
-  ! machine learning predicted nudging tendencies
+  ! Apply one conservative vertical diffusion pass to the ML U/V tendencies.
+  ! Pairwise exchanges preserve the pdel-weighted column integral. The top and
+  ! bottom levels remain unchanged so smoothing cannot undo boundary tapers.
   !===========================================================================
-  subroutine smooth_nudge_uv_dlnp(ncol,lnpint, undg, vndg)
-    use ppgrid        , only: pver,pverp,pcols,begchunk,endchunk
+  subroutine smooth_nudge_uv_mass_conserving(ncol, pdel, undg, vndg)
+    use ppgrid, only: pver, pcols
+    use infnan, only: isnan, isinf
 
     integer, intent(in) :: ncol
-    real(kind=r8), intent(in) :: lnpint(pcols, pverp)
-    real(kind=r8), intent(inout) :: undg(pcols, pver), vndg(pcols, pver)
+    real(r8), intent(in) :: pdel(pcols,pver)
+    real(r8), intent(inout) :: undg(pcols,pver), vndg(pcols,pver)
 
     integer :: i, k
-    real(kind=r8) :: dlnp_km1, dlnp_kp1, dlnp_sum
-    real(kind=r8), allocatable :: tmp_u(:,:), tmp_v(:,:)
+    real(r8) :: mass_k, mass_kp1, reduced_mass
+    real(r8) :: transfer_u, transfer_v
+    real(r8) :: tmp_u(pcols,pver), tmp_v(pcols,pver)
+    ! The namelist validation limits the strength to the universally convex
+    ! range. With equal layer masses, the default 0.15 gives interior weights
+    ! (0.075, 0.85, 0.075); the upper bound 0.5 gives (0.25, 0.5, 0.25).
 
-    ! Allocate temporary arrays
-    allocate(tmp_u(pcols, pver))
-    allocate(tmp_v(pcols, pver))
+    if (pver < 4) then
+      call endrun('MLTBC vertical smoother requires at least four levels')
+    end if
 
-    ! === Interior levels: 3-point smoother
-    do k = 2, pver - 1
+    do k = 1, pver
       do i = 1, ncol
-        dlnp_km1 = abs(lnpint(i,k) - lnpint(i,k-1))
-        dlnp_kp1 = abs(lnpint(i,k+1) - lnpint(i,k))
-        dlnp_sum = dlnp_km1 + dlnp_kp1
-        if (dlnp_sum > 1.0e-6_r8) then
-          tmp_u(i,k) = (undg(i,k-1) * dlnp_km1 + undg(i,k+1) * dlnp_kp1) / dlnp_sum
-          tmp_v(i,k) = (vndg(i,k-1) * dlnp_km1 + vndg(i,k+1) * dlnp_kp1) / dlnp_sum
-        else
-          tmp_u(i,k) = undg(i,k)
-          tmp_v(i,k) = vndg(i,k)
+        if (isnan(pdel(i,k)) .or. isinf(pdel(i,k)) .or. pdel(i,k) <= 0.0_r8) then
+          call endrun('MLTBC vertical smoother received invalid layer mass')
+        end if
+        if (isnan(undg(i,k)) .or. isinf(undg(i,k)) .or. &
+            isnan(vndg(i,k)) .or. isinf(vndg(i,k))) then
+          call endrun('MLTBC vertical smoother received non-finite wind tendency')
         end if
       end do
     end do
 
-    ! === Top level
-    do i = 1, ncol
-      tmp_u(i,1) = 0.5_r8 * (undg(i,1) + undg(i,2))
-      tmp_v(i,1) = 0.5_r8 * (vndg(i,1) + vndg(i,2))
+    tmp_u(:ncol,:) = undg(:ncol,:)
+    tmp_v(:ncol,:) = vndg(:ncol,:)
+
+    ! Exchange momentum tendency only across interfaces between interior
+    ! levels. Equal and opposite transfers conserve sum(pdel*tendency).
+    ! Levels 2 and pver-1 intentionally receive one-sided exchanges because
+    ! levels 1 and pver are fixed; all deeper interior levels are two-sided.
+    do k = 2, pver - 2
+      do i = 1, ncol
+        mass_k = pdel(i,k)
+        mass_kp1 = pdel(i,k+1)
+        reduced_mass = mass_k * (mass_kp1 / (mass_k + mass_kp1))
+
+        transfer_u = mltbc_smooth_strength * reduced_mass * (undg(i,k+1) - undg(i,k))
+        transfer_v = mltbc_smooth_strength * reduced_mass * (vndg(i,k+1) - vndg(i,k))
+        tmp_u(i,k) = tmp_u(i,k) + transfer_u / mass_k
+        tmp_u(i,k+1) = tmp_u(i,k+1) - transfer_u / mass_kp1
+        tmp_v(i,k) = tmp_v(i,k) + transfer_v / mass_k
+        tmp_v(i,k+1) = tmp_v(i,k+1) - transfer_v / mass_kp1
+      end do
     end do
 
-    ! === Bottom level
-    do i = 1, ncol
-      tmp_u(i,pver) = 0.5_r8 * (undg(i,pver-1) + undg(i,pver))
-      tmp_v(i,pver) = 0.5_r8 * (vndg(i,pver-1) + vndg(i,pver))
-    end do
-
-    ! === Copy back smoothed results
-    undg(:ncol,:pver) = tmp_u(:ncol,:pver)
-    vndg(:ncol,:pver) = tmp_v(:ncol,:pver)
-
-    ! === Clean up
-    deallocate(tmp_u, tmp_v)
-
-    return 
-
-  end subroutine !smooth_nudge_uv_dlnp
+    undg(:ncol,:) = tmp_u(:ncol,:)
+    vndg(:ncol,:) = tmp_v(:ncol,:)
+  end subroutine smooth_nudge_uv_mass_conserving
 
   !===========================================================================
   ! JS - 11/05/2019: Based on Shixuan Zhang's suggestion, the calculation of 
