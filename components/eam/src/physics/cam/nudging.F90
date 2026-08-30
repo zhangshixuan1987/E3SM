@@ -3700,10 +3700,14 @@ contains
       end do
     end do
 
-    if (fallback_count > 0 .and. .not. fallback_warned) then
-      write(iulog,*) 'WARNING: MLTBC balance constraint retained raw tendencies for ', &
-                     fallback_count, ' levels with degenerate hydrostatic weight'
-      fallback_warned = .true.
+    if (fallback_count > 0) then
+!$omp critical (mltbc_fallback_warning)
+      if (.not. fallback_warned) then
+        write(iulog,*) 'WARNING: MLTBC balance constraint retained raw tendencies for ', &
+                       fallback_count, ' levels in one chunk with degenerate hydrostatic weight'
+        fallback_warned = .true.
+      end if
+!$omp end critical (mltbc_fallback_warning)
     end if
   end subroutine mltbc_enforce_tv_constrain
 
