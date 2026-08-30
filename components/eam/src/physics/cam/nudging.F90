@@ -405,7 +405,7 @@ module nudging
   public:: Nudge_Vertical_Smooth
   public:: Nudge_PS_Adjust_On
   public:: Nudge_PS_On
-  public:: Nudge_Q_Adjust_On
+  public:: Nudge_Q_Mass_Adjust_On
   public:: Nudge_Land,Nudge_SRF_On
   public:: Nudge_SRF_Flux_On
   public:: Nudge_SRF_Q_On
@@ -497,7 +497,10 @@ module nudging
   ! topography; otherwise keep false to avoid applying the adjustment twice.
   logical::         Nudge_PS_Adjust_On   = .false.
   logical::         Nudge_PS_On          = .false.
-  logical::         Nudge_Q_Adjust_On    = .false.
+  ! When true, adjust wet layer mass after applying the Q tendency so dry-air
+  ! and non-water tracer masses are conserved. This is a moist-mass consistency
+  ! adjustment; it does not restore hydrostatic or energy balance.
+  logical::         Nudge_Q_Mass_Adjust_On = .false.
   logical::         Nudge_Land           = .false.
   logical::         Nudge_SRF_On         = .false.
   logical::         Nudge_SRF_Flux_On    = .false. 
@@ -799,7 +802,7 @@ contains
                          Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx, & 
                          Nudge_Lin_Relax_On, Nudge_PS_OPT,             & 
                          Nudge_UV_OPT, Nudge_T_OPT, Nudge_Q_OPT,       &
-                         Nudge_PS_Adjust_On, Nudge_Q_Adjust_On,        & 
+                         Nudge_PS_Adjust_On, Nudge_Q_Mass_Adjust_On,   &
                          Nudge_SRF_File_Template,Nudge_SRF_File_Ntime, &
                          Nudge_Land, Nudge_SRF_Flux_On,                & 
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
@@ -836,7 +839,7 @@ contains
    Nudge_Balance_Constrain = .false.
    Nudge_Vertical_Smooth = .false.
    Nudge_PS_Adjust_On   = .false.
-   Nudge_Q_Adjust_On    = .false.
+   Nudge_Q_Mass_Adjust_On = .false.
    Nudge_Land           = .false.
    Nudge_SRF_PSWgt_On   = .false. 
    Nudge_SRF_Prec_On    = .false.
@@ -1037,7 +1040,7 @@ contains
    call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On             , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Q_Adjust_On       , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Q_Mass_Adjust_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Times_Per_Day     , 1, mpiint, 0, mpicom)
    call mpibcast(Model_Times_Per_Day     , 1, mpiint, 0, mpicom)
    call mpibcast(Nudge_Ucoef    , 1, mpir8 , 0, mpicom)
@@ -1571,7 +1574,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Balance_Constrain=', Nudge_Balance_Constrain
      write(iulog,*) 'NUDGING: Nudge_Vertical_Smooth=',Nudge_Vertical_Smooth
      write(iulog,*) 'NUDGING: Nudge_PS_On=',Nudge_PS_On
-     write(iulog,*) 'NUDGING: Nudge_Q_Adjust_On=',Nudge_Q_Adjust_On
+     write(iulog,*) 'NUDGING: Nudge_Q_Mass_Adjust_On=',Nudge_Q_Mass_Adjust_On
      write(iulog,*) 'NUDGING: Nudge_PS_Adjust_On=',Nudge_PS_Adjust_On
      write(iulog,*) 'NUDGING: Nudge_Land=',Nudge_Land
      write(iulog,*) 'NUDGING: Nudge_SRF_Flux_On=',Nudge_SRF_Flux_On
@@ -1680,7 +1683,7 @@ contains
    call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On         , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Q_Adjust_On   , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Q_Mass_Adjust_On, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Land          , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_SRF_On        , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_SRF_Flux_On   , 1, mpilog, 0, mpicom)
@@ -3697,7 +3700,7 @@ contains
                                Nudge_SRF_On, Nudge_SRF_State_On, Nudge_SRF_Q_On,                           & !In
                                Model_PHIS(:,lchnk), Target_PHIS(:,lchnk), PBLH,                            & !In
                                Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx,                               & !In
-                               Nudge_PS_Adjust_On, Nudge_Q_Adjust_On, Nudge_Pdep_Weight_On,                & !In
+                               Nudge_PS_Adjust_On, Nudge_Pdep_Weight_On,                                  & !In
                                Nudge_Lin_Relax_On, Nudge_NO_PBL_UV, Nudge_NO_PBL_T, Nudge_NO_PBL_Q,        & !In 
                                Nudge_PSprof, Nudge_PS_OPT, Nudge_Uprof, Nudge_Vprof, Nudge_UV_OPT,         & !In 
                                Nudge_Tprof,  Nudge_T_OPT, Nudge_Qprof, Nudge_Q_OPT,                        & !In 
@@ -4275,6 +4278,7 @@ contains
    use cam_history  ,only: outfld
    use physconst    ,only: rga, cpair, gravit, rair, zvir, cappa
    use hycoef       ,only: hycoef_init, hyam, hybm, hyai, hybi, ps0
+   use infnan       ,only: isnan,isinf
 
    ! Arguments
    !-------------
@@ -4285,16 +4289,13 @@ contains
 
    ! Local values
    !--------------------
-   real(r8):: nudge_q
-   integer ixcldliq, ixcldice
+   real(r8):: q_old, q_new, pdel_old, pdel_new
    integer indw,ncol,lchnk
    logical lq(pcnst)
    integer Year, Month, Day, Sec
    integer i,k,m
 
    call cnst_get_ind('Q',indw)
-   call cnst_get_ind('CLDLIQ', ixcldliq)
-   call cnst_get_ind('CLDICE', ixcldice)
 
    lq(:)   =.false.
    lq(indw)=.true.
@@ -4345,24 +4346,62 @@ contains
        end do
      end if
 
-     !adjust constitutes 
-     if (Nudge_Q_Adjust_On) then
+     ! Q is specific humidity (water mass / moist-air mass). Adjust wet layer
+     ! mass so pdel*(1-q), which is proportional to dry-air mass, is unchanged.
+     ! Rescale non-water mixing ratios to conserve their layer masses, while
+     ! allowing water and total moist-air mass to change with the ML Q tendency.
+     ! This maintains mass and pressure-coordinate consistency only.
+     if (Nudge_Q_Mass_Adjust_On) then
        do i = 1, ncol
          do k = 1, pver
-           if (abs(Nudge_Qstep(i,k,lchnk)) > 0._r8) then
-             nudge_q = phys_state%q(i,k,1)
-             do m = 2, pcnst
-               phys_state%q(i,k,m) = phys_state%q(i,k,m)*phys_state%pdel(i,k)
+           if (isnan(Nudge_Qstep(i,k,lchnk)) .or. isinf(Nudge_Qstep(i,k,lchnk))) then
+             call endrun('nudging_timestep_tend: non-finite Q nudging tendency')
+           end if
+           if (Nudge_Qstep(i,k,lchnk) /= 0.0_r8) then
+             q_old = phys_state%q(i,k,indw)
+             q_new = q_old + Nudge_Qstep(i,k,lchnk) * dtime
+             if (isnan(q_old) .or. isinf(q_old) .or. q_old < 0.0_r8 .or. q_old >= 1.0_r8) then
+               call endrun('nudging_timestep_tend: invalid initial specific humidity')
+             end if
+             if (isnan(q_new) .or. isinf(q_new) .or. q_new < 0.0_r8 .or. q_new >= 1.0_r8) then
+               call endrun('nudging_timestep_tend: Q adjustment gives invalid specific humidity')
+             end if
+
+             pdel_old = phys_state%pdel(i,k)
+             if (isnan(pdel_old) .or. isinf(pdel_old) .or. pdel_old <= 0.0_r8) then
+               call endrun('nudging_timestep_tend: invalid layer pressure thickness')
+             end if
+             pdel_new = pdel_old * (1.0_r8 - q_old) / (1.0_r8 - q_new)
+             if (isnan(pdel_new) .or. isinf(pdel_new) .or. pdel_new <= 0.0_r8) then
+               call endrun('nudging_timestep_tend: Q adjustment gives invalid layer pressure')
+             end if
+
+             do m = 1, pcnst
+               if (m /= indw) then
+                 phys_state%q(i,k,m) = phys_state%q(i,k,m) * pdel_old / pdel_new
+               end if
              end do
-             phys_state%pdel(i,k)  = phys_state%pdel(i,k)*(1.0_r8 - nudge_q)
-             nudge_q               = nudge_q + Nudge_Qstep(i,k,lchnk) * dtime
-             phys_state%pdel(i,k)  = phys_state%pdel(i,k)/(1.0_r8 - nudge_q)
-             phys_state%rpdel(i,k) = 1.0_r8/phys_state%pdel(i,k)
-             do m = 2, pcnst
-               phys_state%q(i,k,m) = phys_state%q(i,k,m)/phys_state%pdel(i,k)
-             end do
+             phys_state%pdel(i,k)  = pdel_new
+             phys_state%rpdel(i,k) = 1.0_r8 / pdel_new
            end if
          end do
+
+         ! Reconstruct all wet-pressure fields from the adjusted layer masses.
+         ! Keep the model-top interface fixed and diagnose surface pressure
+         ! from the bottom interface so ps, pint, pmid, and pdel remain exact.
+         phys_state%lnpint(i,1) = log(phys_state%pint(i,1))
+         do k = 1, pver
+           phys_state%pint(i,k+1)   = phys_state%pint(i,k) + phys_state%pdel(i,k)
+           phys_state%lnpint(i,k+1) = log(phys_state%pint(i,k+1))
+           phys_state%pmid(i,k)     = 0.5_r8 * (phys_state%pint(i,k) + &
+                                                phys_state%pint(i,k+1))
+           phys_state%lnpmid(i,k)   = log(phys_state%pmid(i,k))
+         end do
+         phys_state%ps(i) = phys_state%pint(i,pver+1)
+         if (isnan(phys_state%ps(i)) .or. isinf(phys_state%ps(i)) .or. &
+             phys_state%ps(i) <= 0.0_r8) then
+           call endrun('nudging_timestep_tend: Q adjustment gives invalid surface pressure')
+         end if
        end do
      end if
 
@@ -6521,7 +6560,7 @@ contains
                                   sfac, ndg_srf_on, ndg_srf_state_on,   & !In
                                   ndg_srf_q, phis_mod, phis_obs, pblh,  & !In
                                   uv_prelx, t_prelx, q_prelx,           & !In 
-                                  use_ps_adj, use_q_adj, use_pdep_nudge,& !In 
+                                  use_ps_adj, use_pdep_nudge,            & !In
                                   use_upp_lrelx, no_pbl_uv, no_pbl_t,   & !In 
                                   no_pbl_q, ndg_ps_flg, ndg_ps_opt,     & !In
                                   ndg_u_flg, ndg_v_flg, ndg_uv_opt,     & !In
@@ -6544,8 +6583,6 @@ contains
   logical, intent(in)  :: use_pdep_nudge
   logical, intent(in)  :: use_upp_lrelx
   logical, intent(in)  :: use_ps_adj
-  logical, intent(in)  :: use_q_adj
-
   integer, intent(in)  :: no_pbl_uv
   integer, intent(in)  :: no_pbl_t
   integer, intent(in)  :: no_pbl_q

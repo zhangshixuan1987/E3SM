@@ -361,9 +361,11 @@
        Default: FALSE
        </entry>
 
-<entry id="Nudge_Q_Adjust_On" type="logical" category="nudging"
+<entry id="Nudge_Q_Mass_Adjust_On" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
-       If TRUE, apply the adjustment on constitutes when Q is nudged
+       If TRUE, adjust wet layer pressure and non-water mixing ratios after
+       applying the Q tendency, conserving dry-air and non-water tracer mass.
+       This does not restore hydrostatic or energy balance.
        Default: FALSE
        </entry>
 
