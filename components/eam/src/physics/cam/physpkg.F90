@@ -991,8 +991,8 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
     type(physics_buffer_desc), pointer, dimension(:,:) :: pbuf2d
     type(cam_in_t),                     dimension(begchunk:endchunk) :: cam_in
     type(cam_out_t),                    dimension(begchunk:endchunk) :: cam_out
-    
-    !save state variable for deepnet nudging prediction
+
+    ! MLTBC input sampled at the traditional pre-radiation nudging location.
     type(physics_state), dimension(begchunk:endchunk) :: mltbc_state
 
     !-----------------------------------------------------------------------
@@ -1050,7 +1050,7 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
        !-----------------------------------------------------------------------
 
        call t_startf('phys_timestep_init')
-       call phys_timestep_init( phys_state, cam_out, pbuf2d, mltbc_state )
+       call phys_timestep_init(phys_state, cam_out, pbuf2d)
        call t_stopf('phys_timestep_init')
 
        call t_stopf ('physpkg_st1')
@@ -1091,9 +1091,9 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
           call diag_physvar_ic ( c,  phys_buffer_chunk, cam_out(c), cam_in(c) )
           call t_stopf ('diag_physvar_ic')
 
-          call tphysbc (ztodt, fsns(1,c), fsnt(1,c), flns(1,c), flnt(1,c), phys_state(c),        &
-                       phys_tend(c), phys_buffer_chunk,  fsds(1,c),                       &
-                       sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c), mltbc_state(c))
+          call tphysbc (ztodt, fsns(1,c), fsnt(1,c), flns(1,c), flnt(1,c), phys_state(c), &
+                        phys_tend(c), phys_buffer_chunk, fsds(1,c), &
+                        sgh(1,c), sgh30(1,c), cam_out(c), cam_in(c), mltbc_state(c))
 
           call system_clock(count=end_chnk_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
           if ( end_chnk_cnt < beg_chnk_cnt ) end_chnk_cnt = end_chnk_cnt + sysclock_max
@@ -1102,8 +1102,8 @@ subroutine phys_run1(phys_state, ztodt, phys_tend, pbuf2d,  cam_in, cam_out)
 
        end do
 
-       !call deepONet nudging prediction (skip first step)
-       call mltbc_nudging(ztodt,pbuf2d,cam_in,mltbc_state)
+       ! Update the MLTBC prediction and temporal weighting state.
+       call mltbc_nudging(ztodt, pbuf2d, cam_in, mltbc_state)
 
        call system_clock(count=end_proc_cnt, count_rate=sysclock_rate, count_max=sysclock_max)
        if ( end_proc_cnt < beg_proc_cnt ) end_proc_cnt = end_proc_cnt + sysclock_max
@@ -1931,7 +1931,7 @@ end subroutine tphysac
 subroutine tphysbc (ztodt,               &
        fsns,    fsnt,    flns,    flnt,    state,   &
        tend,    pbuf,     fsds,                     &
-       sgh, sgh30, cam_out, cam_in, state1)
+       sgh, sgh30, cam_out, cam_in, mltbc_state)
     !----------------------------------------------------------------------- 
     ! 
     ! Purpose: 
@@ -1997,10 +1997,9 @@ subroutine tphysbc (ztodt,               &
     use subcol,          only: subcol_gen, subcol_ptend_avg
     use subcol_utils,    only: subcol_ptend_copy, is_subcol_on
     use phys_control,    only: use_qqflx_fixer, use_mass_borrower
-    use nudging,         only: Nudge_Model,Nudge_Loc_PhysOut, &
+    use nudging,         only: Nudge_Model, Nudge_ON, Nudge_Loc_PhysOut, &
                                Nudge_Land, nudging_calc_tend, &
-                               nudging_update_land_surface, & 
-                               mltbc_enabled
+                               nudging_update_land_surface, mltbc_enabled
     use lnd_infodata,    only: precip_downscaling_method
 
     implicit none
@@ -2018,7 +2017,7 @@ subroutine tphysbc (ztodt,               &
     real(r8), intent(in) :: sgh30(pcols)                     ! Std. deviation of 30 s orography for tms
 
     type(physics_state), intent(inout) :: state
-    type(physics_state), intent(inout) :: state1
+    type(physics_state), intent(inout) :: mltbc_state
     type(physics_tend ), intent(inout) :: tend
     type(physics_buffer_desc), pointer :: pbuf(:)
 
@@ -2749,10 +2748,14 @@ end if
     !===================================
     if (Nudge_Model .and. Nudge_Loc_PhysOut) then
        call nudging_calc_tend(state, pbuf, ztodt)
-       if (mltbc_enabled) then
-         call physics_state_copy(state,state1)
-       end if   
     endif
+
+    ! Match the training-data sampling point: save the state after moist
+    ! physics/history diagnostics and immediately before radiation. This is
+    ! intentionally independent of the legacy Nudge_Loc_PhysOut switch.
+    if (Nudge_Model .and. Nudge_ON .and. mltbc_enabled) then
+       call physics_state_copy(state, mltbc_state)
+    end if
 
     !===================================================
     ! Write cloud diagnostics on history file
@@ -2823,7 +2826,7 @@ end if ! l_rad
 
 end subroutine tphysbc
 
-subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
+subroutine phys_timestep_init(phys_state, cam_out, pbuf2d)
 !-----------------------------------------------------------------------------------
 !
 ! Purpose: The place for parameterizations to call per timestep initializations.
@@ -2834,7 +2837,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use chemistry,           only: chem_timestep_init
   use chem_surfvals,       only: chem_surfvals_set
-  use physics_types,       only: physics_state, physics_state_copy
+  use physics_types,       only: physics_state
   use physics_buffer,      only: physics_buffer_desc
   use ghg_data,            only: ghg_data_timestep_init
   use cam3_aero_data,      only: cam3_aero_data_on, cam3_aero_data_timestep_init
@@ -2856,7 +2859,8 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   use aerodep_flx,         only: aerodep_flx_adv
   use aircraft_emit,       only: aircraft_emit_adv
   use prescribed_volcaero, only: prescribed_volcaero_adv
-  use nudging,             only: Nudge_Model, mltbc_enabled, nudging_timestep_init
+  use nudging,             only: Nudge_Model, mltbc_enabled, mltbc_update_window, &
+                                 nudging_timestep_init
 
   use seasalt_model,       only: advance_ocean_data, has_mam_mom
 
@@ -2865,11 +2869,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   type(physics_state), intent(inout), dimension(begchunk:endchunk) :: phys_state
   type(cam_out_t),     intent(inout), dimension(begchunk:endchunk) :: cam_out
 
-  type(physics_state), optional, intent(inout), dimension(begchunk:endchunk) :: mltbc_state
-  
   type(physics_buffer_desc), pointer                 :: pbuf2d(:,:)
-
-  integer :: lchnk 
 
   !-----------------------------------------------------------------------------
 
@@ -2941,10 +2941,8 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   if (Nudge_Model) then 
     call nudging_timestep_init(phys_state)
     if (mltbc_enabled) then
-      !copy the state to the array for deeponet machine learning prediction 
-      do lchnk = begchunk, endchunk
-        call physics_state_copy(phys_state(lchnk), mltbc_state(lchnk))
-      end do
+      ! Update the window before tphysbc can apply an existing tendency.
+      call mltbc_update_window()
     end if         
   end if 
 
@@ -2990,17 +2988,16 @@ end subroutine add_fld_default_calls
 subroutine mltbc_nudging(dtime,pbuf2d,cam_in,phys_state)
 !-----------------------------------------------------------------------------------
 !
-! Purpose: The place to call deepOnet machine learning model to predict nudging 
-!          tendencies. This module is added here to flexibly provide the model 
-!          state variable at any locations to deepOnet model 
+! Purpose: Update MLTBC tendencies from the saved pre-radiation model state.
 ! Author: Shixuan Zhang (shixuan.zhang@pnnl.gov)
 !
 !-----------------------------------------------------------------------------------
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use physics_types,       only: physics_state
-  use nudging,             only: Nudge_Model, mltbc_enabled, mltbc_timestep_init
-  use physics_buffer,      only: physics_buffer_desc, pbuf_get_chunk, pbuf_allocate
-  use camsrfexch,          only: cam_out_t, cam_in_t
+  use nudging,             only: Nudge_Model, Nudge_ON, mltbc_enabled, &
+                                 mltbc_timestep_init
+  use physics_buffer,      only: physics_buffer_desc
+  use camsrfexch,          only: cam_in_t
 
   implicit none
 
@@ -3014,7 +3011,7 @@ subroutine mltbc_nudging(dtime,pbuf2d,cam_in,phys_state)
   !===================================
   ! Update Nudging tendency if needed
   !===================================
-  if (Nudge_Model .and. mltbc_enabled) then
+  if (Nudge_Model .and. Nudge_ON .and. mltbc_enabled) then
      call mltbc_timestep_init(phys_state,pbuf2d,cam_in,dtime)
   endif
 
