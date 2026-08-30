@@ -456,6 +456,7 @@ module nudging
   public:: mltbc_patch_model
   public:: mltbc_patch_bilerp
   public:: mltbc_bilerp_test
+  public:: mltbc_update_window
   public:: mltbc_timestep_init
 
   private:: mltbc_advance_patch
@@ -2719,6 +2720,32 @@ contains
   end subroutine !mltbc_compute_weights
 
   !================================================================
+  subroutine mltbc_update_window()
+    ! Update the runtime MLTBC state before physics applies tendencies.
+    integer :: year, month, day, sec
+    integer :: ymd, window_ymd
+    logical :: after_beg, before_end
+
+    if (.not. mltbc_enabled) then
+      mltbc_active = .false.
+      return
+    end if
+
+    call get_curr_date(year, month, day, sec)
+    ymd = year * 10000 + month * 100 + day
+
+    window_ymd = Nudge_Beg_Year * 10000 + Nudge_Beg_Month * 100 + Nudge_Beg_Day
+    call timemgr_time_ge(window_ymd, Nudge_Beg_Sec, ymd, sec, after_beg)
+
+    window_ymd = Nudge_End_Year * 10000 + Nudge_End_Month * 100 + Nudge_End_Day
+    call timemgr_time_ge(ymd, sec, window_ymd, Nudge_End_Sec, before_end)
+
+    mltbc_active = after_beg .and. before_end
+    Nudge_ON = mltbc_active
+    Nudge_SRF_On = mltbc_active .and. Nudge_Land
+  end subroutine mltbc_update_window
+
+  !================================================================
   subroutine mltbc_timestep_init(state,pbuf2d,cam_in,dtime)
    !
    ! DEEPONET_TIMESTEP_INIT:
@@ -2757,11 +2784,10 @@ contains
    !----------------
    integer :: Year,Month,Day,Sec
    integer :: YMD1,YMD2,YMD
-   logical :: Update_Model,Update_Nudge,Sync_Error
-   logical :: After_Beg   ,Before_End
-   integer :: lchnk,ncol,i,j,k,n,m,indw
+   logical :: Update_Model,Sync_Error
+   logical :: Before_End
+   integer :: lchnk,ncol,indw
    integer :: nstep ! current timestep number
-   character(len=2000) ::  err_str
    integer, parameter  ::  nrows = 1
 
    ! For machine learning call   
@@ -2810,10 +2836,6 @@ contains
    ! Determine if the current time is AFTER the begining time
    ! and if it is BEFORE the ending time.
    !-------------------------------------------------------
-   YMD1=(Nudge_Beg_Year*10000) + (Nudge_Beg_Month*100) + Nudge_Beg_Day
-   call timemgr_time_ge(YMD1,Nudge_Beg_Sec,         &
-                        YMD ,Sec          ,After_Beg)
-
    YMD1=(Nudge_End_Year*10000) + (Nudge_End_Month*100) + Nudge_End_Day
    call timemgr_time_ge(YMD ,Sec,                    &
                         YMD1,Nudge_End_Sec,Before_End)
@@ -2869,29 +2891,9 @@ contains
 
    end if
     
-   !----------------------------------------------------------------
-   ! When past the NEXT time, Update Nudging Arrays and time indices
-   !----------------------------------------------------------------
-   YMD1=(Nudge_Next_Year*10000) + (Nudge_Next_Month*100) + Nudge_Next_Day
-   call timemgr_time_ge(YMD1,Nudge_Next_Sec,            &
-                        YMD ,Sec           ,Update_Nudge)
-
-
-   !-------------------------------------------------------
-   ! Toggle Nudging flag when the time interval is between
-   ! beginning and ending times, and the analyses file exists.
-   !-------------------------------------------------------
-   if((After_Beg).and.(Before_End)) then
-     Nudge_ON=.true.
-     if(Nudge_Land) then
-       Nudge_SRF_On=.true.
-     end if
-     mltbc_active=.true.
-   else
-     Nudge_ON=.false.
-     Nudge_SRF_On=.false.
-     mltbc_active=.false.
-   end if
+   ! Keep direct callers safe. The normal call path updates this before
+   ! tphysbc so tendencies cannot be applied one step beyond the end window.
+   call mltbc_update_window()
 
    Nudge_Ustep(:,:,:) = 0._r8
    Nudge_Vstep(:,:,:) = 0._r8
@@ -3018,8 +3020,8 @@ contains
        call mltbc_update_prof(phys_buffer_chunk,state(lchnk),dtime,Nudge_Lin_Relax_On, & !in 
                               Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx, &
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
-                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in 
-                              Nudge_Tv_Constrain_On, Nudge_Vertical_Smooth, & !in
+                              Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in
+                              Nudge_Vertical_Smooth, & !in
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
                               Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
@@ -3186,8 +3188,8 @@ contains
   subroutine mltbc_update_prof(pbuf,state,dtime, use_upp_relx, & 
                                uv_prelx, t_prelx, q_prelx, &
                                no_pbl_uv,no_pbl_t,no_pbl_q, &
-                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, & 
-                               use_tv_constrain, use_vertical_uv_smooth, &
+                               ndg_uv_opt,ndg_t_opt,ndg_q_opt, &
+                               use_vertical_uv_smooth, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
@@ -3208,7 +3210,6 @@ contains
   type(physics_buffer_desc), pointer :: pbuf(:)
 
   logical,  intent(in)    :: use_upp_relx
-  logical,  intent(in)    :: use_tv_constrain
   logical,  intent(in)    :: use_vertical_uv_smooth
   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
   integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
@@ -3558,16 +3559,6 @@ contains
   if (use_vertical_uv_smooth) then
     call smooth_nudge_uv_mass_conserving(ncol, pdel, nudge_u, nudge_v)
   end if 
-
-  ! Repartition the weighted ML virtual-temperature target consistently
-  ! between the final temperature and humidity tendencies. Geopotential is
-  ! diagnostic here; this is not a full hydrostatic or energy adjustment.
-  if (use_tv_constrain) then
-    call mltbc_enforce_tv_constrain(ncol, dtime, lnpint, lnpmid, pint, pmid, &
-                                pdel, rpdel, rairv, zvirv, tcur, qcur, &
-                                Nudge_Tprof .ne. 0, Nudge_Qprof .ne. 0, &
-                                nudge_t, nudge_q)
-  end if
 
   return
   end subroutine  !mltbc_update_prof
@@ -4449,6 +4440,7 @@ contains
    ! Local values
    !--------------------
    real(r8):: q_old, q_new, pdel_old, pdel_new
+   real(r8):: rairv(pcols,pver), zvirv(pcols,pver)
    integer indw,ncol,lchnk
    logical lq(pcnst)
    integer Year, Month, Day, Sec
@@ -4482,16 +4474,25 @@ contains
         phys_tend%v(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)
      end if
 
-     if (Nudge_Tprof .ne. 0) then
-        phys_tend%s(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*cpair
-     end if
-
-     if (Nudge_Qprof .ne. 0) then
-        phys_tend%q(:ncol,:pver,indw) = Nudge_Qstep(:ncol,:pver,lchnk)
+     ! Enforce the final T/Q virtual-temperature constraint against the live
+     ! application-time state, after all ML weighting and profile operations.
+     ! Run before pressure or Q-mass adjustments while all pressure fields
+     ! describe the same state, and before assigning the final tendencies.
+     if (mltbc_enabled .and. Nudge_Tv_Constrain_On) then
+       rairv(:ncol,:pver) = rair
+       zvirv(:ncol,:pver) = zvir
+       call mltbc_enforce_tv_constrain(ncol, dtime, &
+                                       phys_state%lnpint, phys_state%lnpmid, &
+                                       phys_state%pint, phys_state%pmid, &
+                                       phys_state%pdel, phys_state%rpdel, &
+                                       rairv, zvirv, phys_state%t, &
+                                       phys_state%q(:,:,indw), &
+                                       Nudge_Tprof .ne. 0, Nudge_Qprof .ne. 0, &
+                                       Nudge_Tstep(:,:,lchnk), Nudge_Qstep(:,:,lchnk))
      end if
 
      if (Nudge_PS_On) then
-       !update ps 
+       !update ps
        do i = 1,ncol
           phys_state%ps(i) = phys_state%ps(i) + Nudge_PSstep(i,lchnk)*dtime
        end do
@@ -4505,12 +4506,20 @@ contains
        end do
      end if
 
+     if (Nudge_Tprof .ne. 0) then
+        phys_tend%s(:ncol,:pver) = Nudge_Tstep(:ncol,:pver,lchnk)*cpair
+     end if
+
+     if (Nudge_Qprof .ne. 0) then
+        phys_tend%q(:ncol,:pver,indw) = Nudge_Qstep(:ncol,:pver,lchnk)
+     end if
+
      ! Q is specific humidity (water mass / moist-air mass). Adjust wet layer
      ! mass so pdel*(1-q), which is proportional to dry-air mass, is unchanged.
      ! Rescale non-water mixing ratios to conserve their layer masses, while
      ! allowing water and total moist-air mass to change with the ML Q tendency.
      ! This maintains mass and pressure-coordinate consistency only.
-     if (Nudge_Q_Mass_Adjust_On) then
+     if (Nudge_Q_Mass_Adjust_On .and. Nudge_Qprof .ne. 0) then
        do i = 1, ncol
          do k = 1, pver
            if (isnan(Nudge_Qstep(i,k,lchnk)) .or. isinf(Nudge_Qstep(i,k,lchnk))) then
