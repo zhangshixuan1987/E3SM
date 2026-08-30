@@ -2616,7 +2616,7 @@ contains
          ! Apply the predicted tendency at the end of the forecast window.
          weights(nstep) = 1.0_r8
 
-      case ('TopHat')
+      case ('Triangular')
          m = int(nstep / 2)
          do i = 1, nstep
            if (i <= m) then

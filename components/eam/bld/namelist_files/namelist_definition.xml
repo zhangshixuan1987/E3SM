@@ -566,7 +566,7 @@
        correction tendency over each MLTBC prediction window.
        Uniform: apply the same tendency at every timestep in the window.
        IMT: apply the complete window-integrated correction at the final timestep.
-       TopHat: apply a symmetric triangular temporal window.
+       Triangular: apply a symmetric triangular temporal window.
        Lanczos: apply a symmetric Lanczos temporal window.
        DolphChebyshev: apply a symmetric Dolph-Chebyshev window controlled by
        mltbc_atten_db. Every method is normalized so its weight sum equals
