@@ -401,7 +401,7 @@ module nudging
   public:: Nudge_Allow_Missing_File
   public:: Nudge_Pdep_Weight_On
   public:: Nudge_Lin_Relax_On
-  public:: Nudge_Balance_Constrain
+  public:: Nudge_Tv_Constrain_On
   public:: Nudge_Vertical_Smooth
   public:: Nudge_PS_Adjust_On
   public:: Nudge_PS_On
@@ -469,6 +469,7 @@ module nudging
   private:: mltbc_deeponet_encoder
   private:: mltbc_deeponet_decoder
   private:: mltbc_update_prof
+  private:: mltbc_apply_tv_constraint
   private:: mltbc_calc_tend
   private:: mltbc_global_to_patch
   private:: mltbc_global_to_latlon
@@ -491,7 +492,9 @@ module nudging
   logical::         Nudge_SRF_RadFlux_On = .false.
   logical::         Nudge_SRF_State_On   = .false. 
   logical::         Nudge_Lin_Relax_On   = .false.
-  logical::         Nudge_Balance_Constrain = .false.
+  ! Repartition the weighted ML virtual-temperature change consistently
+  ! between T and Q. This is not a full hydrostatic or energy adjustment.
+  logical::         Nudge_Tv_Constrain_On = .false.
   logical::         Nudge_Vertical_Smooth = .false.
   ! Enable only when input PS has not already been adjusted to model
   ! topography; otherwise keep false to avoid applying the adjustment twice.
@@ -808,7 +811,7 @@ contains
                          Nudge_SRF_PSWgt_On, Nudge_SRF_Prec_On,        & 
                          Nudge_SRF_RadFlux_On, Nudge_SRF_State_On,     & 
                          Nudge_SRF_Q_On, Nudge_SRF_Tau,                &
-                         Nudge_Balance_Constrain,                      & 
+                         Nudge_Tv_Constrain_On,                        &
                          Nudge_Vertical_Smooth,                        &
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
@@ -836,7 +839,7 @@ contains
    Nudge_Allow_Missing_File = .false.
    Nudge_Pdep_Weight_On = .false.
    Nudge_Lin_Relax_On   = .false.
-   Nudge_Balance_Constrain = .false.
+   Nudge_Tv_Constrain_On = .false.
    Nudge_Vertical_Smooth = .false.
    Nudge_PS_Adjust_On   = .false.
    Nudge_Q_Mass_Adjust_On = .false.
@@ -1036,7 +1039,7 @@ contains
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On    , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Lin_Relax_On      , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Balance_Constrain , 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Tv_Constrain_On   , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On      , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On             , 1, mpilog, 0, mpicom)
@@ -1571,7 +1574,7 @@ contains
      write(iulog,*) 'NUDGING: Nudge_Allow_Missing_File=',Nudge_Allow_Missing_File
      write(iulog,*) 'NUDGING: Nudge_Pdep_Weight_On=',Nudge_Pdep_Weight_On
      write(iulog,*) 'NUDGING: Nudge_Lin_Relax_On=', Nudge_Lin_Relax_On
-     write(iulog,*) 'NUDGING: Nudge_Balance_Constrain=', Nudge_Balance_Constrain
+     write(iulog,*) 'NUDGING: Nudge_Tv_Constrain_On=', Nudge_Tv_Constrain_On
      write(iulog,*) 'NUDGING: Nudge_Vertical_Smooth=',Nudge_Vertical_Smooth
      write(iulog,*) 'NUDGING: Nudge_PS_On=',Nudge_PS_On
      write(iulog,*) 'NUDGING: Nudge_Q_Mass_Adjust_On=',Nudge_Q_Mass_Adjust_On
@@ -1679,7 +1682,7 @@ contains
    call mpibcast(Nudge_Allow_Missing_File, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Pdep_Weight_On, 1, mpilog, 0, mpicom) 
    call mpibcast(Nudge_Lin_Relax_On  , 1, mpilog, 0, mpicom)
-   call mpibcast(Nudge_Balance_Constrain, 1, mpilog, 0, mpicom)
+   call mpibcast(Nudge_Tv_Constrain_On, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_Vertical_Smooth, 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_Adjust_On  , 1, mpilog, 0, mpicom)
    call mpibcast(Nudge_PS_On         , 1, mpilog, 0, mpicom)
@@ -2972,7 +2975,7 @@ contains
                               Nudge_UV_Prelx, Nudge_T_Prelx, Nudge_Q_Prelx, &
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
                               Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in 
-                              Nudge_Balance_Constrain, Nudge_Vertical_Smooth, & !in 
+                              Nudge_Tv_Constrain_On, Nudge_Vertical_Smooth, & !in
                               Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
                               Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
@@ -3140,7 +3143,7 @@ contains
                                uv_prelx, t_prelx, q_prelx, &
                                no_pbl_uv,no_pbl_t,no_pbl_q, &
                                ndg_uv_opt,ndg_t_opt,ndg_q_opt, & 
-                               use_hydro_constrain, use_vertical_uv_smooth, &
+                               use_tv_constrain, use_vertical_uv_smooth, &
                                nudge_psprf,nudge_uprf,nudge_vprf,nudge_tprf,nudge_qprf, &
                                nudge_ps,nudge_u,nudge_v,nudge_t,nudge_q) 
   use hycoef,         only: hycoef_init, hyam, hybm, hyai, hybi, ps0
@@ -3161,7 +3164,7 @@ contains
   type(physics_buffer_desc), pointer :: pbuf(:)
 
   logical,  intent(in)    :: use_upp_relx
-  logical,  intent(in)    :: use_hydro_constrain
+  logical,  intent(in)    :: use_tv_constrain
   logical,  intent(in)    :: use_vertical_uv_smooth
   integer,  intent(in)    :: no_pbl_uv,no_pbl_t,no_pbl_q
   integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
@@ -3208,8 +3211,6 @@ contains
   real(r8) :: vtp1(pcols,pver)
   real(r8) :: ttp1(pcols,pver)
   real(r8) :: qtp1(pcols,pver)
-  real(r8) :: zitp1(pcols,pverp)
-  real(r8) :: zmtp1(pcols,pver)
 
   real(r8) :: dqsdT_cur(pcols,pver)
   real(r8) :: qscur(pcols,pver)
@@ -3230,7 +3231,6 @@ contains
 
   real(r8), pointer :: pblh(:)
 
-  real(r8) :: qeff, teff, tveff, tvdt, tdt, dlnp
   real(r8) :: pbl_mask, surface_mask, smooth_mask
   real(r8), parameter :: pbl_transition_levels = 1.0_r8
   real(r8), parameter :: surface_decay_levels = 1.0_r8
@@ -3387,8 +3387,8 @@ contains
     end select
   end if
 
-  !Exclude the nudging tendency in boundary layer
-  !derive the geoptential height 
+  ! Exclude the nudging tendency in the boundary layer.
+  ! Diagnose the current geopotential height used to locate the PBL top.
   call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
                       tcur(:ncol,:pver),qcur(:ncol,:pver), &
                       rairv,gravit,zvirv,zi,zm,ncol)
@@ -3515,52 +3515,162 @@ contains
     call smooth_nudge_uv_dlnp(ncol, lnpint, nudge_u, nudge_v)
   end if 
 
-  !use hydrostatic balance to constrain the ml predicted nudging tendency of temperature and humidity
-  if (use_hydro_constrain) then 
-    !calculate the model state after bias correction
-    utp1(:ncol,:pver) = ucur(:ncol,:pver) + nudge_u(:ncol,:pver) * dtime
-    vtp1(:ncol,:pver) = vcur(:ncol,:pver) + nudge_v(:ncol,:pver) * dtime
-    ttp1(:ncol,:pver) = tcur(:ncol,:pver) + nudge_t(:ncol,:pver) * dtime
-    qtp1(:ncol,:pver) = qcur(:ncol,:pver) + nudge_q(:ncol,:pver) * dtime
-    !derive the geoptential height 
-    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
-                        ttp1(:ncol,:pver),qtp1(:ncol,:pver), &
-                        rairv,gravit,zvirv,zitp1,zmtp1,ncol)
-
-    !derive the dlogp and dz before and after correction 
-    do k = 1, pver
-      do i = 1, ncol
-         if (abs(tcur(i,k)) > 100.0_r8 .and. abs(ttp1(i,k)) > 100.0_r8) then
-           dlnp = lnpint(i,k+1) - lnpint(i,k)
-           if (abs(dlnp) > 1.0e-6_r8) then
-             tvcur(i,k)  = -gravit * (zi(i,k+1) - zi(i,k)) / dlnp / rairv(i,k)
-             tvtp1(i,k)  = -gravit * (zitp1(i,k+1) - zitp1(i,k)) / dlnp / rairv(i,k)
-             if ( Nudge_Tprof .ne. 0 ) then
-               qeff = 0.5_r8 * (qcur(i,k) + qtp1(i,k))
-               nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime / (1.0_r8 + zvirv(i,k) * qeff)
-             end if 
-             if ( Nudge_Qprof .ne. 0  ) then
-               teff = 0.5_r8 * (tcur(i,k) + ttp1(i,k))
-               tveff = 0.5_r8 * (tvcur(i,k) + tvtp1(i,k))
-               tvdt = (tvtp1(i,k) - tvcur(i,k)) / dtime
-               tdt = (ttp1(i,k)  - tcur(i,k))  / dtime
-               nudge_q(i,k) = (tvdt * teff - tveff * tdt) / (zvirv(i,k) * teff * teff)
-             end if 
-           else 
-             nudge_t(i,k) = 0.0_r8
-             nudge_q(i,k) = 0.0_r8
-           end if
-         else
-           nudge_t(i,k) = 0.0_r8
-           nudge_q(i,k) = 0.0_r8
-         end if 
-      end do
-    end do
-
-  end if 
+  ! Repartition the weighted ML virtual-temperature target consistently
+  ! between the final temperature and humidity tendencies. Geopotential is
+  ! diagnostic here; this is not a full hydrostatic or energy adjustment.
+  if (use_tv_constrain) then
+    call mltbc_apply_tv_constraint(ncol, dtime, lnpint, lnpmid, pint, pmid, &
+                                pdel, rpdel, rairv, zvirv, tcur, qcur, &
+                                Nudge_Tprof .ne. 0, Nudge_Qprof .ne. 0, &
+                                nudge_t, nudge_q)
+  end if
 
   return
   end subroutine  !mltbc_update_prof
+
+  !===========================================================================
+  ! Repartition weighted ML T/Q tendencies while preserving their combined
+  ! virtual-temperature target. Both geopotential profiles are diagnosed here
+  ! with identical discretization and arguments, differing only in T/Q.
+  !===========================================================================
+  subroutine mltbc_apply_tv_constraint(ncol, dtime, lnpint, lnpmid, pint, pmid, &
+                                    pdel, rpdel, rairv, zvirv, tcur, qcur, &
+                                    apply_t, apply_q, nudge_t, nudge_q)
+    use ppgrid,      only: pver, pverp, pcols
+    use geopotential, only: geopotential_t
+    use physconst,   only: gravit
+    use infnan,      only: isnan, isinf
+    use dycore,      only: dycore_is
+
+    integer, intent(in) :: ncol
+    real(r8), intent(in) :: dtime
+    real(r8), intent(in) :: lnpint(pcols,pverp), lnpmid(pcols,pver)
+    real(r8), intent(in) :: pint(pcols,pverp), pmid(pcols,pver)
+    real(r8), intent(in) :: pdel(pcols,pver), rpdel(pcols,pver)
+    real(r8), intent(in) :: rairv(pcols,pver), zvirv(pcols,pver)
+    real(r8), intent(in) :: tcur(pcols,pver), qcur(pcols,pver)
+    logical, intent(in) :: apply_t, apply_q
+    real(r8), intent(inout) :: nudge_t(pcols,pver), nudge_q(pcols,pver)
+
+    integer :: i, k, fallback_count
+    real(r8) :: t_target(pcols,pver), q_target(pcols,pver)
+    real(r8) :: zi_current(pcols,pverp), zm_current(pcols,pver)
+    real(r8) :: zi_target(pcols,pverp), zm_target(pcols,pver)
+    real(r8) :: tv_current, tv_target, qeff, t_bal, q_bal
+    real(r8) :: hydro_weight, denom, raw_t_tend, raw_q_tend
+    logical :: fvdyn
+    logical, save :: fallback_warned = .false.
+
+    if (dtime <= 0.0_r8) then
+      call endrun('MLTBC balance constraint requires a positive timestep')
+    end if
+
+    t_target(:ncol,:) = tcur(:ncol,:) + nudge_t(:ncol,:) * dtime
+    q_target(:ncol,:) = qcur(:ncol,:) + nudge_q(:ncol,:) * dtime
+    fallback_count = 0
+    fvdyn = dycore_is('LR')
+
+    do k = 1, pver
+      do i = 1, ncol
+        if (isnan(tcur(i,k)) .or. isinf(tcur(i,k)) .or. tcur(i,k) <= 100.0_r8) then
+          call endrun('MLTBC balance constraint received invalid current temperature')
+        end if
+        if (isnan(t_target(i,k)) .or. isinf(t_target(i,k)) .or. &
+            t_target(i,k) <= 100.0_r8) then
+          call endrun('MLTBC balance constraint received invalid corrected temperature')
+        end if
+        if (isnan(qcur(i,k)) .or. isinf(qcur(i,k)) .or. &
+            qcur(i,k) < 0.0_r8 .or. qcur(i,k) >= 1.0_r8) then
+          call endrun('MLTBC balance constraint received invalid current humidity')
+        end if
+        if (isnan(q_target(i,k)) .or. isinf(q_target(i,k)) .or. &
+            q_target(i,k) < 0.0_r8 .or. q_target(i,k) >= 1.0_r8) then
+          call endrun('MLTBC balance constraint received invalid corrected humidity')
+        end if
+        if (isnan(zvirv(i,k)) .or. isinf(zvirv(i,k)) .or. &
+            abs(zvirv(i,k)) <= sqrt(epsilon(1.0_r8))) then
+          call endrun('MLTBC balance constraint received invalid virtual-temperature coefficient')
+        end if
+        if (isnan(rairv(i,k)) .or. isinf(rairv(i,k)) .or. &
+            rairv(i,k) <= sqrt(epsilon(1.0_r8))) then
+          call endrun('MLTBC balance constraint received invalid dry-air gas constant')
+        end if
+      end do
+    end do
+
+    ! These paired calls intentionally share the exact routine, pressure
+    ! arrays, constants, and vertical discretization. This invariant makes
+    ! recovery of the current and ML-target virtual temperatures consistent.
+    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
+                        tcur(:ncol,:),qcur(:ncol,:), &
+                        rairv,gravit,zvirv,zi_current,zm_current,ncol)
+    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
+                        t_target(:ncol,:),q_target(:ncol,:), &
+                        rairv,gravit,zvirv,zi_target,zm_target,ncol)
+
+    do k = 1, pver
+      do i = 1, ncol
+        raw_t_tend = nudge_t(i,k)
+        raw_q_tend = nudge_q(i,k)
+        if (fvdyn) then
+          if (isnan(lnpint(i,k)) .or. isinf(lnpint(i,k)) .or. &
+              isnan(lnpint(i,k+1)) .or. isinf(lnpint(i,k+1))) then
+            call endrun('MLTBC balance constraint received invalid log-interface pressure')
+          end if
+          hydro_weight = lnpint(i,k+1) - lnpint(i,k)
+        else
+          if (isnan(pmid(i,k)) .or. isinf(pmid(i,k)) .or. &
+              pmid(i,k) <= sqrt(epsilon(1.0_r8)) .or. &
+              isnan(pdel(i,k)) .or. isinf(pdel(i,k)) .or. pdel(i,k) <= 0.0_r8) then
+            call endrun('MLTBC balance constraint received invalid layer pressure')
+          end if
+          hydro_weight = pdel(i,k) / pmid(i,k)
+        end if
+        if (isnan(hydro_weight) .or. isinf(hydro_weight)) then
+          call endrun('MLTBC balance constraint received non-finite hydrostatic weight')
+        end if
+        if (abs(hydro_weight) <= 1.0e-6_r8) then
+          nudge_t(i,k) = raw_t_tend
+          nudge_q(i,k) = raw_q_tend
+          fallback_count = fallback_count + 1
+          cycle
+        end if
+
+        tv_current = -gravit * (zi_current(i,k+1) - zi_current(i,k)) / &
+                     hydro_weight / rairv(i,k)
+        tv_target = -gravit * (zi_target(i,k+1) - zi_target(i,k)) / &
+                    hydro_weight / rairv(i,k)
+        if (apply_t) then
+          qeff = 0.5_r8 * (qcur(i,k) + q_target(i,k))
+          denom = 1.0_r8 + zvirv(i,k) * qeff
+          if (isnan(denom) .or. isinf(denom) .or. &
+              abs(denom) <= sqrt(epsilon(1.0_r8))) then
+            call endrun('MLTBC balance constraint has invalid temperature denominator')
+          end if
+          nudge_t(i,k) = (tv_target - tv_current) / dtime / denom
+        end if
+
+        t_bal = tcur(i,k) + nudge_t(i,k) * dtime
+        if (isnan(t_bal) .or. isinf(t_bal) .or. t_bal <= 100.0_r8) then
+          call endrun('MLTBC balance constraint produced invalid temperature')
+        end if
+        if (apply_q) then
+          q_bal = (tv_target / t_bal - 1.0_r8) / zvirv(i,k)
+          if (isnan(q_bal) .or. isinf(q_bal) .or. &
+              q_bal < 0.0_r8 .or. q_bal >= 1.0_r8) then
+            call endrun('MLTBC balance constraint produced invalid humidity')
+          end if
+          nudge_q(i,k) = (q_bal - qcur(i,k)) / dtime
+        end if
+      end do
+    end do
+
+    if (fallback_count > 0 .and. .not. fallback_warned) then
+      write(iulog,*) 'WARNING: MLTBC balance constraint retained raw tendencies for ', &
+                     fallback_count, ' levels with degenerate hydrostatic weight'
+      fallback_warned = .true.
+    end if
+  end subroutine mltbc_apply_tv_constraint
 
   !===========================================================================
   ! function to apply a 3-point vertical smoothings to reduce the noise of the 

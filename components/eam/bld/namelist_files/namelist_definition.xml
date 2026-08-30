@@ -460,9 +460,11 @@
        Default: 0
        </entry>
 
-<entry id="Nudge_Balance_Constrain" type="logical" category="nudging"
+<entry id="Nudge_Tv_Constrain_On" type="logical" category="nudging"
        group="nudging_nl" valid_values="" >
-       If TRUE, using hydrostatic balance to rederive nudging tendency for temperature and humidity 
+       If TRUE, preserve the weighted ML virtual-temperature target while
+       repartitioning it consistently between temperature and humidity
+       tendencies. This is not a full hydrostatic or energy adjustment.
        Default: FALSE
        </entry>
 
