@@ -445,7 +445,7 @@ module nudging
 
   ! Machine Learning Bias Correction  
   public:: mltbc_enabled
-  public:: mltbc_output_batch_dim
+  public:: mltbc_batch_dim
   public:: mltbc_nstep 
   public:: mltbc_option
   public:: mltbc_patch_nxy
@@ -716,7 +716,7 @@ module nudging
   logical  :: mltbc_patch_model  = .false.
   logical  :: mltbc_patch_bilerp = .false.
   logical  :: mltbc_bilerp_test  = .false.
-  integer  :: mltbc_output_batch_dim
+  integer  :: mltbc_batch_dim
   integer  :: mltbc_nstep
   integer  :: mltbc_option
   integer  :: mltbc_patch_nlon
@@ -819,7 +819,7 @@ contains
                          Nudge_Vertical_Smooth,                        &
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
-                         mltbc_output_batch_dim, mltbc_nstep, mltbc_step_method, &
+                         mltbc_batch_dim, mltbc_nstep, mltbc_step_method, &
                          mltbc_atten_db, mltbc_weight_scale,          &
                          mltbc_smooth_strength,                       &
                          mltbc_patch_bilerp, mltbc_bilerp_test
@@ -927,7 +927,7 @@ contains
    ! Conservative default: for equal layer masses, retain 85% of the local
    ! tendency and draw 7.5% from each vertical neighbor in the interior.
    mltbc_smooth_strength = 0.15_r8
-   mltbc_output_batch_dim = 2
+   mltbc_batch_dim      = 2
    mltbc_option         = 0
    mltbc_patch_nlon     = 1
    mltbc_patch_nlat     = 1
@@ -1128,7 +1128,7 @@ contains
    call mpibcast(mltbc_atten_db          , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_smooth_strength   , 1, mpir8,  0, mpicom)
-   call mpibcast(mltbc_output_batch_dim  , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_batch_dim          , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test       , 1, mpilog, 0, mpicom)
@@ -1180,8 +1180,8 @@ contains
       call endrun('MLTBC: patch models support only mltbc_option 0, 1, or 2')
     end if
     if (.not. mltbc_patch_model .and. mltbc_option >= 2 .and. &
-        (mltbc_output_batch_dim < 1 .or. mltbc_output_batch_dim > 3)) then
-      call endrun('MLTBC: global options 2-4 require mltbc_output_batch_dim in [1, 3]')
+        (mltbc_batch_dim < 1 .or. mltbc_batch_dim > 3)) then
+      call endrun('MLTBC: global options 2-4 require mltbc_batch_dim in [1, 3]')
     end if
     if (mltbc_nstep < 1) then
       call endrun('MLTBC: mltbc_nstep must be greater than zero')
@@ -1695,7 +1695,7 @@ contains
      write(iulog,*) 'NUDGING: mltbc_atten_db      =',mltbc_atten_db
      write(iulog,*) 'NUDGING: mltbc_weight_scale  =',mltbc_weight_scale
      write(iulog,*) 'NUDGING: mltbc_smooth_strength=',mltbc_smooth_strength
-     write(iulog,*) 'NUDGING: mltbc_output_batch_dim=',mltbc_output_batch_dim
+     write(iulog,*) 'NUDGING: mltbc_batch_dim      =',mltbc_batch_dim
      write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
      write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
      write(iulog,*) 'NUDGING: mltbc_patch_bilerp  =',mltbc_patch_bilerp
@@ -1763,7 +1763,7 @@ contains
    call mpibcast(mltbc_atten_db      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale  , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_smooth_strength, 1, mpir8, 0, mpicom)
-   call mpibcast(mltbc_output_batch_dim, 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_batch_dim      , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test   , 1, mpilog, 0, mpicom)
@@ -2955,7 +2955,7 @@ contains
        end if    
 
        !call machine learning model to predict correction tendency 
-       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_output_batch_dim, & !in
+       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_batch_dim, & !in
                             Model_UML,Model_VML,Model_TML,Model_QML,Model_PSML(:,:,1), & !in 
                             Model_rlat,Model_rlon,Model_area,Model_ZSML(:,:,1), & !in 
                             Model_COZML(:,:,1),Model_IFRML(:,:,1), & !in 
@@ -7489,7 +7489,7 @@ contains
         end if
         tend(:,:) = xout(:,:,1)
       case default
-        call endrun('MLTBC: mltbc_output_batch_dim must be 1, 2, or 3')
+        call endrun('MLTBC: mltbc_batch_dim must be 1, 2, or 3')
     end select
 
     if (any(isnan(tend)) .or. any(isinf(tend))) then

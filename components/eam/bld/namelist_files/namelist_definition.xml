@@ -582,7 +582,7 @@
        Default: FALSE
        </entry>
 
-<entry id="mltbc_output_batch_dim" type="integer" category="nudging"
+<entry id="mltbc_batch_dim" type="integer" category="nudging"
        group="nudging_nl" valid_values="1,2,3" >
        Position of the singleton batch dimension in the rank-three Torch model
        output for global options 2-4. It must match the exported model layout.
