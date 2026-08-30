@@ -2000,7 +2000,7 @@ subroutine tphysbc (ztodt,               &
     use nudging,         only: Nudge_Model,Nudge_Loc_PhysOut, &
                                Nudge_Land, nudging_calc_tend, &
                                nudging_update_land_surface, & 
-                               MLTBC_Nudge
+                               mltbc_enabled
     use lnd_infodata,    only: precip_downscaling_method
 
     implicit none
@@ -2749,7 +2749,7 @@ end if
     !===================================
     if (Nudge_Model .and. Nudge_Loc_PhysOut) then
        call nudging_calc_tend(state, pbuf, ztodt)
-       if (MLTBC_Nudge) then 
+       if (mltbc_enabled) then
          call physics_state_copy(state,state1)
        end if   
     endif
@@ -2856,7 +2856,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   use aerodep_flx,         only: aerodep_flx_adv
   use aircraft_emit,       only: aircraft_emit_adv
   use prescribed_volcaero, only: prescribed_volcaero_adv
-  use nudging,             only: Nudge_Model,MLTBC_Nudge,nudging_timestep_init
+  use nudging,             only: Nudge_Model, mltbc_enabled, nudging_timestep_init
 
   use seasalt_model,       only: advance_ocean_data, has_mam_mom
 
@@ -2940,7 +2940,7 @@ subroutine phys_timestep_init(phys_state, cam_out, pbuf2d, mltbc_state)
   !----------------------------------
   if (Nudge_Model) then 
     call nudging_timestep_init(phys_state)
-    if (MLTBC_Nudge) then 
+    if (mltbc_enabled) then
       !copy the state to the array for deeponet machine learning prediction 
       do lchnk = begchunk, endchunk
         call physics_state_copy(phys_state(lchnk), mltbc_state(lchnk))
@@ -2998,7 +2998,7 @@ subroutine mltbc_nudging(dtime,pbuf2d,cam_in,phys_state)
 !-----------------------------------------------------------------------------------
   use shr_kind_mod,        only: r8 => shr_kind_r8
   use physics_types,       only: physics_state
-  use nudging,             only: Nudge_Model,MLTBC_Nudge,mltbc_timestep_init
+  use nudging,             only: Nudge_Model, mltbc_enabled, mltbc_timestep_init
   use physics_buffer,      only: physics_buffer_desc, pbuf_get_chunk, pbuf_allocate
   use camsrfexch,          only: cam_out_t, cam_in_t
 
@@ -3014,7 +3014,7 @@ subroutine mltbc_nudging(dtime,pbuf2d,cam_in,phys_state)
   !===================================
   ! Update Nudging tendency if needed
   !===================================
-  if (Nudge_Model .and. MLTBC_Nudge) then
+  if (Nudge_Model .and. mltbc_enabled) then
      call mltbc_timestep_init(phys_state,pbuf2d,cam_in,dtime)
   endif
 

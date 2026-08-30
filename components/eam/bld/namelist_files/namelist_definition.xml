@@ -582,10 +582,11 @@
        Default: FALSE
        </entry>
 
-<entry id="mltbc_ibatch" type="integer" category="nudging"
-       group="nudging_nl" valid_values="" >
-       Option to specify batchsize dimension of ML prediction: 1 for first dimension.
-       Default: 1
+<entry id="mltbc_output_batch_dim" type="integer" category="nudging"
+       group="nudging_nl" valid_values="1,2,3" >
+       Position of the singleton batch dimension in the rank-three Torch model
+       output for global options 2-4. It must match the exported model layout.
+       Default: 2
        </entry>
 
 <entry id="mltbc_nstep" type="integer" category="nudging"
@@ -596,7 +597,13 @@
 
 <entry id="mltbc_option" type="integer" category="nudging"
        group="nudging_nl" valid_values="" >
-       Option to select type of machine learning bias correction model.
+       Machine-learning bias-correction model type.
+       0: autoencoder/decoder DeepONet model (global or patch).
+       1: global single-variable model or patch state DeepONet.
+       2: global unified U,V,T,Q model or patch single-variable model.
+       3: global U,V,T,Q model with latitude and longitude.
+       4: global U,V,T,Q model with COSZ, LAT, LON, PHIS, AREA,
+          LANDFRC, OCNFRC, and ICEFRC. Patch models support only options 0-2.
        Default: 0
        </entry>
 

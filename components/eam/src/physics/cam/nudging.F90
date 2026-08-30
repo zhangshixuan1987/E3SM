@@ -444,8 +444,8 @@ module nudging
   private::open_netcdf
 
   ! Machine Learning Bias Correction  
-  public:: mltbc_nudge
-  public:: mltbc_ibatch 
+  public:: mltbc_enabled
+  public:: mltbc_output_batch_dim
   public:: mltbc_nstep 
   public:: mltbc_option
   public:: mltbc_patch_nxy
@@ -469,13 +469,15 @@ module nudging
   private:: mltbc_deeponet_encoder
   private:: mltbc_deeponet_decoder
   private:: mltbc_update_prof
-  private:: mltbc_apply_tv_constraint
+  private:: mltbc_enforce_tv_constrain
   private:: mltbc_calc_tend
   private:: mltbc_global_to_patch
   private:: mltbc_global_to_latlon
   private:: mltbc_latlon_to_global
   private:: mltbc_load_model
   private:: mltbc_compute_weights
+  private:: mltbc_validate_config
+  private:: mltbc_unpack_tendout
   private:: nudge_upper_taper
 
   ! Nudging Parameters
@@ -709,11 +711,12 @@ module nudging
 
   !Parameters for machine learning bias correction 
   character(len=cl)  :: mltbc_step_method      
-  logical  :: mltbc_nudge        = .false.
+  logical  :: mltbc_enabled      = .false. ! MLTBC selected by Nudge_Method
+  logical  :: mltbc_active       = .false. ! Current time is inside nudging window
   logical  :: mltbc_patch_model  = .false.
   logical  :: mltbc_patch_bilerp = .false.
   logical  :: mltbc_bilerp_test  = .false.
-  integer  :: mltbc_ibatch 
+  integer  :: mltbc_output_batch_dim
   integer  :: mltbc_nstep
   integer  :: mltbc_option
   integer  :: mltbc_patch_nlon
@@ -816,7 +819,7 @@ contains
                          Nudge_Vertical_Smooth,                        &
                          mltbc_model_path, mltbc_file_template,        & 
                          mltbc_option, mltbc_patch_model,              & 
-                         mltbc_ibatch, mltbc_nstep, mltbc_step_method, &
+                         mltbc_output_batch_dim, mltbc_nstep, mltbc_step_method, &
                          mltbc_atten_db, mltbc_weight_scale,          &
                          mltbc_smooth_strength,                       &
                          mltbc_patch_bilerp, mltbc_bilerp_test
@@ -913,7 +916,8 @@ contains
    ! Set Default values for machine learing 
    !-----------------------------
    mltbc_step_method    = 'IMT'
-   mltbc_nudge          = .false.
+   mltbc_enabled        = .false.
+   mltbc_active         = .false.
    mltbc_patch_bilerp   = .false.
    mltbc_bilerp_test    = .false.
    mltbc_patch_model    = .false.
@@ -923,7 +927,7 @@ contains
    ! Conservative default: for equal layer masses, retain 85% of the local
    ! tendency and draw 7.5% from each vertical neighbor in the interior.
    mltbc_smooth_strength = 0.15_r8
-   mltbc_ibatch         = 2
+   mltbc_output_batch_dim = 2
    mltbc_option         = 0
    mltbc_patch_nlon     = 1
    mltbc_patch_nlat     = 1
@@ -950,9 +954,9 @@ contains
    endif
 
    if (trim(Nudge_Method) .eq. "MLTBC") then 
-     mltbc_nudge = .true. 
+     mltbc_enabled = .true.
    else
-     mltbc_nudge = .false.
+     mltbc_enabled = .false.
    end if 
 
    ! Set hi/lo values according to the given '_Invert' parameters
@@ -1118,13 +1122,13 @@ contains
    call mpibcast(mltbc_step_method       ,len(mltbc_step_method),   mpichar,0,mpicom) 
    call mpibcast(mltbc_model_path        ,len(mltbc_model_path),    mpichar,0,mpicom)
    call mpibcast(mltbc_file_template     ,len(mltbc_file_template), mpichar,0,mpicom)     
-   call mpibcast(mltbc_nudge             , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_enabled           , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_patch_model       , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep             , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db          , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_smooth_strength   , 1, mpir8,  0, mpicom)
-   call mpibcast(mltbc_ibatch            , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_output_batch_dim  , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option            , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp      , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test       , 1, mpilog, 0, mpicom)
@@ -1134,6 +1138,8 @@ contains
        mltbc_smooth_strength < 0.0_r8 .or. mltbc_smooth_strength > 0.5_r8) then
      call endrun('nudging_readnl: mltbc_smooth_strength must be finite and in [0, 0.5]')
    end if
+
+   call mltbc_validate_config()
 
    if (Nudge_Lin_Relax_On) then
      if (isnan(Nudge_UV_Prelx) .or. isinf(Nudge_UV_Prelx) .or. &
@@ -1162,6 +1168,26 @@ contains
    !------------
    return
   end subroutine ! nudging_readnl
+  !================================================================
+
+  subroutine mltbc_validate_config()
+    if (.not. mltbc_enabled) return
+
+    if (mltbc_option < 0 .or. mltbc_option > 4) then
+      call endrun('MLTBC: mltbc_option must be in [0, 4]')
+    end if
+    if (mltbc_patch_model .and. mltbc_option > 2) then
+      call endrun('MLTBC: patch models support only mltbc_option 0, 1, or 2')
+    end if
+    if (.not. mltbc_patch_model .and. mltbc_option >= 2 .and. &
+        (mltbc_output_batch_dim < 1 .or. mltbc_output_batch_dim > 3)) then
+      call endrun('MLTBC: global options 2-4 require mltbc_output_batch_dim in [1, 3]')
+    end if
+    if (mltbc_nstep < 1) then
+      call endrun('MLTBC: mltbc_nstep must be greater than zero')
+    end if
+  end subroutine mltbc_validate_config
+
   !================================================================
 
 
@@ -1491,6 +1517,7 @@ contains
                           YMD1,Nudge_End_Sec,Before_End)
 
      if((After_Beg).and.(Before_End)) then
+       mltbc_active = mltbc_enabled
        ! Set Time indicies so that the next call to
        ! timestep_init will initialize the data arrays.
        !--------------------------------------------
@@ -1504,6 +1531,7 @@ contains
        Nudge_Next_Sec  =(Sec/Nudge_Step)*Nudge_Step
 
      elseif(.not.After_Beg) then
+       mltbc_active = .false.
        ! Set Time indicies to Nudging start,
        ! timestep_init will initialize the data arrays.
        !--------------------------------------------
@@ -1517,9 +1545,9 @@ contains
        Nudge_Next_Sec  =Nudge_Beg_Sec
 
      elseif(.not.Before_End) then
+       mltbc_active = .false.
        ! Nudging will never occur, so switch it off
        !--------------------------------------------
-       mltbc_nudge = .false.
        Nudge_Model    = .false.
        Nudge_ON       = .false.
        Nudge_Land     = .false.
@@ -1660,13 +1688,14 @@ contains
      write(iulog,*) 'NUDGING: Nudge_T_Prelx       =',Nudge_T_Prelx
      write(iulog,*) 'NUDGING: Nudge_Q_Prelx       =',Nudge_Q_Prelx
      write(iulog,*) 'NUDGING: mltbc_step_method   =',mltbc_step_method 
-     write(iulog,*) 'NUDGING: mltbc_nudge         =',mltbc_nudge
+     write(iulog,*) 'NUDGING: mltbc_enabled       =',mltbc_enabled
+     write(iulog,*) 'NUDGING: mltbc_active        =',mltbc_active
      write(iulog,*) 'NUDGING: mltbc_patch_model   =',mltbc_patch_model
      write(iulog,*) 'NUDGING: mltbc_nstep         =',mltbc_nstep 
      write(iulog,*) 'NUDGING: mltbc_atten_db      =',mltbc_atten_db
      write(iulog,*) 'NUDGING: mltbc_weight_scale  =',mltbc_weight_scale
      write(iulog,*) 'NUDGING: mltbc_smooth_strength=',mltbc_smooth_strength
-     write(iulog,*) 'NUDGING: mltbc_ibatch        =',mltbc_ibatch
+     write(iulog,*) 'NUDGING: mltbc_output_batch_dim=',mltbc_output_batch_dim
      write(iulog,*) 'NUDGING: mltbc_option        =',mltbc_option
      write(iulog,*) 'NUDGING: mltbc_bilerp_test   =',mltbc_bilerp_test
      write(iulog,*) 'NUDGING: mltbc_patch_bilerp  =',mltbc_patch_bilerp
@@ -1727,13 +1756,14 @@ contains
    call mpibcast(Nudge_UV_Prelx      , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_T_Prelx       , 1, mpir8 , 0, mpicom)
    call mpibcast(Nudge_Q_Prelx       , 1, mpir8 , 0, mpicom)
-   call mpibcast(mltbc_nudge         , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_enabled       , 1, mpilog, 0, mpicom)
+   call mpibcast(mltbc_active        , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_patch_model   , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_nstep         , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_atten_db      , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_weight_scale  , 1, mpir8,  0, mpicom)
    call mpibcast(mltbc_smooth_strength, 1, mpir8, 0, mpicom)
-   call mpibcast(mltbc_ibatch        , 1, mpiint, 0, mpicom)
+   call mpibcast(mltbc_output_batch_dim, 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_option        , 1, mpiint, 0, mpicom)
    call mpibcast(mltbc_patch_bilerp  , 1, mpilog, 0, mpicom)
    call mpibcast(mltbc_bilerp_test   , 1, mpilog, 0, mpicom)
@@ -1767,7 +1797,7 @@ contains
 
      end do
 
-     if (mltbc_nudge) then
+     if (mltbc_enabled) then
 
        Nudge_Utau(:ncol,:pver,lchnk) = Nudge_Utau(:ncol,:pver,lchnk) * Nudge_Ucoef
        Nudge_Vtau(:ncol,:pver,lchnk) = Nudge_Vtau(:ncol,:pver,lchnk) * Nudge_Vcoef
@@ -2076,7 +2106,7 @@ contains
            end if       
 
            !load machine learning model (only need to call once at initial time)
-           call mltbc_load_model(mltbc_patch_model,mltbc_option)
+           call mltbc_load_model(mltbc_option)
            call mltbc_compute_weights(mltbc_nstep, mltbc_step_method, &
                                       mltbc_atten_db, mltbc_weight_scale, &
                                       mltbc_step_weight)
@@ -2123,7 +2153,7 @@ contains
    integer lchnk,ncol,indw, k 
    character(len=2000) err_str
 
-   if (mltbc_nudge) return
+   if (mltbc_enabled) return
 
    ! Check if Nudging is initialized
    !---------------------------------
@@ -2433,7 +2463,7 @@ contains
    return
   end subroutine ! nudging_timestep_init
   !================================================================
-  subroutine mltbc_load_model(l_patch_model,i_ml_option)
+  subroutine mltbc_load_model(i_ml_option)
    !
    ! DEEPONET_LOAD_MODEL:
    !                 load the machine learning model pt file to the 
@@ -2443,7 +2473,6 @@ contains
 
    implicit none
    
-   logical, intent(in)             :: l_patch_model
    integer, intent(in)             :: i_ml_option
 
    ! Local values
@@ -2462,7 +2491,7 @@ contains
    !assign variable array 
    vars = [character(len=10) :: "U", "V", "T", "Q"]
 
-   if ( l_patch_model .and. (i_ml_option == 0) ) then 
+   if (i_ml_option == 0) then
      do i = 1,2  
        don_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i))//'_deepONet')
        enc_model_pt = interpret_filename_spec(mltbc_file_template,case=trim(vars(i))//'_Encoder')
@@ -2482,7 +2511,9 @@ contains
            write(iulog,*) "ERROR: "//trim(mltbc_model_path)//trim(don_model_pt)//" not found!"
            call endrun('MLTBC ERROR: model file not exist')
          end if
-         write(iulog,*)'MLTBC Nudging: machine learning model uses ',trim(mltbc_model_path)//trim(ml_model_pt)
+         write(iulog,*) 'MLTBC Nudging: encoder model ', trim(mltbc_model_path)//trim(enc_model_pt)
+         write(iulog,*) 'MLTBC Nudging: decoder model ', trim(mltbc_model_path)//trim(dec_model_pt)
+         write(iulog,*) 'MLTBC Nudging: DeepONet model ', trim(mltbc_model_path)//trim(don_model_pt)
        end if
        !load pt files to the torch module 
        if((Nudge_Uprof .ne. 0) .and. (trim(vars(i)) == "U") ) then 
@@ -2855,11 +2886,11 @@ contains
      if(Nudge_Land) then
        Nudge_SRF_On=.true.
      end if
-     mltbc_nudge=.true.
+     mltbc_active=.true.
    else
      Nudge_ON=.false.
      Nudge_SRF_On=.false.
-     mltbc_nudge=.false.
+     mltbc_active=.false.
    end if
 
    Nudge_Ustep(:,:,:) = 0._r8
@@ -2868,7 +2899,7 @@ contains
    Nudge_Qstep(:,:,:) = 0._r8
    Nudge_PSstep(:,:)  = 0._r8
 
-   if ((Before_End).and.(mltbc_nudge)) then
+   if (mltbc_active) then
 
      if ( Update_MLTBC ) then 
        !#############################################################     
@@ -2924,7 +2955,7 @@ contains
        end if    
 
        !call machine learning model to predict correction tendency 
-       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_ibatch, & !in 
+       call mltbc_calc_tend(pbuf2d,state,Nudge_ncol,nrows,mltbc_output_batch_dim, & !in
                             Model_UML,Model_VML,Model_TML,Model_QML,Model_PSML(:,:,1), & !in 
                             Model_rlat,Model_rlon,Model_area,Model_ZSML(:,:,1), & !in 
                             Model_COZML(:,:,1),Model_IFRML(:,:,1), & !in 
@@ -3532,7 +3563,7 @@ contains
   ! between the final temperature and humidity tendencies. Geopotential is
   ! diagnostic here; this is not a full hydrostatic or energy adjustment.
   if (use_tv_constrain) then
-    call mltbc_apply_tv_constraint(ncol, dtime, lnpint, lnpmid, pint, pmid, &
+    call mltbc_enforce_tv_constrain(ncol, dtime, lnpint, lnpmid, pint, pmid, &
                                 pdel, rpdel, rairv, zvirv, tcur, qcur, &
                                 Nudge_Tprof .ne. 0, Nudge_Qprof .ne. 0, &
                                 nudge_t, nudge_q)
@@ -3546,7 +3577,7 @@ contains
   ! virtual-temperature target. Both geopotential profiles are diagnosed here
   ! with identical discretization and arguments, differing only in T/Q.
   !===========================================================================
-  subroutine mltbc_apply_tv_constraint(ncol, dtime, lnpint, lnpmid, pint, pmid, &
+  subroutine mltbc_enforce_tv_constrain(ncol, dtime, lnpint, lnpmid, pint, pmid, &
                                     pdel, rpdel, rairv, zvirv, tcur, qcur, &
                                     apply_t, apply_q, nudge_t, nudge_q)
     use ppgrid,      only: pver, pverp, pcols
@@ -3683,7 +3714,7 @@ contains
                      fallback_count, ' levels with degenerate hydrostatic weight'
       fallback_warned = .true.
     end if
-  end subroutine mltbc_apply_tv_constraint
+  end subroutine mltbc_enforce_tv_constrain
 
   !===========================================================================
   ! Apply one conservative vertical diffusion pass to the ML U/V tendencies.
@@ -3790,7 +3821,7 @@ contains
 
    real(r8), pointer :: PBLH(:)                ! Planetary boundary layer height
 
-   if (mltbc_nudge) return
+   if (mltbc_enabled) return
 
    lchnk = state%lchnk
    ncol  = state%ncol
@@ -7073,6 +7104,7 @@ contains
    use phys_grid,        only : scatter_field_to_chunk, get_ncols_p 
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history  ,    only : outfld
+   use infnan,           only : isnan, isinf
 
    implicit none
 
@@ -7122,6 +7154,11 @@ contains
    ttend = 0.0_r8
    qtend = 0.0_r8
 
+   if (any(isnan(u)) .or. any(isinf(u)) .or. any(isnan(v)) .or. any(isinf(v)) .or. &
+       any(isnan(t)) .or. any(isinf(t)) .or. any(isnan(q)) .or. any(isinf(q))) then
+     call endrun('MLTBC: non-finite patch-model state input')
+   end if
+
    ! This subrutine only returns U, V nudging tendency only 
    if ((Nudge_PSprof .ne. 0) .or. (Nudge_Tprof .ne. 0) .or. (Nudge_Qprof .ne. 0) ) then 
       write(iulog,*) 'MLTBC ERROR: path model only predicts wind nudging tendency only'
@@ -7132,10 +7169,11 @@ contains
    call mltbc_global_to_patch(ngcol,nlev,u(:,ngrow,:),v(:,ngrow,:),mltbc_patch_nlon,mltbc_patch_nlat, & 
                               mltbc_patch_bilerp,upatch,vpatch)
 
-   !ML model prediction
+   ! Dispatch the regional (patch-grid) ML architecture.
    select case (mltbc_option)
      case (0)
-       !option 0: auto encoder/decoder deepONet model 
+       ! Option 0: encode the regional U or V state, evaluate its DeepONet,
+       ! and decode the result into a three-hour mean correction tendency.
        if (Nudge_Uprof .ne. 0 ) then 
          call mltbc_aec_deeponet("U",nlev,mltbc_patch_nlon,mltbc_patch_nlat,ngcol,upatch,utend, & 
                                  kbot=1,ktop=nlev,xmin=umin,xmax=umax,ymin=utmn,ymax=utmx)
@@ -7145,8 +7183,8 @@ contains
                                  kbot=1,ktop=nlev,xmin=vmin,xmax=vmax,ymin=vtmn,ymax=vtmx)
        end if
      case (1) 
-       !option 1: deepONet (before nudging state --> after nudging state) 
-       !          nudging tedency = (After - Before) / 3*3600 (3hour)
+       ! Option 1: predict the three-hour-ahead U or V state directly, then
+       ! diagnose its mean correction tendency as (predicted-current)/10800 s.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_state_deeponet("U",nlev,mltbc_patch_nlon,mltbc_patch_nlat,ngcol,upatch,utend, & 
                                    kbot=1,ktop=nlev,xmin=minval(upatch),xmax=maxval(upatch))
@@ -7156,8 +7194,8 @@ contains
                                    kbot=1,ktop=nlev,xmin=minval(vpatch),xmax=maxval(vpatch))
        end if
      case (2)
-       !option 2: ML(state)-->ML(tendency),predict nudging tendency from before nuding state
-       !          no auto encoder-decoder is needed 
+       ! Option 2: map the current regional U or V state directly to its
+       ! correction tendency with a single TorchScript model.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_single_model("U",nlev,mltbc_patch_nlon,mltbc_patch_nlat,ngcol, & 
                                  upatch,utend,kbot=1,ktop=nlev)
@@ -7169,6 +7207,13 @@ contains
      case default             
        call endrun('Machine Learning Nudging Error: invalid option for patch model (regional)')
    end select
+
+   if (any(isnan(utend)) .or. any(isinf(utend)) .or. &
+       any(isnan(vtend)) .or. any(isinf(vtend)) .or. &
+       any(isnan(ttend)) .or. any(isinf(ttend)) .or. &
+       any(isnan(qtend)) .or. any(isinf(qtend))) then
+     call endrun('MLTBC: non-finite patch-model tendency output')
+   end if
 
    !scatter global tendency to chunk
    call scatter_field_to_chunk(1,nlev,1,ngcol,utend,nudge_u)
@@ -7261,6 +7306,7 @@ contains
    use phys_grid,        only : scatter_field_to_chunk
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history  ,    only : outfld
+   use infnan,           only : isnan, isinf
 
    implicit none
 
@@ -7304,12 +7350,17 @@ contains
    ttend(:,:) = 0.0_r8
    qtend(:,:) = 0.0_r8
 
+   if (any(isnan(u)) .or. any(isinf(u)) .or. any(isnan(v)) .or. any(isinf(v)) .or. &
+       any(isnan(t)) .or. any(isinf(t)) .or. any(isnan(q)) .or. any(isinf(q))) then
+     call endrun('MLTBC: non-finite global-model state input')
+   end if
+
    !lat/lon are in radians from E3SM by default
    !convert the radians to degree that will be used by ML model 
    lat(:) = rlat(:)*180._r8/SHR_CONST_PI
    lon(:) = rlon(:)*180._r8/SHR_CONST_PI
 
-   ! This subrutine only returns U, V nudging tendency only 
+   ! Surface-pressure tendency prediction is not implemented for global MLTBC.
    if (Nudge_PSprof .ne. 0) then
       write(iulog,*) 'MLTBC ERROR: prediction of surface pressure nudging tendency not implemented'
       call endrun('MLTBC ERROR: invalid option for global model prediction')
@@ -7317,7 +7368,8 @@ contains
 
    select case (mltbc_option)
      case (0)
-       !option 0: auto encoder/decoder deepONet model 
+       ! Option 0: encode the global U or V state, evaluate its DeepONet,
+       ! and decode the result into a correction tendency.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_aec_deeponet("U",nlev,ngcol,ngrow,ngcol,u,utend,kbot=1,ktop=nlev)
        end if
@@ -7325,8 +7377,8 @@ contains
          call mltbc_aec_deeponet("V",nlev,ngcol,ngrow,ngcol,v,vtend,kbot=1,ktop=nlev)
        end if
      case (1)
-       !option 2: ML(state)-->ML(tendency),predict nudging tendency with model state
-       !          no auto encoder-decoder is needed, and only for U, V 
+       ! Option 1: map each current global wind component independently to
+       ! its correction tendency with a single-variable TorchScript model.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_single_model("U",nlev,ngcol,ngrow,ngcol,u,utend,kbot=1,ktop=nlev)
        end if
@@ -7334,8 +7386,8 @@ contains
          call mltbc_single_model("V",nlev,ngcol,ngrow,ngcol,v,vtend,kbot=1,ktop=nlev)
        end if
      case (2)
-       !option 2: ML(state)-->ML(tendency),predict nudging tendency from model state
-       !          no auto encoder-decoder is needed, and only for global  
+       ! Option 2: predict each enabled U, V, T, or Q correction tendency
+       ! from the combined current U, V, T, and Q state.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_unified_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend)
        end if
@@ -7349,7 +7401,8 @@ contains
          call mltbc_unified_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend)
        end if
      case (3)
-       !option 3: with lat,lon info as input 
+       ! Option 3: extend the combined U, V, T, and Q predictors with
+       ! latitude and longitude; supported only for global models.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_scalar_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend,lat,lon)
        end if
@@ -7363,8 +7416,9 @@ contains
          call mltbc_scalar_model("Q",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,qtend,lat,lon)
        end if
      case (4)
-       !option 4: ML(state,scalars)-->ML(tendency),predict nudging tendency from model state
-       !          no auto encoder-decoder is needed, and only for global  
+       ! Option 4: predict each enabled U, V, T, or Q correction tendency
+       ! from the combined atmospheric state and global scalar predictors:
+       ! COSZ, LAT, LON, PHIS, AREA, LANDFRC, OCNFRC, and ICEFRC.
        if (Nudge_Uprof .ne. 0 ) then
          call mltbc_scalar_model("U",nlev,ngcol,ngrow,ngcol,ibatch_dim,u,v,t,q,utend, & 
                                  lat,lon,area,cosz,ocnfrc,icefrc,lndfrc,phis)
@@ -7385,6 +7439,13 @@ contains
        call endrun('Machine Learning Nudging Error: invalid option for global model')
    end select
 
+   if (any(isnan(utend)) .or. any(isinf(utend)) .or. &
+       any(isnan(vtend)) .or. any(isinf(vtend)) .or. &
+       any(isnan(ttend)) .or. any(isinf(ttend)) .or. &
+       any(isnan(qtend)) .or. any(isinf(qtend))) then
+     call endrun('MLTBC: non-finite global-model tendency output')
+   end if
+
    !scatter global tendency to chunk
    call scatter_field_to_chunk(1,nlev,1,ngcol,utend,nudge_u)
    call scatter_field_to_chunk(1,nlev,1,ngcol,vtend,nudge_v)
@@ -7393,6 +7454,48 @@ contains
 
    return
   end subroutine !mltbc_advance_global
+
+  !===========================================================================
+  ! Validate and extract a rank-three Torch output using the configured batch
+  ! dimension. This prevents an incompatible exported model from being indexed
+  ! with a silently assumed layout.
+  !===========================================================================
+  subroutine mltbc_unpack_tendout(var, ngtot, nz, ibdim, xout, tend)
+    use infnan, only: isnan, isinf
+
+    character(len=*), intent(in) :: var
+    integer, intent(in) :: ngtot, nz, ibdim
+    real(r8), pointer, intent(in) :: xout(:,:,:)
+    real(r8), intent(out) :: tend(ngtot,nz)
+
+    if (.not. associated(xout)) then
+      call endrun('MLTBC: unassociated Torch output for '//trim(var))
+    end if
+
+    select case (ibdim)
+      case (1)
+        if (size(xout,1) /= 1 .or. size(xout,2) /= ngtot .or. size(xout,3) /= nz) then
+          call endrun('MLTBC: incompatible batch-first Torch output for '//trim(var))
+        end if
+        tend(:,:) = xout(1,:,:)
+      case (2)
+        if (size(xout,1) /= ngtot .or. size(xout,2) /= 1 .or. size(xout,3) /= nz) then
+          call endrun('MLTBC: incompatible batch-middle Torch output for '//trim(var))
+        end if
+        tend(:,:) = xout(:,1,:)
+      case (3)
+        if (size(xout,1) /= ngtot .or. size(xout,2) /= nz .or. size(xout,3) /= 1) then
+          call endrun('MLTBC: incompatible batch-last Torch output for '//trim(var))
+        end if
+        tend(:,:) = xout(:,:,1)
+      case default
+        call endrun('MLTBC: mltbc_output_batch_dim must be 1, 2, or 3')
+    end select
+
+    if (any(isnan(tend)) .or. any(isinf(tend))) then
+      call endrun('MLTBC: non-finite Torch output for '//trim(var))
+    end if
+  end subroutine mltbc_unpack_tendout
 
   subroutine mltbc_unified_model(var,nz,nx,ny,ngtot,ibdim,u,v,t,q,tend) 
    !===========================================================================
@@ -7448,14 +7551,7 @@ contains
    call t_stopf ('mltbc_unified_model_forward')
 
    call out_tensor%to_array(xout)
-   !ibdim is the batch dimension location 
-   if (ibdim == 1) then 
-     tend(1:ngtot,1:nz) = xout(1,:,:)
-   else if (ibdim == 2) then 
-     tend(1:ngtot,1:nz) = xout(:,1,:)
-   else
-     tend(1:ngtot,1:nz) = xout(:,:,1)      
-   end if 
+   call mltbc_unpack_tendout(var, ngtot, nz, ibdim, xout, tend)
 
    return
   end subroutine !mltbc_unified_model
@@ -7471,6 +7567,7 @@ contains
    use shr_const_mod,    only : SHR_CONST_PI, SHR_CONST_REARTH
    use cam_history,      only : outfld
    use cam_abortutils,   only : endrun
+   use infnan,           only : isnan, isinf
 
    implicit none
 
@@ -7500,7 +7597,62 @@ contains
    !----------------
    integer                       :: i,j,n,m,k,ii,jj
    real(r8), pointer             :: xout(:,:,:)
+   logical                       :: has_extended, has_all_extended
 
+   if (.not. present(lat) .or. .not. present(lon)) then
+     call endrun('MLTBC: coordinate/scalar model requires latitude and longitude')
+   end if
+
+   has_extended = present(area) .or. present(cosz) .or. present(phis) .or. &
+                  present(ocnfrc) .or. present(lndfrc) .or. present(icefrc)
+   has_all_extended = present(area) .and. present(cosz) .and. present(phis) .and. &
+                      present(ocnfrc) .and. present(lndfrc) .and. present(icefrc)
+   if (has_extended .and. .not. has_all_extended) then
+     call endrun('MLTBC: extended scalar model requires all option-4 predictors')
+   end if
+   select case (mltbc_option)
+     case (3)
+       if (has_extended) then
+         call endrun('MLTBC: option 3 accepts only U,V,T,Q,LAT,LON inputs')
+       end if
+     case (4)
+       if (.not. has_all_extended) then
+         call endrun('MLTBC: option 4 requires its complete scalar predictor set')
+       end if
+     case default
+       call endrun('MLTBC: scalar model supports only options 3 and 4')
+   end select
+
+   if (any(isnan(u)) .or. any(isinf(u)) .or. any(isnan(v)) .or. any(isinf(v)) .or. &
+       any(isnan(t)) .or. any(isinf(t)) .or. any(isnan(q)) .or. any(isinf(q))) then
+     call endrun('MLTBC: non-finite state or coordinate model input')
+   end if
+   if (present(lat) .and. present(lon)) then
+     if (any(isnan(lat)) .or. any(isinf(lat)) .or. &
+         any(isnan(lon)) .or. any(isinf(lon))) then
+       call endrun('MLTBC: non-finite latitude or longitude model input')
+     end if
+   end if
+   if (has_all_extended) then
+     if (any(isnan(area)) .or. any(isinf(area)) .or. any(area <= 0.0_r8) .or. &
+         any(isnan(cosz)) .or. any(isinf(cosz)) .or. &
+         any(isnan(phis)) .or. any(isinf(phis)) .or. &
+         any(isnan(lndfrc)) .or. any(isinf(lndfrc)) .or. &
+         any(isnan(ocnfrc)) .or. any(isinf(ocnfrc)) .or. &
+         any(isnan(icefrc)) .or. any(isinf(icefrc))) then
+       call endrun('MLTBC: invalid option-4 scalar model input')
+     end if
+     if (any(cosz < -1.0_r8) .or. any(cosz > 1.0_r8) .or. &
+         any(lndfrc < 0.0_r8) .or. any(lndfrc > 1.0_r8) .or. &
+         any(ocnfrc < 0.0_r8) .or. any(ocnfrc > 1.0_r8) .or. &
+         any(icefrc < 0.0_r8) .or. any(icefrc > 1.0_r8)) then
+       call endrun('MLTBC: option-4 fractions or COSZ outside physical bounds')
+     end if
+   end if
+
+   ! Predictor order is a positional TorchScript contract and must match
+   ! training/export: U,V,T,Q,[COSZ],LAT,LON,[PHIS,AREA,LANDFRC,OCNFRC,ICEFRC].
+   ! Bracketed fields are present only for the extended option-4 model.
    !prepare input data
    call t_startf ('mltbc_scalar_model_input')
    call input_tensors%create
@@ -7549,14 +7701,7 @@ contains
    call t_stopf ('mltbc_scalar_model_forward')
 
    call out_tensor%to_array(xout)
-   !ibdim is the batch dimension location 
-   if (ibdim == 1) then
-     tend(1:ngtot,1:nz) = xout(1,:,:)
-   else if (ibdim == 2) then
-     tend(1:ngtot,1:nz) = xout(:,1,:)
-   else
-     tend(1:ngtot,1:nz) = xout(:,:,1)
-   end if
+   call mltbc_unpack_tendout(var, ngtot, nz, ibdim, xout, tend)
 
    return
   end subroutine !mltbc_scalar_model
@@ -7598,6 +7743,9 @@ contains
    k2 = nz
    if (present(kbot)) k1 = kbot
    if (present(ktop)) k2 = ktop
+   if (k1 < 1 .or. k2 > nz .or. k1 > k2) then
+     call endrun('MLTBC: invalid vertical bounds in single model')
+   end if
 
    call t_startf ('mltbc_single_model_input')
    if (mltbc_patch_model) then
@@ -7630,12 +7778,26 @@ contains
    call t_startf ('mltbc_single_model_output')
    if (mltbc_patch_model) then 
      call out_tensor%to_array(output4d)
+     if (.not. associated(output4d)) then
+       call endrun('MLTBC: unassociated patch single-model output for '//trim(var))
+     end if
+     if (size(output4d,1) /= nx .or. size(output4d,2) /= ny .or. &
+         size(output4d,3) /= 1 .or. size(output4d,4) /= k2-k1+1) then
+       call endrun('MLTBC: incompatible patch single-model output for '//trim(var))
+     end if
      do k = k1, k2
        tend(:,k) = mltbc_latlon_to_global(nx,ny,real(output4d(:,:,1,k-k1+1),kind=r8),ngtot,mltbc_patch_bilerp)
      end do
      deallocate(input4d)
    else
      call out_tensor%to_array(output3d)
+     if (.not. associated(output3d)) then
+       call endrun('MLTBC: unassociated global single-model output for '//trim(var))
+     end if
+     if (size(output3d,1) /= ngtot .or. size(output3d,2) /= k2-k1+1 .or. &
+         size(output3d,3) /= 1) then
+       call endrun('MLTBC: incompatible global single-model output for '//trim(var))
+     end if
      tend(:,k1:k2) = real(output3d(:,:,1),kind=r8)
      deallocate(input3d)
    end if
@@ -7694,6 +7856,7 @@ contains
    integer                 :: k1,k2
    real(r8)                :: ecmin, ecmax
    real(r8)                :: dcmin, dcmax
+   real(r8), allocatable   :: decoded(:,:,:)
    real(r8), allocatable   :: vout(:,:)
    real(r4), allocatable   :: input2d(:,:)     ! (1,conv2d_nt) 
    real(r4), allocatable   :: input3d(:,:,:)   ! (nx1,ny1,nz1)
@@ -7704,6 +7867,11 @@ contains
    k2 = nz
    if (present(kbot)) k1 = kbot
    if (present(ktop)) k2 = ktop
+   if (k1 < 1 .or. k2 > nz .or. k1 > k2) then
+     call endrun('MLTBC: invalid vertical bounds in autoencoder DeepONet')
+   end if
+   allocate(decoded(nx,ny,nz))
+   decoded(:,:,:) = 0.0_r8
 
    !normalization parameter before ml prediction 
    ecmin = -1.0_r8
@@ -7720,7 +7888,7 @@ contains
    if (mltbc_patch_model) then
      nx1 = conv2d_nx
      ny1 = conv2d_ny
-     nz1 = ktop-kbot+1
+     nz1 = k2-k1+1
      allocate(input2d(1,conv2d_nt))
      allocate(input4d(nx1*ny1,conv2d_nt,1,nz1))
      allocate(input3d(nx1,ny1,nz1))
@@ -7775,23 +7943,30 @@ contains
      call endrun('MLTBC ERROR: deepONet module not implemented for variable '//trim(var))
    end if
    call out_tensor%to_array(output)
+   if (.not. associated(output)) then
+     call endrun('MLTBC: unassociated DeepONet output for '//trim(var))
+   end if
+   if (size(output,1) /= nx1 .or. size(output,2) /= ny1 .or. size(output,3) /= nz1) then
+     call endrun('MLTBC: incompatible DeepONet output for '//trim(var))
+   end if
    call t_stopf ('mltbc_aec_deeponet_prediction')
    
    !deeponet decoder 
    call t_startf ('mltbc_aec_deeponet_decoder')
    call mltbc_deeponet_decoder(var,mltbc_patch_model, &
-                               nx1,ny1,nz1,nx,ny,nz,output,tend, &
+                               nx1,ny1,nz1,nx,ny,nz,output,decoded, &
                                k1,k2,ecmin,ecmax,dcmin,dcmax)
 
    if ( mltbc_patch_model ) then
      do k = k1, k2
-       tend(:,k) = mltbc_latlon_to_global(nx,ny,real(output(:,:,k-k1+1),kind=r8),ngtot,mltbc_patch_bilerp)
+       tend(:,k) = mltbc_latlon_to_global(nx,ny,decoded(:,:,k),ngtot,mltbc_patch_bilerp)
      end do
      deallocate(input2d,input3d,input4d) 
    else  
-     tend(:,k1:k2) = real(output(:,1,:),kind=r8)
+     tend(:,k1:k2) = decoded(:,1,k1:k2)
      deallocate(input3d)
    end if 
+   deallocate(decoded)
    call t_stopf ('mltbc_aec_deeponet_decoder')
 
    return
@@ -7846,6 +8021,9 @@ contains
    k2 = nz
    if (present(kbot)) k1 = kbot
    if (present(ktop)) k2 = ktop
+   if (k1 < 1 .or. k2 > nz .or. k1 > k2) then
+     call endrun('MLTBC: invalid vertical bounds in state DeepONet')
+   end if
 
    !normalization parameter before and after ml prediction
    vmin = -1.0_r8
@@ -7867,7 +8045,7 @@ contains
      end do
      !prepare input data
      do k = k1,k2 
-       input4d(:,:,1,k) = mltbc_norm_2d(nx,ny,vari(:,:,k),vmin,vmax)
+       input4d(:,:,1,k-k1+1) = mltbc_norm_2d(nx,ny,vari(:,:,k),vmin,vmax)
      end do
 
      call t_startf ('mltbc_state_deeponet')
@@ -7883,10 +8061,16 @@ contains
        call endrun('MLTBC ERROR: deepONet module not implemented for variable '//trim(var))
      end if
      call out_tensor%to_array(output)
+     if (.not. associated(output)) then
+       call endrun('MLTBC: unassociated patch state-model output for '//trim(var))
+     end if
+     if (size(output,1) /= nx*ny .or. size(output,2) /= k2-k1+1) then
+       call endrun('MLTBC: incompatible patch state-model output for '//trim(var))
+     end if
      call t_stopf ('mltbc_state_deeponet')
   
      !output data (denormalize)
-     varo(1:nx,1:ny,k1:k2) = mltbc_denorm_2d(nx,ny,nz,output,vmin,vmax) 
+     varo(1:nx,1:ny,k1:k2) = mltbc_denorm_2d(nx,ny,k2-k1+1,output,vmin,vmax)
      !compute nudging tendency
      varo(:,:,k1:k2) = (varo(:,:,k1:k2) - vari(:,:,k1:k2)) / ml_time_interval
      do k = k1, k2
@@ -7973,11 +8157,24 @@ contains
    
    if ( l_ml_patch ) then
      call out_tensor%to_array(output2d)
+     if (.not. associated(output2d)) then
+       call endrun('MLTBC: unassociated patch encoder output for '//trim(var))
+     end if
+     if (size(output2d,1) /= nx1*ny1 .or. size(output2d,2) /= k2-k1+1) then
+       call endrun('MLTBC: incompatible patch encoder output for '//trim(var))
+     end if
      !orgnize to output array
      varo(1:nx1,1:ny1,1:nz1) = mltbc_norm_don(nx1,ny1,k2-k1+1,output2d(:,:),minval(output2d),maxval(output2d))
      deallocate(input4d)
    else
      call out_tensor%to_array(output3d)
+     if (.not. associated(output3d)) then
+       call endrun('MLTBC: unassociated global encoder output for '//trim(var))
+     end if
+     if (size(output3d,1) /= nx1 .or. size(output3d,2) /= ny1 .or. &
+         size(output3d,3) /= nz1) then
+       call endrun('MLTBC: incompatible global encoder output for '//trim(var))
+     end if
      !orgnize to output array 
      varo(1:nx1,1:ny1,1:nz1) = output3d(1:nx1,1:ny1,:)
      deallocate(input3d)
@@ -8043,7 +8240,7 @@ contains
      !prepare input data and run decoder 
      allocate (input2d(nx1*ny1,nz1))
      !denormalize the deeponet prediction and output data
-     input2d(:,:) = mltbc_denorm_don(nx,ny,nz,vari(:,:,:),xmin,xmax)
+     input2d(:,:) = mltbc_denorm_don(nx1,ny1,nz1,vari(:,:,:),xmin,xmax)
      call input_tensors%add_array(input2d)
    else
      call input_tensors%add_array(vari)
@@ -8059,11 +8256,24 @@ contains
 
    if (l_ml_patch) then
      call out_tensor%to_array(output2d)
-     varo(:,:,k1:k2) = mltbc_denorm_2d(nx,ny,nz,output2d,ymin,ymax)
+     if (.not. associated(output2d)) then
+       call endrun('MLTBC: unassociated patch decoder output for '//trim(var))
+     end if
+     if (size(output2d,1) /= nx*ny .or. size(output2d,2) /= k2-k1+1) then
+       call endrun('MLTBC: incompatible patch decoder output for '//trim(var))
+     end if
+     varo(:,:,k1:k2) = mltbc_denorm_2d(nx,ny,k2-k1+1,output2d,ymin,ymax)
      deallocate (input2d)
    else
      call out_tensor%to_array(output3d)
-     varo(:,:,k1:k2) = real(output3d(1:nx,1:ny,1:nz), kind = r8)
+     if (.not. associated(output3d)) then
+       call endrun('MLTBC: unassociated global decoder output for '//trim(var))
+     end if
+     if (size(output3d,1) /= nx .or. size(output3d,2) /= ny .or. &
+         size(output3d,3) /= k2-k1+1) then
+       call endrun('MLTBC: incompatible global decoder output for '//trim(var))
+     end if
+     varo(:,:,k1:k2) = real(output3d(:,:,1:k2-k1+1), kind=r8)
    end if 
 
    return 
