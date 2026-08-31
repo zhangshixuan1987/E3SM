@@ -7583,7 +7583,7 @@ contains
    use infnan,           only : isnan, isinf
 
    implicit none
-
+   real(r8), parameter           :: bound_tol = 1.0e-12_r8
    character(len=*), intent(in)  :: var
    integer, intent(in)           :: nx,ny,nz,ngtot,ibdim
    real(r8),intent(in)           :: u(nx,ny,nz)
@@ -7640,13 +7640,16 @@ contains
        any(isnan(t)) .or. any(isinf(t)) .or. any(isnan(q)) .or. any(isinf(q))) then
      call endrun('MLTBC: non-finite state or coordinate model input')
    end if
+
    if (present(lat) .and. present(lon)) then
      if (any(isnan(lat)) .or. any(isinf(lat)) .or. &
          any(isnan(lon)) .or. any(isinf(lon))) then
        call endrun('MLTBC: non-finite latitude or longitude model input')
      end if
    end if
+
    if (has_all_extended) then
+
      if (any(isnan(area)) .or. any(isinf(area)) .or. any(area <= 0.0_r8) .or. &
          any(isnan(cosz)) .or. any(isinf(cosz)) .or. &
          any(isnan(phis)) .or. any(isinf(phis)) .or. &
@@ -7655,18 +7658,39 @@ contains
          any(isnan(icefrc)) .or. any(isinf(icefrc))) then
        call endrun('MLTBC: invalid option-4 scalar model input')
      end if
-     if (any(cosz < -1.0_r8) .or. any(cosz > 1.0_r8) .or. &
-         any(lndfrc < 0.0_r8) .or. any(lndfrc > 1.0_r8) .or. &
-         any(ocnfrc < 0.0_r8) .or. any(ocnfrc > 1.0_r8) .or. &
-         any(icefrc < 0.0_r8) .or. any(icefrc > 1.0_r8)) then
-       call endrun('MLTBC: option-4 fractions or COSZ outside physical bounds')
+
+     if (any(cosz < -1.0_r8 - bound_tol) .or. &
+        any(cosz >  1.0_r8 + bound_tol)) then
+       write(*,*) 'ERROR cosz min/max = ', minval(cosz), maxval(cosz)
+       call endrun('MLTBC: COSZ outside physical bounds')
      end if
+
+     if (any(lndfrc < -bound_tol) .or. &
+        any(lndfrc > 1.0_r8 + bound_tol)) then
+       write(*,*) 'ERROR lndfrc min/max = ', minval(lndfrc), maxval(lndfrc)
+       call endrun('MLTBC: lndfrc outside physical bounds')
+     end if
+
+     if (any(ocnfrc < -bound_tol) .or. &
+        any(ocnfrc > 1.0_r8 + bound_tol)) then
+       write(*,*) 'ERROR ocnfrc min/max = ', minval(ocnfrc), maxval(ocnfrc)
+       call endrun('MLTBC: ocnfrc outside physical bounds')
+     end if
+
+     if (any(icefrc < -bound_tol) .or. &
+        any(icefrc > 1.0_r8 + bound_tol)) then
+       write(*,*) 'ERROR icefrc min/max = ', minval(icefrc), maxval(icefrc)
+       call endrun('MLTBC: icefrc outside physical bounds')
+     end if
+
    end if
 
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    ! Predictor order is a positional TorchScript contract and must match
    ! training/export: U,V,T,Q,[COSZ],LAT,LON,[PHIS,AREA,LANDFRC,OCNFRC,ICEFRC].
    ! Bracketed fields are present only for the extended option-4 model.
-   !prepare input data
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   ! prepare input data
    call t_startf ('mltbc_scalar_model_input')
    call input_tensors%create
    call input_tensors%add_array(u)
