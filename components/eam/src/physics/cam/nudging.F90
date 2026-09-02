@@ -704,11 +704,15 @@ module nudging
 
   !Parameters determined with experiment 
   !From p_relax upwards, nudging is reduced linearly 
-  real(r8), parameter :: p_uv_relax = 30.E2_r8  ! p_relax for u/v wind 
-  real(r8), parameter :: p_T_relax  = 10.E2_r8  ! p_relax for temperature  
-  real(r8), parameter :: p_q_relax  = 100.E2_r8 ! p_relax for humidity 
-  real(r8), parameter :: p_norelax  = 1.0_r8    ! from p_norelax upwards, no nudging
-  real(r8), parameter :: z_min      = 150._r8   ! height levels below which nudging is turned off  
+  real(r8), parameter :: p_uv_relax = 30.E2_r8   ! p_relax for u/v wind
+  real(r8), parameter :: p_T_relax  = 10.E2_r8   ! p_relax for temperature
+  real(r8), parameter :: p_q_relax  = 100.E2_r8  ! p_relax for humidity
+  real(r8), parameter :: p_norelax  = 1.0_r8     ! from p_norelax upwards, no nudging
+  real(r8), parameter :: z_min      = 150._r8    ! height levels below which nudging is turned off
+  real(r8), parameter :: q_min            = 1.0e-12_r8 ! Minimum specific humidity
+  real(r8), parameter :: q_max            = 1.0_r8 - q_min ! Maximum specific humidity
+  real(r8), parameter :: q_denom_min      = 1.0e-8_r8  ! Minimum humidity in RH denominator
+  real(r8), parameter :: numerical_tol    = 1.0e-12_r8 ! Near-zero numerical tolerance
 
   !Parameters for machine learning bias correction 
   character(len=cl)  :: mltbc_step_method      
@@ -1186,6 +1190,10 @@ contains
     end if
     if (mltbc_nstep < 1) then
       call endrun('MLTBC: mltbc_nstep must be greater than zero')
+    end if
+    if (Nudge_Tv_Constrain_On .and. &
+        (Nudge_Tprof == 0 .or. Nudge_Qprof == 0)) then
+      call endrun('MLTBC: Tv constraint requires both T and Q nudging')
     end if
   end subroutine mltbc_validate_config
 
@@ -3342,7 +3350,7 @@ contains
   if ( (Nudge_Tprof .ne. 0 ) .or. (Nudge_Qprof .ne. 0) ) then
     do k = 1, pver
       do i = 1, ncol
-        qtp1(i,k)  = max(0.0_r8, qtp1(i,k))
+        qtp1(i,k) = min(q_max, max(q_min, qtp1(i,k)))
         call qsat(tcur(i,k), pmid(i,k), escur(i,k), qscur(i,k), dqsdt=dqsdT_cur(i,k))
         call qsat(ttp1(i,k), pmid(i,k), estp1(i,k), qstp1(i,k), dqsdt=dqsdT_tp1(i,k))
         rhcur(i,k) = qcur(i,k) / qscur(i,k)
@@ -3390,10 +3398,10 @@ contains
          ! dT     = dRH / (-RH/qs * dqs/dT )
          do k = 1, pver
           do i = 1, ncol
-            if ( (qcur(i,k) > 0._r8) .and. (dqsdT_cur(i,k) > 0._r8) ) then
+            if ( (qcur(i,k) > q_denom_min) .and. (dqsdT_cur(i,k) > 0._r8) ) then
               nudge_t(i,k) = - (rhtp1(i,k) - rhcur(i,k)) / dtime & 
                              * qscur(i,k) * qscur(i,k) &
-                             / (max(qcur(i,k),1.E-8_r8)*dqsdT_cur(i,k))
+                             / (qcur(i,k)*dqsdT_cur(i,k))
             else
               nudge_t(i,k) = (tvtp1(i,k) - tvcur(i,k)) / dtime &
                              /(1.0_r8 + zvir * qcur(i,k))
@@ -3564,151 +3572,116 @@ contains
   end subroutine  !mltbc_update_prof
 
   !===========================================================================
-  ! Repartition weighted ML T/Q tendencies while preserving their combined
-  ! virtual-temperature target. Both geopotential profiles are diagnosed here
-  ! with identical discretization and arguments, differing only in T/Q.
+  ! Enforce humidity bounds while preserving the local ML virtual-temperature
+  ! target through a compensating temperature adjustment.
   !===========================================================================
-  subroutine mltbc_enforce_tv_constrain(ncol, dtime, lnpint, lnpmid, pint, pmid, &
-                                    pdel, rpdel, rairv, zvirv, tcur, qcur, &
-                                    apply_t, apply_q, nudge_t, nudge_q)
-    use ppgrid,      only: pver, pverp, pcols
-    use geopotential, only: geopotential_t
-    use physconst,   only: gravit
-    use infnan,      only: isnan, isinf
-    use dycore,      only: dycore_is
+  subroutine mltbc_enforce_tv_constrain(ncol, dtime, zvirv, tcur, qcur, &
+                                        nudge_t, nudge_q)
+
+    use ppgrid, only: pver, pcols
+    use infnan, only: isnan, isinf
 
     integer, intent(in) :: ncol
     real(r8), intent(in) :: dtime
-    real(r8), intent(in) :: lnpint(pcols,pverp), lnpmid(pcols,pver)
-    real(r8), intent(in) :: pint(pcols,pverp), pmid(pcols,pver)
-    real(r8), intent(in) :: pdel(pcols,pver), rpdel(pcols,pver)
-    real(r8), intent(in) :: rairv(pcols,pver), zvirv(pcols,pver)
+    real(r8), intent(in) :: zvirv(pcols,pver)
     real(r8), intent(in) :: tcur(pcols,pver), qcur(pcols,pver)
-    logical, intent(in) :: apply_t, apply_q
     real(r8), intent(inout) :: nudge_t(pcols,pver), nudge_q(pcols,pver)
 
-    integer :: i, k, fallback_count
-    real(r8) :: t_target(pcols,pver), q_target(pcols,pver)
-    real(r8) :: zi_current(pcols,pverp), zm_current(pcols,pver)
-    real(r8) :: zi_target(pcols,pverp), zm_target(pcols,pver)
-    real(r8) :: tv_current, tv_target, qeff, t_bal, q_bal
-    real(r8) :: hydro_weight, denom, raw_t_tend, raw_q_tend
-    logical :: fvdyn
-    logical, save :: fallback_warned = .false.
+    integer :: i, k
+    real(r8) :: t_target, q_target
+    real(r8) :: tv_target
+    real(r8) :: t_bal, q_bal
+    real(r8) :: denom
 
     if (dtime <= 0.0_r8) then
-      call endrun('MLTBC balance constraint requires a positive timestep')
+      call endrun('MLTBC constraint requires positive timestep')
     end if
-
-    t_target(:ncol,:) = tcur(:ncol,:) + nudge_t(:ncol,:) * dtime
-    q_target(:ncol,:) = qcur(:ncol,:) + nudge_q(:ncol,:) * dtime
-    fallback_count = 0
-    fvdyn = dycore_is('LR')
 
     do k = 1, pver
       do i = 1, ncol
-        if (isnan(tcur(i,k)) .or. isinf(tcur(i,k)) .or. tcur(i,k) <= 100.0_r8) then
-          call endrun('MLTBC balance constraint received invalid current temperature')
+
+        !------------------------------------------------------------
+        ! Validate current state
+        !------------------------------------------------------------
+        if (isnan(tcur(i,k)) .or. isinf(tcur(i,k)) .or. &
+            tcur(i,k) <= 100.0_r8) then
+          call endrun('MLTBC constraint received invalid temperature')
         end if
-        if (isnan(t_target(i,k)) .or. isinf(t_target(i,k)) .or. &
-            t_target(i,k) <= 100.0_r8) then
-          call endrun('MLTBC balance constraint received invalid corrected temperature')
-        end if
+
         if (isnan(qcur(i,k)) .or. isinf(qcur(i,k)) .or. &
             qcur(i,k) < 0.0_r8 .or. qcur(i,k) >= 1.0_r8) then
-          call endrun('MLTBC balance constraint received invalid current humidity')
+          call endrun('MLTBC constraint received invalid humidity')
         end if
-        if (isnan(q_target(i,k)) .or. isinf(q_target(i,k)) .or. &
-            q_target(i,k) < 0.0_r8 .or. q_target(i,k) >= 1.0_r8) then
-          call endrun('MLTBC balance constraint received invalid corrected humidity')
-        end if
+
         if (isnan(zvirv(i,k)) .or. isinf(zvirv(i,k)) .or. &
-            abs(zvirv(i,k)) <= sqrt(epsilon(1.0_r8))) then
-          call endrun('MLTBC balance constraint received invalid virtual-temperature coefficient')
+            abs(zvirv(i,k)) <= numerical_tol) then
+          call endrun('MLTBC constraint received invalid zvirv')
         end if
-        if (isnan(rairv(i,k)) .or. isinf(rairv(i,k)) .or. &
-            rairv(i,k) <= sqrt(epsilon(1.0_r8))) then
-          call endrun('MLTBC balance constraint received invalid dry-air gas constant')
+
+        !------------------------------------------------------------
+        ! Raw ML target
+        !------------------------------------------------------------
+        if (isnan(nudge_t(i,k)) .or. isinf(nudge_t(i,k)) .or. &
+            isnan(nudge_q(i,k)) .or. isinf(nudge_q(i,k))) then
+          call endrun('MLTBC constraint received non-finite tendency')
         end if
+
+        t_target = tcur(i,k) + nudge_t(i,k) * dtime
+        q_target = qcur(i,k) + nudge_q(i,k) * dtime
+
+        if (isnan(t_target) .or. isinf(t_target) .or. &
+            t_target <= 100.0_r8) then
+          call endrun('MLTBC constraint produced invalid T target')
+        end if
+
+        if (isnan(q_target) .or. isinf(q_target)) then
+          call endrun('MLTBC constraint produced non-finite Q target')
+        end if
+
+        !------------------------------------------------------------
+        ! Virtual-temperature target implied by the original ML
+        ! prediction. This is the quantity we preserve if Q must
+        ! be physically limited.
+        !------------------------------------------------------------
+        tv_target = t_target * &
+                    (1.0_r8 + zvirv(i,k) * q_target)
+
+        if (isnan(tv_target) .or. isinf(tv_target) .or. &
+            tv_target <= 100.0_r8) then
+          call endrun('MLTBC constraint produced invalid Tv target')
+        end if
+
+        !------------------------------------------------------------
+        ! If Q is valid, retain the original ML prediction.
+        !------------------------------------------------------------
+        if (q_target >= q_min .and. q_target <= q_max) cycle
+
+        !------------------------------------------------------------
+        ! Q target is unphysical. Limit Q and, when T correction is
+        ! active, compensate T to preserve the ML Tv target.
+        !------------------------------------------------------------
+        q_bal = min(q_max, max(q_min, q_target))
+
+        denom = 1.0_r8 + zvirv(i,k) * q_bal
+
+        if (isnan(denom) .or. isinf(denom) .or. &
+            abs(denom) <= numerical_tol) then
+          call endrun('MLTBC constraint has invalid Tv denominator')
+        end if
+
+        t_bal = tv_target / denom
+
+        if (isnan(t_bal) .or. isinf(t_bal) .or. &
+            t_bal <= 100.0_r8) then
+          call endrun('MLTBC constraint produced invalid balanced T')
+        end if
+
+        nudge_t(i,k) = (t_bal - tcur(i,k)) / dtime
+        nudge_q(i,k) = (q_bal - qcur(i,k)) / dtime
+
       end do
     end do
 
-    ! These paired calls intentionally share the exact routine, pressure
-    ! arrays, constants, and vertical discretization. This invariant makes
-    ! recovery of the current and ML-target virtual temperatures consistent.
-    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
-                        tcur(:ncol,:),qcur(:ncol,:), &
-                        rairv,gravit,zvirv,zi_current,zm_current,ncol)
-    call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
-                        t_target(:ncol,:),q_target(:ncol,:), &
-                        rairv,gravit,zvirv,zi_target,zm_target,ncol)
-
-    do k = 1, pver
-      do i = 1, ncol
-        raw_t_tend = nudge_t(i,k)
-        raw_q_tend = nudge_q(i,k)
-        if (fvdyn) then
-          if (isnan(lnpint(i,k)) .or. isinf(lnpint(i,k)) .or. &
-              isnan(lnpint(i,k+1)) .or. isinf(lnpint(i,k+1))) then
-            call endrun('MLTBC balance constraint received invalid log-interface pressure')
-          end if
-          hydro_weight = lnpint(i,k+1) - lnpint(i,k)
-        else
-          if (isnan(pmid(i,k)) .or. isinf(pmid(i,k)) .or. &
-              pmid(i,k) <= sqrt(epsilon(1.0_r8)) .or. &
-              isnan(pdel(i,k)) .or. isinf(pdel(i,k)) .or. pdel(i,k) <= 0.0_r8) then
-            call endrun('MLTBC balance constraint received invalid layer pressure')
-          end if
-          hydro_weight = pdel(i,k) / pmid(i,k)
-        end if
-        if (isnan(hydro_weight) .or. isinf(hydro_weight)) then
-          call endrun('MLTBC balance constraint received non-finite hydrostatic weight')
-        end if
-        if (abs(hydro_weight) <= 1.0e-6_r8) then
-          nudge_t(i,k) = raw_t_tend
-          nudge_q(i,k) = raw_q_tend
-          fallback_count = fallback_count + 1
-          cycle
-        end if
-
-        tv_current = -gravit * (zi_current(i,k+1) - zi_current(i,k)) / &
-                     hydro_weight / rairv(i,k)
-        tv_target = -gravit * (zi_target(i,k+1) - zi_target(i,k)) / &
-                    hydro_weight / rairv(i,k)
-        if (apply_t) then
-          qeff = 0.5_r8 * (qcur(i,k) + q_target(i,k))
-          denom = 1.0_r8 + zvirv(i,k) * qeff
-          if (isnan(denom) .or. isinf(denom) .or. &
-              abs(denom) <= sqrt(epsilon(1.0_r8))) then
-            call endrun('MLTBC balance constraint has invalid temperature denominator')
-          end if
-          nudge_t(i,k) = (tv_target - tv_current) / dtime / denom
-        end if
-
-        t_bal = tcur(i,k) + nudge_t(i,k) * dtime
-        if (isnan(t_bal) .or. isinf(t_bal) .or. t_bal <= 100.0_r8) then
-          call endrun('MLTBC balance constraint produced invalid temperature')
-        end if
-        if (apply_q) then
-          q_bal = (tv_target / t_bal - 1.0_r8) / zvirv(i,k)
-          if (isnan(q_bal) .or. isinf(q_bal) .or. &
-              q_bal < 0.0_r8 .or. q_bal >= 1.0_r8) then
-            call endrun('MLTBC balance constraint produced invalid humidity')
-          end if
-          nudge_q(i,k) = (q_bal - qcur(i,k)) / dtime
-        end if
-      end do
-    end do
-
-    if (fallback_count > 0) then
-!$omp critical (mltbc_fallback_warning)
-      if (.not. fallback_warned) then
-        write(iulog,*) 'WARNING: MLTBC balance constraint retained raw tendencies for ', &
-                       fallback_count, ' levels in one chunk with degenerate hydrostatic weight'
-        fallback_warned = .true.
-      end if
-!$omp end critical (mltbc_fallback_warning)
-    end if
   end subroutine mltbc_enforce_tv_constrain
 
   !===========================================================================
@@ -4430,7 +4403,7 @@ contains
    use constituents ,only: cnst_get_ind,pcnst
    use ppgrid       ,only: pver,pverp,pcols,begchunk,endchunk
    use cam_history  ,only: outfld
-   use physconst    ,only: rga, cpair, gravit, rair, zvir, cappa
+   use physconst    ,only: rga, cpair, gravit, zvir, cappa
    use hycoef       ,only: hycoef_init, hyam, hybm, hyai, hybi, ps0
    use infnan       ,only: isnan,isinf
 
@@ -4444,7 +4417,7 @@ contains
    ! Local values
    !--------------------
    real(r8):: q_old, q_new, pdel_old, pdel_new
-   real(r8):: rairv(pcols,pver), zvirv(pcols,pver)
+   real(r8):: zvirv(pcols,pver)
    integer indw,ncol,lchnk
    logical lq(pcnst)
    integer Year, Month, Day, Sec
@@ -4457,6 +4430,7 @@ contains
    call physics_ptend_init(phys_tend,phys_state%psetcols,'nudging',lu=.true.,lv=.true.,ls=.true.,lq=lq)
 
    if(Nudge_ON) then
+
      lchnk=phys_state%lchnk
      ncol =phys_state%ncol
 
@@ -4478,36 +4452,14 @@ contains
         phys_tend%v(:ncol,:pver) = Nudge_Vstep(:ncol,:pver,lchnk)
      end if
 
-     ! Enforce the final T/Q virtual-temperature constraint against the live
-     ! application-time state, after all ML weighting and profile operations.
-     ! Run before pressure or Q-mass adjustments while all pressure fields
-     ! describe the same state, and before assigning the final tendencies.
+     ! Enforce humidity bounds against the live application-time state after
+     ! all ML weighting and profile operations. Compensate temperature to
+     ! preserve the local ML virtual-temperature target when both are active.
      if (mltbc_enabled .and. Nudge_Tv_Constrain_On) then
-       rairv(:ncol,:pver) = rair
        zvirv(:ncol,:pver) = zvir
-       call mltbc_enforce_tv_constrain(ncol, dtime, &
-                                       phys_state%lnpint, phys_state%lnpmid, &
-                                       phys_state%pint, phys_state%pmid, &
-                                       phys_state%pdel, phys_state%rpdel, &
-                                       rairv, zvirv, phys_state%t, &
-                                       phys_state%q(:,:,indw), &
-                                       Nudge_Tprof .ne. 0, Nudge_Qprof .ne. 0, &
+       call mltbc_enforce_tv_constrain(ncol, dtime, zvirv, &
+                                       phys_state%t, phys_state%q(:,:,indw), &
                                        Nudge_Tstep(:,:,lchnk), Nudge_Qstep(:,:,lchnk))
-     end if
-
-     if (Nudge_PS_On) then
-       !update ps
-       do i = 1,ncol
-          phys_state%ps(i) = phys_state%ps(i) + Nudge_PSstep(i,lchnk)*dtime
-       end do
-       !Pdel etc.
-       do k = 1, pver
-         do i = 1, ncol
-           phys_state%pdel(i,k)  = phys_state%pdel(i,k)  &
-                                  + (hybi(k+1) -hybi(k))*Nudge_PSstep(i,lchnk)*dtime
-           phys_state%rpdel(i,k) = 1._r8/phys_state%pdel(i,k)
-         end do
-       end do
      end if
 
      if (Nudge_Tprof .ne. 0) then
@@ -4574,6 +4526,21 @@ contains
              phys_state%ps(i) <= 0.0_r8) then
            call endrun('nudging_timestep_tend: Q adjustment gives invalid surface pressure')
          end if
+       end do
+     end if
+
+     if (Nudge_PS_On) then
+       !update ps
+       do i = 1,ncol
+          phys_state%ps(i) = phys_state%ps(i) + Nudge_PSstep(i,lchnk)*dtime
+       end do
+       !Pdel etc.
+       do k = 1, pver
+         do i = 1, ncol
+           phys_state%pdel(i,k)  = phys_state%pdel(i,k)  &
+                                  + (hybi(k+1) -hybi(k))*Nudge_PSstep(i,lchnk)*dtime
+           phys_state%rpdel(i,k) = 1._r8/phys_state%pdel(i,k)
+         end do
        end do
      end if
 
