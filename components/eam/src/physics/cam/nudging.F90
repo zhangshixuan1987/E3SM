@@ -3352,7 +3352,11 @@ contains
   if ( (Nudge_Tprof .ne. 0 ) .or. (Nudge_Qprof .ne. 0) ) then
     do k = 1, pver
       do i = 1, ncol
-        qtp1(i,k) = min(q_max, max(q_min, qtp1(i,k)))
+        ! Skip the hard clip here when mltbc_enforce_tv_constrain runs
+        ! downstream, so it can compensate T instead of silently clipping Q.
+        if ( .not. (mltbc_enabled .and. Nudge_Tv_Constrain_On) ) then
+          qtp1(i,k) = min(q_max, max(q_min, qtp1(i,k)))
+        end if
         call qsat(tcur(i,k), pmid(i,k), escur(i,k), qscur(i,k), dqsdt=dqsdT_cur(i,k))
         call qsat(ttp1(i,k), pmid(i,k), estp1(i,k), qstp1(i,k), dqsdt=dqsdT_tp1(i,k))
         rhcur(i,k) = qcur(i,k) / qscur(i,k)
