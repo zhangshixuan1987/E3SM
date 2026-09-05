@@ -3030,8 +3030,8 @@ contains
                               Nudge_NO_PBL_UV,Nudge_NO_PBL_T,Nudge_NO_PBL_Q, & !in 
                               Nudge_UV_OPT,Nudge_T_OPT,Nudge_Q_OPT, & !in
                               Nudge_Vertical_Smooth, & !in
-                              Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !inout
-                              Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & ! inout
+                              Nudge_PStau(:,lchnk),Nudge_Utau(:,:,lchnk), & !in
+                              Nudge_Vtau(:,:,lchnk),Nudge_Ttau(:,:,lchnk), & !in
                               Nudge_Qtau(:,:,lchnk),Nudge_PSstep(:,lchnk), & !inout
                               Nudge_Ustep(:,:,lchnk),Nudge_Vstep(:,:,lchnk), & !inout
                               Nudge_Tstep(:,:,lchnk),Nudge_Qstep(:,:,lchnk)) !inout
@@ -3223,11 +3223,13 @@ contains
   integer,  intent(in)    :: ndg_uv_opt,ndg_t_opt, ndg_q_opt
   real(r8), intent(in)    :: uv_prelx, t_prelx, q_prelx
   real(r8), intent(in)    :: dtime
-  real(r8), intent(inout) :: nudge_uprf(pcols,pver)
-  real(r8), intent(inout) :: nudge_vprf(pcols,pver)
-  real(r8), intent(inout) :: nudge_tprf(pcols,pver)
-  real(r8), intent(inout) :: nudge_qprf(pcols,pver)
-  real(r8), intent(inout) :: nudge_psprf(pcols)
+  ! Baseline profiles are read-only: they must not accumulate the
+  ! current-step masks across repeated calls (see nudge_u/v/t/q below).
+  real(r8), intent(in)    :: nudge_uprf(pcols,pver)
+  real(r8), intent(in)    :: nudge_vprf(pcols,pver)
+  real(r8), intent(in)    :: nudge_tprf(pcols,pver)
+  real(r8), intent(in)    :: nudge_qprf(pcols,pver)
+  real(r8), intent(in)    :: nudge_psprf(pcols)
   real(r8), intent(inout) :: nudge_u(pcols,pver)
   real(r8), intent(inout) :: nudge_v(pcols,pver)
   real(r8), intent(inout) :: nudge_t(pcols,pver)
@@ -3543,23 +3545,15 @@ contains
     end do
   end if
 
-  ! Apply the scaling on the nudging weighting function 
+  ! Apply the baseline profile together with the current-step mask directly
+  ! to the tendency. The baseline profile itself is left unmodified so that
+  ! it is not re-tapered by the same mask on every subsequent call.
   do i = 1, ncol
     do k = pver, 1, -1
-      nudge_uprf(i,k) = nudge_uprf(i,k) * wuprof(i,k)
-      nudge_vprf(i,k) = nudge_vprf(i,k) * wvprof(i,k)
-      nudge_tprf(i,k) = nudge_tprf(i,k) * wtprof(i,k)
-      nudge_qprf(i,k) = nudge_qprf(i,k) * wqprof(i,k)
-    end do
-  end do
-
-  ! Apply weighting function on the nudging tendency
-  do i = 1, ncol
-    do k = pver, 1, -1
-      nudge_u(i,k) = nudge_uprf(i,k) * nudge_u(i,k)
-      nudge_v(i,k) = nudge_vprf(i,k) * nudge_v(i,k)
-      nudge_t(i,k) = nudge_tprf(i,k) * nudge_t(i,k)
-      nudge_q(i,k) = nudge_qprf(i,k) * nudge_q(i,k)
+      nudge_u(i,k) = nudge_uprf(i,k) * wuprof(i,k) * nudge_u(i,k)
+      nudge_v(i,k) = nudge_vprf(i,k) * wvprof(i,k) * nudge_v(i,k)
+      nudge_t(i,k) = nudge_tprf(i,k) * wtprof(i,k) * nudge_t(i,k)
+      nudge_q(i,k) = nudge_qprf(i,k) * wqprof(i,k) * nudge_q(i,k)
     end do
     nudge_ps(i) = nudge_psprf(i) * nudge_ps(i)
   end do
