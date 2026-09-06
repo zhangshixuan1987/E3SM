@@ -3300,7 +3300,7 @@ contains
 
   call cnst_get_ind('Q',indw)
 
-  ! initialize zvir and rair 
+  ! initialize kpblt, zvir and rair 
   do i = 1, ncol
     kpblt(i) = pver
     do k = 1, pver
@@ -3378,7 +3378,7 @@ contains
   end if
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  ! apply constrains on temperature  and humidity nudging!!!
+  ! apply constrains on temperature and humidity nudging !!!
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   if ( Nudge_Tprof .ne. 0  ) then
     select case (ndg_t_opt)
@@ -3451,6 +3451,7 @@ contains
   call geopotential_t(lnpint,lnpmid,pint,pmid,pdel,rpdel, &
                       tcur(:ncol,:pver),qcur(:ncol,:pver), &
                       rairv,gravit,zvirv,zi,zm,ncol)
+
   !Note: PBL height is in AGL  
   do k = pver-1,1,-1
     do i = 1,ncol
