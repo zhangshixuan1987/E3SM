@@ -7143,6 +7143,13 @@ contains
       call endrun('MLTBC ERROR: invalid option for patch model prediction')
    end if 
 
+   ! u(:,ngrow,:) below indexes the row dimension with its own size, which
+   ! only selects all rows when ngrow == 1; guard against silent data loss
+   ! if a caller ever passes more than one row.
+   if (ngrow /= 1) then
+     call endrun('MLTBC: mltbc_advance_patch assumes ngrow == 1')
+   end if
+
    !Collect data for patch model (regrid from model grid to patch grid)
    call mltbc_global_to_patch(ngcol,nlev,u(:,ngrow,:),v(:,ngrow,:),mltbc_patch_nlon,mltbc_patch_nlat, & 
                               mltbc_patch_bilerp,upatch,vpatch)
